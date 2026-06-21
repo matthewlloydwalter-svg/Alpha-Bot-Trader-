@@ -3,3 +3,4 @@ uvicorn[standard]==0.32.0
 alpaca-py==0.33.0
 python-dotenv==1.0.1
 pydantic==2.9.2
+jinja2
