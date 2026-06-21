@@ -52,6 +52,23 @@ if missing:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("alphabot")
 
+class OrderRequest(BaseModel):
+    symbol: str = Field(..., description="Ticker symbol, e.g. 'AAPL'")
+    qty: Optional[float] = Field(None, description="Number of shares.")
+    notional: Optional[float] = Field(None, description="Dollar amount.")
+    order_type: Literal["market", "limit"] = "market"
+    limit_price: Optional[float] = Field(None)
+    time_in_force: Literal["day", "gtc"] = "day"
+    bot_name: Optional[str] = Field(None)
+
+class OrderResponse(BaseModel):
+    success: bool
+    order_id: Optional[str] = None
+    symbol: str
+    side: str
+    status: Optional[str] = None
+    message: str
+    
 trading_client = TradingClient(api_key=ALPACA_API_KEY, secret_key=ALPACA_SECRET_KEY, paper=ALPACA_PAPER)
 
 # ──────────────────────────────────────────────────────────────────
