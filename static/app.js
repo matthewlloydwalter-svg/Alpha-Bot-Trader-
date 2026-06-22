@@ -59,33 +59,33 @@ async function updateDashboard() {
 // --- 4. INITIALIZATION ---
 window.addEventListener('DOMContentLoaded', async () => {
     try {
-        // Check if user is logged in by fetching account data
         await api("/account");
         setAppState(true);
         updateDashboard();
     } catch (err) {
-        setAppState(false); // User is not logged in
+        setAppState(false);
     }
 });
 
 // --- 5. SIGNUP LOGIC ---
 async function doSignup() {
+    const name = document.getElementById('su-name').value;
+    const email = document.getElementById('su-email').value;
     const pass = document.getElementById('su-pass').value;
     const confirmPass = document.getElementById('su-pass-confirm').value;
     const errorDiv = document.getElementById('password-error');
 
     if (pass !== confirmPass) {
         errorDiv.textContent = "Passwords do not match!";
-        // Force the display to block to ensure it shows up
         errorDiv.style.setProperty('display', 'block', 'important'); 
         return; 
     } else {
-        // Hide it again
         errorDiv.style.setProperty('display', 'none', 'important');
     }
     
     errorDiv.textContent = ""; 
     
+    try {
         const data = await api('/signup', {
             method: 'POST',
             body: JSON.stringify({ name, email, password: pass })
@@ -97,5 +97,6 @@ async function doSignup() {
         }
     } catch (err) {
         errorDiv.textContent = err.message;
+        errorDiv.style.setProperty('display', 'block', 'important');
     }
 }
