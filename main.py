@@ -33,6 +33,7 @@ if not all([ALPACA_API_KEY, ALPACA_SECRET_KEY, BACKEND_API_TOKEN]):
 
 # --- 2. APP INITIALIZATION ---
 app = FastAPI(title="AlphaBot Trading Backend", version="1.0.0")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- 3. SECURITY & HELPERS ---
 def get_current_user_email(request: Request) -> str:
