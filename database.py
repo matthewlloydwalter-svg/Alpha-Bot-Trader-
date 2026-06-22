@@ -112,3 +112,19 @@ def get_db():
         yield db
     finally:
         db.close()
+# Add these to the bottom of database.py
+
+def save_verification_code(email: str, code: str, db):
+    user = db.query(User).filter(User.email == email).first()
+    if user:
+        user.verification_code = code
+        db.commit()
+
+def verify_user_code(email: str, input_code: str, db):
+    user = db.query(User).filter(User.email == email).first()
+    if user and user.verification_code == input_code:
+        user.email_verified = True
+        user.verification_code = None  # Clear code after successful use
+        db.commit()
+        return True
+    return False
