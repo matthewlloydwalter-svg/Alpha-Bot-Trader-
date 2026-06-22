@@ -88,6 +88,20 @@ class OrderResponse(BaseModel):
     message: str
 
 # --- 5. ROUTES ---
+@app.post("/send-verification")
+async def send_verification(email: str):
+    # 1. Generate a random 6-digit code
+    code = str(random.randint(100000, 999999))
+    try:
+        resend.Emails.send({
+            "from": "alerts@yourdomain.com",
+            "to": email,
+            "subject": "Your AlphaBot Verification Code",
+            "html": f"<p>Your verification code is: <strong>{code}</strong></p>" })
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+        
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
