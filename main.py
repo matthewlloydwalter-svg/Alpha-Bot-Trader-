@@ -49,11 +49,6 @@ async def get_index(request: Request):
     # This will now correctly look for index.html inside the 'templates' folder
     return templates.TemplateResponse("index.html", {"request": request})
 
-# If you have other routes (like trading or auth), put them below here
-# Make sure they are indented exactly like the 'get_index' function
-
-
-# ── AUTH ENDPOINTS ────────────────────────────────────────────────
 @app.post("/signup")
 def signup(data: dict, db: Session = Depends(get_db)):
     email = data.get("email")
@@ -92,8 +87,6 @@ def logout(response: Response):
     response.delete_cookie("session_token")
     return {"status": "success", "message": "Logged out successfully"}
 
-
-# ── TRADING & PORTFOLIO ENDPOINTS ─────────────────────────────────
 @app.get("/account")
 def get_user_account(current_user: User = Depends(get_current_user)):
     """Fetches real-time balances using user credentials from the database."""
@@ -120,7 +113,6 @@ def get_user_positions(current_user: User = Depends(get_current_user)):
     return []
 
 
-# ── BOT SCHEDULER TRIGGER RUNNER ──────────────────────────────────
 @app.post("/bots/{bot_id}/run-cycle")
 def run_bot_cycle(bot_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Manually executes a trading evaluation cycle using the bot engine."""
