@@ -74,14 +74,13 @@ async function doSignup() {
     const confirmPass = document.getElementById('su-pass-confirm').value;
     const errorDiv = document.getElementById('password-error');
 
-    // THIS IS THE FEEDBACK PART
+    // --- PASTE IT RIGHT HERE ---
     if (pass !== confirmPass) {
-        errorDiv.textContent = "Passwords do not match!"; // This shows the text
-        errorDiv.style.display = "block";                // This ensures it is visible
+        errorDiv.textContent = "Passwords do not match!";
+        errorDiv.style.display = "block"; // This makes it visible
         return; 
-    }
-    
-    // Clear the message if they match
+    } else {
+        errorDiv.style.display = "none";  // This hides it if they fix the mistake
     errorDiv.textContent = ""; 
         const data = await api('/signup', {
             method: 'POST',
