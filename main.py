@@ -18,16 +18,26 @@ from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.common.exceptions import APIError
 
-# --- 1. SETUP ---
+# --- 1. SETUP & SECRETS ---
 load_dotenv()
+ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
+ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").lower() == "true"
+BACKEND_API_TOKEN = os.getenv("BACKEND_API_TOKEN")
+
+# Safety Check: If these are missing, the bot won't start (prevents guessing later)
+if not all([ALPACA_API_KEY, ALPACA_SECRET_KEY, BACKEND_API_TOKEN]):
+    raise RuntimeError("Missing critical Environment Variables in Railway!")
+
+# --- 2. INITIALIZE APP ---
 app = FastAPI(title="AlphaBot Trading Backend", version="1.0.0")
 
-# --- 2. HELPERS & DEPENDENCIES ---
+# --- 3. SECURITY & HELPERS ---
 def get_current_user_email(request: Request) -> str:
     return request.session.get("user_email") if hasattr(request, "session") else ""
 
 async def verify_token(x_api_token: Optional[str] = Header(None)):
-    if not x_api_token or x_api_token != os.getenv("BACKEND_API_TOKEN"):
+    if not x_api_token or x_api_token != BACKEND_API_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid or missing API token")
     return True
 
@@ -48,21 +58,38 @@ def send_email_alert(subject: str, body: str) -> bool:
         return True
     except: return False
 
-# --- 3. CLIENTS & LOGGING ---
+# --- 4. CLIENTS & CONFIGURATION ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("alphabot")
-trading_client = TradingClient(
-    api_key=os.getenv("ALPACA_API_KEY"), 
-    secret_key=os.getenv("ALPACA_SECRET_KEY"), 
-    paper=os.getenv("ALPACA_PAPER", "true").lower() == "true"
-)
+trading_client = TradingClient(api_key=ALPACA_API_KEY, secret_key=ALPACA_SECRET_KEY, paper=ALPACA_PAPER)
 
-# --- 4. MIDDLEWARE & MOUNTING ---
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+# --- 5. ROUTES ---
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    admin_emails = os.getenv("ADMIN_EMAILS", "").split(",")
+    if get_current_user_email(request) not in admin_emails:
+        raise HTTPException(status_code=403, detail="Access Denied")
+    return templates.TemplateResponse("admin.html", {"request": request})
+
+@app.get("/admin/users", dependencies=[Depends(verify_token)])
+async def get_admin_users(request: Request):
+    admin_emails = os.getenv("ADMIN_EMAILS", "").split(",")
+    return [{"email": email} for email in admin_emails]
+
+@app.get("/account", dependencies=[Depends(verify_token)])
+def get_account():
+    account = trading_client.get_account()
+    return {"cash": account.cash, "portfolio_value": account.portfolio_value}app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 # --- 5. ROUTES ---
 @app.get("/", response_class=HTMLResponse)
