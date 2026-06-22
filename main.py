@@ -52,8 +52,9 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
 @app.get("/", response_class=HTMLResponse)
 def get_dashboard():
     """Serves the main index.html dashboard file."""
-    with open("index.html", "r") as f:
-        return f.read()
+   
+    return templates.TemplateResponse("index.html", {"request": request})
+        
 
 
 # ── AUTH ENDPOINTS ────────────────────────────────────────────────
