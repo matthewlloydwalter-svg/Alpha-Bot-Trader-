@@ -136,11 +136,14 @@ def serve_admin_page(request: Request):
 class SignupBody(BaseModel):
     email: str
     password: str
+    confirm_password: str
     agreed_to_tos: bool
 
 
 @app.post("/auth/signup")
 def signup(body: SignupBody, db: Session = Depends(get_db)):
+    if body.password != body.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
     if not body.agreed_to_tos:
         raise HTTPException(status_code=400, detail="You must agree to the Terms of Service.")
 
