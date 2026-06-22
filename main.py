@@ -13,7 +13,7 @@ import logging
 from datetime import datetime
 from typing import Optional, Literal
 
-from fastapi import FastAPI, Depends, HTTPException, Request, Cookie, Form
+from fastapi import FastAPI, Depends, HTTPException, Request, Cookie, Form, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -541,76 +541,9 @@ def static_check():
 @app.get("/health")
 def health():
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
         
     hashed = hash_password(password)
     new_user = User(email=email, hashed_password=hashed)
     db.add(new_user)
     db.commit()
     return {"status": "success", "message": "Account created successfully"}
-
-
-@app.post("/login")
-def login(data: dict, response: Response, db: Session = Depends(get_db)):
-    email = data.get("email")
-    password = data.get("password")
-    
-    user = db.query(User).filter(User.email == email).first()
-    if not user or not verify_password(password, user.hashed_password):
-        raise HTTPException(status_code=400, detail="Invalid email or password")
-        
-    token = create_session_token(user_id=user.id, email=user.email)
-    response.set_cookie(key="session_token", value=token, httponly=True)
-    return {"status": "success", "message": "Logged in successfully"}
-
-
-@app.post("/logout")
-def logout(response: Response):
-    response.delete_cookie("session_token")
-    return {"status": "success", "message": "Logged out successfully"}
-
-@app.get("/account")
-def get_user_account(current_user: User = Depends(get_current_user)):
-    """Fetches real-time balances using user credentials from the database."""
-    broker_name = getattr(current_user, "trading_mode", "alpaca") 
-    
-    try:
-        account_info = brokers.get_account_info(
-            broker=broker_name,
-            alpaca_key=getattr(current_user, "alpaca_key", None),
-            alpaca_secret=getattr(current_user, "alpaca_secret", None),
-            okx_key=getattr(current_user, "okx_key", None),
-            okx_secret=getattr(current_user, "okx_secret", None),
-            okx_passphrase=getattr(current_user, "okx_passphrase", None),
-            paper=(getattr(current_user, "trading_mode", "paper") == "paper")
-        )
-        return account_info
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Broker integration error: {str(e)}")
-
-
-@app.get("/positions")
-def get_user_positions(current_user: User = Depends(get_current_user)):
-    """Returns an array of current open holdings for the dashboard views."""
-    return []
-
-
-@app.post("/bots/{bot_id}/run-cycle")
-def run_bot_cycle(bot_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Manually executes a trading evaluation cycle using the bot engine."""
-    bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == current_user.id).first()
-    if not bot:
-        raise HTTPException(status_code=404, detail="Bot configuration not found")
-        
-    # Placeholder metrics parameters for your bot engine processing rules
-    current_price = 100.0
-    recent_prices = [98.0, 99.0, 100.0]
-    news_summary = "Market conditions stable."
-    
-    try:
-        # FIXED: Argument order perfectly matches bot_engine.py signature (db first, then bot)
-        result = bot_engine.run_bot_cycle(db, bot, current_price, recent_prices, news_summary)
-        return {"status": "success", "result": result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
