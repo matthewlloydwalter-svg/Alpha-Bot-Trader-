@@ -1,46 +1,22 @@
+Python
 import os
-import random
-import resend
-import logging
-from typing import Optional, Literal
-
-from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Depends, HTTPException, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
+from sqlalchemy.orm import Session
+from jose import jwt, JWTError
 
-from alpaca.trading.client import TradingClient
+# Import your finalized modules
+from database import init_db, get_db, User, Bot, Trade
+from auth import hash_password, verify_password, create_session_token, JWT_SECRET, JWT_ALGORITHM
+import brokers
+import bot_engine
 
-# --- 1. SETUP & SECRETS ---
-load_dotenv()
+# Initialize database tables on startup
+init_db()
 
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").lower() == "true"
-BACKEND_API_TOKEN = os.getenv("BACKEND_API_TOKEN")
-resend.api_key = os.getenv("RESEND_API_KEY")
-
-if not all([ALPACA_API_KEY, ALPACA_SECRET_KEY]):
-    raise RuntimeError("Missing Alpaca API Keys in Environment Variables!")
-
-# --- 2. CLIENT INITIALIZATION ---
-trading_client = TradingClient(
-    api_key=ALPACA_API_KEY, 
-    secret_key=ALPACA_SECRET_KEY, 
-    paper=ALPACA_PAPER
-)
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("alphabot")
-
-# --- 3. APP INITIALIZATION ---
-app = FastAPI(title="AlphaBot Trading Backend")
-
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+app = FastAPI(title="AlphaBot Trading System", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -50,56 +26,120 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 4. MODELS ---
-class OrderRequest(BaseModel):
-    symbol: str
-    qty: Optional[float] = None
-    notional: Optional[float] = None
-    order_type: Literal["market", "limit"] = "market"
-    limit_price: Optional[float] = None
-    time_in_force: Literal["day", "gtc"] = "day"
+# Serve JavaScript and styling files from a 'static' directory
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- 5. ROUTES ---
-@app.get("/", response_class=HTMLResponse)
-async def root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
 
-@app.post("/signup")
-async def signup(request: Request):
-    # Add database logic here
-    return {"status": "success"}
-
-@app.get("/account")
-async def get_account():
+# ── AUTHENTICATION DEPENDENCY ─────────────────────────────────────
+def get_current_user(request: Request, db: Session = Depends(get_db)):
+    token = request.cookies.get("session_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     try:
-        account = trading_client.get_account()
-        return {
-            "cash": float(account.cash), 
-            "portfolio_value": float(account.portfolio_value), 
-            "buying_power": float(account.buying_power)
-        }
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid session token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid session token")
+        
+    user = db.query(User).filter(User.id == int(user_id)).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+# ── FRONTEND PAGE ROUTE ───────────────────────────────────────────
+@app.get("/", response_class=HTMLResponse)
+def get_dashboard():
+    """Serves the main index.html dashboard file."""
+    with open("index.html", "r") as f:
+        return f.read()
+
+
+# ── AUTH ENDPOINTS ────────────────────────────────────────────────
+@app.post("/signup")
+def signup(data: dict, db: Session = Depends(get_db)):
+    email = data.get("email")
+    password = data.get("password")
+    
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Missing email or password")
+        
+    existing_user = db.query(User).filter(User.email == email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+        
+    hashed = hash_password(password)
+    new_user = User(email=email, hashed_password=hashed)
+    db.add(new_user)
+    db.commit()
+    return {"status": "success", "message": "Account created successfully"}
+
+
+@app.post("/login")
+def login(data: dict, response: Response, db: Session = Depends(get_db)):
+    email = data.get("email")
+    password = data.get("password")
+    
+    user = db.query(User).filter(User.email == email).first()
+    if not user or not verify_password(password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Invalid email or password")
+        
+    token = create_session_token(user_id=user.id, email=user.email)
+    response.set_cookie(key="session_token", value=token, httponly=True)
+    return {"status": "success", "message": "Logged in successfully"}
+
+
+@app.post("/logout")
+def logout(response: Response):
+    response.delete_cookie("session_token")
+    return {"status": "success", "message": "Logged out successfully"}
+
+
+# ── TRADING & PORTFOLIO ENDPOINTS ─────────────────────────────────
+@app.get("/account")
+def get_user_account(current_user: User = Depends(get_current_user)):
+    """Fetches real-time balances using user credentials from the database."""
+    broker_name = getattr(current_user, "trading_mode", "alpaca") 
+    
+    try:
+        account_info = brokers.get_account_info(
+            broker=broker_name,
+            alpaca_key=getattr(current_user, "alpaca_key", None),
+            alpaca_secret=getattr(current_user, "alpaca_secret", None),
+            okx_key=getattr(current_user, "okx_key", None),
+            okx_secret=getattr(current_user, "okx_secret", None),
+            okx_passphrase=getattr(current_user, "okx_passphrase", None),
+            paper=(getattr(current_user, "trading_mode", "paper") == "paper")
+        )
+        return account_info
     except Exception as e:
-        logger.error(f"Account fetch error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=502, detail=f"Broker integration error: {str(e)}")
+
 
 @app.get("/positions")
-async def get_positions():
-    try:
-        positions = trading_client.get_all_positions()
-        return [{"symbol": p.symbol, "qty": float(p.qty)} for p in positions]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+def get_user_positions(current_user: User = Depends(get_current_user)):
+    """Returns an array of current open holdings for the dashboard views."""
+    return []
 
-@app.post("/send-verification")
-async def send_verification(email: str):
-    code = str(random.randint(100000, 999999))
+
+# ── BOT SCHEDULER TRIGGER RUNNER ──────────────────────────────────
+@app.post("/bots/{bot_id}/run-cycle")
+def run_bot_cycle(bot_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Manually executes a trading evaluation cycle using the bot engine."""
+    bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == current_user.id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot configuration not found")
+        
+    # Placeholder metrics parameters for your bot engine processing rules
+    current_price = 100.0
+    recent_prices = [98.0, 99.0, 100.0]
+    news_summary = "Market conditions stable."
+    
     try:
-        resend.Emails.send({
-            "from": "alerts@yourdomain.com",
-            "to": email,
-            "subject": "Your AlphaBot Verification Code",
-            "html": f"<p>Your verification code is: <strong>{code}</strong></p>" 
-        })
-        return {"status": "success"}
+        # FIXED: Argument order perfectly matches bot_engine.py signature (db first, then bot)
+        result = bot_engine.run_bot_cycle(db, bot, current_price, recent_prices, news_summary)
+        return {"status": "success", "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

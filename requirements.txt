@@ -5,3 +5,8 @@ python-dotenv==1.0.1
 pydantic==2.9.2
 jinja2
 resend
+sqlalchemy
+passlib[bcrypt]
+python-jose[cryptography]
+requests
+ccxt

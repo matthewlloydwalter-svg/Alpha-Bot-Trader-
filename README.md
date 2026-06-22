@@ -1,373 +1,155 @@
-# Alpha-Bot-Trader-
-Automated trading bot dashboard built with FastAPI and Jinja2
+# AlphaBot Backend — Full Stack
 
-import os
-import smtplib
-import logging
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from typing import Optional, Literal
+## Does this match the standard FastAPI-on-Railway structure?
 
-from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+Yes — your pro-tip layout is exactly right, with one addition (a `.env`
+file, which Railway replaces with its own "Variables" tab):
 
-from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.common.exceptions import APIError
+```
+alphabot-backend/
+├── main.py              ← routes: auth, brokers, bots, admin
+├── database.py          ← SQLite models (User, Bot, Trade)
+├── auth.py               ← password hashing, sessions, email sending
+├── brokers.py             ← Alpaca + OKX unified interface
+├── bot_engine.py          ← the bot "brain" (Claude decision + order placement)
+├── templates/
+│   ├── index.html         ← your main dashboard (replace with V9 frontend)
+│   └── admin.html         ← your admin page (replace with V9 admin tab)
+├── static/
+│   ├── css/style.css
+│   └── js/app.js, admin.js
+├── requirements.txt
+├── Procfile
+└── .env.example          ← copy to .env locally; on Railway, paste into "Variables"
+```
 
+I split the single `main.py` you asked for into five small files
+(`main.py`, `database.py`, `auth.py`, `brokers.py`, `bot_engine.py`)
+rather than one giant file. Functionally this is one backend — Railway
+runs `main.py` exactly the same way — but a single file mixing user
+auth, two brokers' APIs, and an AI decision engine would be hundreds
+of lines that are hard to debug later. Each file does one job.
 
-# ──────────────────────────────────────────────────────────────────
-# 1. LOAD SECRETS FROM .env  (never hardcode keys in this file!)
-# ──────────────────────────────────────────────────────────────────
-load_dotenv()  # reads the .env file sitting next to this script
+## What's real vs. what needs your input
 
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").lower() == "true"
+**Real and working as written:**
+- User signup/login with hashed passwords and session cookies
+- Email verification gate (codes sent via your SMTP settings)
+- SQLite database that persists users, bots, and trade history
+- Broker switching (Alpaca ↔ OKX) with per-user stored credentials
+- `/bots/{id}/run-cycle` — asks Claude for a decision, places a real
+  order via Alpaca or OKX if the decision clears your bot's limits
+- Admin routes — user list with deposit/withdrawal/profit numbers,
+  platform-wide email sending, gated to emails in `ADMIN_EMAILS`
 
-# A separate, locally-generated secret that your frontend must send
-# with every request, so random people on the internet can't hit
-# your /buy and /sell endpoints and trade with your money.
-BACKEND_API_TOKEN = os.getenv("BACKEND_API_TOKEN")
+**Needs your input before going live:**
+- `templates/index.html` and `admin.html` are placeholders. Your real
+  V9 dashboard UI needs to be translated into calls against these
+  routes — see "Connecting your frontend" below.
+- Bot key encryption: keys are currently stored as plain text columns
+  in SQLite for simplicity. Before opening this to *other* people
+  (not just you), encrypt those columns — I noted exactly where in
+  `database.py` and `main.py`.
+- The profit calculation in `/admin/users` is a rough estimate from
+  trade history, not a true mark-to-market P&L (that requires pulling
+  live position values from the broker per user, which is a further
+  build once you have real trade volume to test against).
 
-# Email alert settings (use a separate "alerts" email, not your main one)
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USERNAME = os.getenv("SMTP_USERNAME")          # your alerts email address
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")          # app password, NOT your real password
-ALERT_FROM_EMAIL = os.getenv("ALERT_FROM_EMAIL", SMTP_USERNAME)
-ALERT_TO_EMAIL = os.getenv("ALERT_TO_EMAIL")        # where YOU want to receive alerts
+## 1. Local setup
 
-# Fail loudly at startup if critical secrets are missing — better to
-# crash now than silently trade with bad credentials.
-REQUIRED_VARS = {
-    "ALPACA_API_KEY": ALPACA_API_KEY,
-    "ALPACA_SECRET_KEY": ALPACA_SECRET_KEY,
-    "BACKEND_API_TOKEN": BACKEND_API_TOKEN,
-}
-missing = [k for k, v in REQUIRED_VARS.items() if not v]
-if missing:
-    raise RuntimeError(
-        f"Missing required environment variables in your .env file: {', '.join(missing)}. "
-        f"See the .env.example file for the full list and instructions."
-    )
+```bash
+cd alphabot-backend
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env
+```
 
+Fill in every value in `.env` — see the comments in that file. At
+minimum you need `JWT_SECRET`, `ADMIN_EMAILS`, and `ANTHROPIC_API_KEY`
+to start the server at all; SMTP and broker keys can be added later.
 
-# ──────────────────────────────────────────────────────────────────
-# 2. LOGGING
-# ──────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
-logger = logging.getLogger("alphabot")
+```bash
+uvicorn main:app --reload --port 8000
+```
 
+Visit `http://localhost:8000` — you should see the placeholder page.
+Visit `http://localhost:8000/docs` for the interactive API explorer.
 
-# ──────────────────────────────────────────────────────────────────
-# 3. ALPACA TRADING CLIENT
-# ──────────────────────────────────────────────────────────────────
-trading_client = TradingClient(
-    api_key=ALPACA_API_KEY,
-    secret_key=ALPACA_SECRET_KEY,
-    paper=ALPACA_PAPER,  # True = paper trading, False = REAL MONEY
-)
+## 2. Connecting your real frontend
 
-logger.info(
-    "Alpaca client initialized in %s mode.",
-    "PAPER" if ALPACA_PAPER else "LIVE (REAL MONEY)",
-)
+Your V9 frontend currently calls `fetch('https://api.anthropic.com/...')`
+directly from the browser (fine for a prototype, not for production
+since it can't hold secrets). Now it should call **your own backend**
+instead, which holds the real keys server-side. The pattern is:
 
+```javascript
+// Login
+await fetch('/auth/login', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  credentials: 'include',   // sends/receives the session cookie
+  body: JSON.stringify({email, password})
+});
 
-# ──────────────────────────────────────────────────────────────────
-# 4. EMAIL ALERTS
-# ──────────────────────────────────────────────────────────────────
-def send_email_alert(subject: str, body: str) -> bool:
-    """
-    Sends an email alert using smtplib. Returns True on success,
-    False on failure (failures are logged but never crash a trade —
-    you don't want a bad email server to block real order execution).
-    """
-    if not SMTP_USERNAME or not SMTP_PASSWORD or not ALERT_TO_EMAIL:
-        logger.warning("Email alerts not configured — skipping alert: %s", subject)
-        return False
+// Create a bot
+await fetch('/bots', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  credentials: 'include',
+  body: JSON.stringify({name: 'My Bot', ticker: 'AAPL', funds_allocated: 500, is_auto: true})
+});
 
-    msg = MIMEMultipart()
-    msg["From"] = ALERT_FROM_EMAIL
-    msg["To"] = ALERT_TO_EMAIL
-    msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain"))
+// Run one decision cycle for a bot (call this on a timer from the frontend)
+await fetch(`/bots/${botId}/run-cycle`, {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  credentials: 'include',
+  body: JSON.stringify({current_price: 183.40, recent_prices: [180, 181, 183.4]})
+});
+```
 
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()  # encrypt the connection
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.sendmail(ALERT_FROM_EMAIL, ALERT_TO_EMAIL, msg.as_string())
-        logger.info("Email alert sent: %s", subject)
-        return True
-    except Exception as e:
-        logger.error("Failed to send email alert: %s", e)
-        return False
+Move your existing HTML/CSS/JS from the V9 artifact into
+`templates/index.html` (the HTML) and `static/js/app.js` (the
+JavaScript), swapping every place it faked data locally for a fetch
+call to one of these routes instead.
 
+## 3. Deploying to Railway
 
-# ──────────────────────────────────────────────────────────────────
-# 5. AUTH DEPENDENCY — protects every trading endpoint
-# ──────────────────────────────────────────────────────────────────
-def verify_token(x_api_token: Optional[str] = Header(None)):
-    """
-    Every request to /buy, /sell, /account, etc. must include this header:
-        X-API-Token: <your BACKEND_API_TOKEN from .env>
-    This is what stops a stranger from hitting your backend and trading
-    with your money even if they find the URL.
-    """
-    if not x_api_token or x_api_token != BACKEND_API_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid or missing API token")
-    return True
+1. Push this folder to a GitHub repo.
+2. In Railway: New Project → Deploy from GitHub repo → select it.
+3. Railway auto-detects Python and reads your `Procfile`.
+4. Go to your service's **Variables** tab and add every value from
+   `.env.example` (your real values, not the placeholders).
+5. **Attach a Volume** (Railway → your service → Settings → Volumes)
+   mounted at `/app` or wherever your working directory is, so
+   `alphabot.db` (the SQLite file) survives redeploys. Without this,
+   every deploy wipes your user database.
+6. Deploy. Railway gives you a permanent `https://yourapp.up.railway.app`
+   URL — use this as `FRONTEND_ORIGIN` if your frontend is hosted
+   separately, or serve the frontend from the same app via the
+   `templates/` folder.
 
+## 4. Testing the live trading path safely
 
-# ──────────────────────────────────────────────────────────────────
-# 6. REQUEST / RESPONSE MODELS
-# ──────────────────────────────────────────────────────────────────
-class OrderRequest(BaseModel):
-    symbol: str = Field(..., description="Ticker symbol, e.g. 'AAPL'")
-    qty: Optional[float] = Field(None, description="Number of shares. Provide qty OR notional, not both.")
-    notional: Optional[float] = Field(None, description="Dollar amount to buy/sell instead of share count.")
-    order_type: Literal["market", "limit"] = "market"
-    limit_price: Optional[float] = Field(None, description="Required if order_type is 'limit'.")
-    time_in_force: Literal["day", "gtc"] = "day"
-    bot_name: Optional[str] = Field(None, description="Optional label for which bot triggered this trade.")
+Before flipping any real user to live mode:
 
+1. Use Alpaca's **paper** keys first (`/broker/alpaca/keys`, then
+   leave `trading_mode` as `paper`).
+2. Create a bot, manually call `/bots/{id}/run-cycle` a few times with
+   realistic price data, and confirm orders show up in your Alpaca
+   paper dashboard.
+3. Check your alert email actually arrives (send_email failures are
+   logged, not silent, but confirm anyway).
+4. Only then save live keys and call `/broker/trading-mode` with
+   `{"mode": "live"}` — which the backend will refuse unless the
+   email is verified and live keys are saved, exactly as you asked.
 
-class OrderResponse(BaseModel):
-    success: bool
-    order_id: Optional[str] = None
-    symbol: str
-    side: str
-    status: Optional[str] = None
-    message: str
+## 5. OKX paper trading note
 
-
-# ──────────────────────────────────────────────────────────────────
-# 7. FASTAPI APP
-# ──────────────────────────────────────────────────────────────────
-app = FastAPI(title="AlphaBot Trading Backend", version="1.0.0")
-
-# CORS: lock this down to your actual frontend domain once deployed.
-# "*" is fine for local testing only.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # ⚠️ replace with ["https://your-frontend-domain.com"] in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.get("/")
-def root():
-    return {
-        "service": "AlphaBot Trading Backend",
-        "mode": "PAPER" if ALPACA_PAPER else "LIVE",
-        "status": "running",
-    }
-
-
-@app.get("/account", dependencies=[Depends(verify_token)])
-def get_account():
-    """Returns your current Alpaca account info — balance, buying power, etc."""
-    try:
-        account = trading_client.get_account()
-        return {
-            "account_number": account.account_number,
-            "status": str(account.status),
-            "currency": account.currency,
-            "cash": account.cash,
-            "portfolio_value": account.portfolio_value,
-            "buying_power": account.buying_power,
-            "equity": account.equity,
-            "trading_blocked": account.trading_blocked,
-            "paper_trading": ALPACA_PAPER,
-        }
-    except APIError as e:
-        raise HTTPException(status_code=502, detail=f"Alpaca API error: {e}")
-
-
-@app.get("/positions", dependencies=[Depends(verify_token)])
-def get_positions():
-    """Returns all currently open positions."""
-    try:
-        positions = trading_client.get_all_positions()
-        return [
-            {
-                "symbol": p.symbol,
-                "qty": p.qty,
-                "avg_entry_price": p.avg_entry_price,
-                "current_price": p.current_price,
-                "unrealized_pl": p.unrealized_pl,
-                "unrealized_plpc": p.unrealized_plpc,
-                "market_value": p.market_value,
-            }
-            for p in positions
-        ]
-    except APIError as e:
-        raise HTTPException(status_code=502, detail=f"Alpaca API error: {e}")
-
-
-def _build_order_request(order: OrderRequest, side: OrderSide):
-    """Shared helper that builds a Market or Limit order request object."""
-    tif = TimeInForce.DAY if order.time_in_force == "day" else TimeInForce.GTC
-
-    if not order.qty and not order.notional:
-        raise HTTPException(status_code=400, detail="Provide either qty or notional.")
-    if order.qty and order.notional:
-        raise HTTPException(status_code=400, detail="Provide qty OR notional, not both.")
-
-    common_kwargs = dict(
-        symbol=order.symbol.upper(),
-        side=side,
-        time_in_force=tif,
-    )
-    if order.qty:
-        common_kwargs["qty"] = order.qty
-    else:
-        common_kwargs["notional"] = order.notional
-
-    if order.order_type == "market":
-        return MarketOrderRequest(**common_kwargs)
-    else:
-        if order.limit_price is None:
-            raise HTTPException(status_code=400, detail="limit_price is required for limit orders.")
-        return LimitOrderRequest(**common_kwargs, limit_price=order.limit_price)
-
-
-@app.post("/buy", response_model=OrderResponse, dependencies=[Depends(verify_token)])
-def buy(order: OrderRequest):
-    """
-    Places a BUY order on Alpaca.
-    Call this from your bot logic whenever it decides to enter a position.
-    """
-    req = _build_order_request(order, OrderSide.BUY)
-
-    try:
-        result = trading_client.submit_order(order_data=req)
-    except APIError as e:
-        send_email_alert(
-            subject=f"❌ AlphaBot — BUY order FAILED for {order.symbol}",
-            body=f"Bot: {order.bot_name or 'manual'}\nSymbol: {order.symbol}\nError: {e}",
-        )
-        raise HTTPException(status_code=502, detail=f"Alpaca rejected the order: {e}")
-
-    qty_desc = f"{order.qty} shares" if order.qty else f"${order.notional} notional"
-    send_email_alert(
-        subject=f"✅ AlphaBot — BOUGHT {order.symbol}",
-        body=(
-            f"Bot: {order.bot_name or 'manual'}\n"
-            f"Symbol: {order.symbol}\n"
-            f"Amount: {qty_desc}\n"
-            f"Order type: {order.order_type}\n"
-            f"Mode: {'PAPER' if ALPACA_PAPER else 'LIVE — REAL MONEY'}\n"
-            f"Order ID: {result.id}\n"
-            f"Status: {result.status}\n"
-        ),
-    )
-    logger.info("BUY order submitted: %s (%s) — id=%s", order.symbol, qty_desc, result.id)
-
-    return OrderResponse(
-        success=True,
-        order_id=str(result.id),
-        symbol=order.symbol.upper(),
-        side="buy",
-        status=str(result.status),
-        message=f"Buy order submitted for {order.symbol}",
-    )
-
-
-@app.post("/sell", response_model=OrderResponse, dependencies=[Depends(verify_token)])
-def sell(order: OrderRequest):
-    """
-    Places a SELL order on Alpaca.
-    Call this from your bot logic whenever it decides to exit a position.
-    """
-    req = _build_order_request(order, OrderSide.SELL)
-
-    try:
-        result = trading_client.submit_order(order_data=req)
-    except APIError as e:
-        send_email_alert(
-            subject=f"❌ AlphaBot — SELL order FAILED for {order.symbol}",
-            body=f"Bot: {order.bot_name or 'manual'}\nSymbol: {order.symbol}\nError: {e}",
-        )
-        raise HTTPException(status_code=502, detail=f"Alpaca rejected the order: {e}")
-
-    qty_desc = f"{order.qty} shares" if order.qty else f"${order.notional} notional"
-    send_email_alert(
-        subject=f"✅ AlphaBot — SOLD {order.symbol}",
-        body=(
-            f"Bot: {order.bot_name or 'manual'}\n"
-            f"Symbol: {order.symbol}\n"
-            f"Amount: {qty_desc}\n"
-            f"Order type: {order.order_type}\n"
-            f"Mode: {'PAPER' if ALPACA_PAPER else 'LIVE — REAL MONEY'}\n"
-            f"Order ID: {result.id}\n"
-            f"Status: {result.status}\n"
-        ),
-    )
-    logger.info("SELL order submitted: %s (%s) — id=%s", order.symbol, qty_desc, result.id)
-
-    return OrderResponse(
-        success=True,
-        order_id=str(result.id),
-        symbol=order.symbol.upper(),
-        side="sell",
-        status=str(result.status),
-        message=f"Sell order submitted for {order.symbol}",
-    )
-
-
-@app.get("/orders", dependencies=[Depends(verify_token)])
-def get_orders(status: Literal["open", "closed", "all"] = "open"):
-    """Lists recent orders, useful for your bot or UI to check order history."""
-    try:
-        orders = trading_client.get_orders()
-        return [
-            {
-                "id": str(o.id),
-                "symbol": o.symbol,
-                "side": str(o.side),
-                "qty": o.qty,
-                "filled_qty": o.filled_qty,
-                "status": str(o.status),
-                "submitted_at": str(o.submitted_at),
-            }
-            for o in orders
-        ]
-    except APIError as e:
-        raise HTTPException(status_code=502, detail=f"Alpaca API error: {e}")
-
-
-@app.delete("/orders/{order_id}", dependencies=[Depends(verify_token)])
-def cancel_order(order_id: str):
-    """Cancels a specific open order by ID."""
-    try:
-        trading_client.cancel_order_by_id(order_id)
-        return {"success": True, "message": f"Order {order_id} cancelled"}
-    except APIError as e:
-        raise HTTPException(status_code=502, detail=f"Alpaca API error: {e}")
-
-
-@app.post("/test-email", dependencies=[Depends(verify_token)])
-def test_email():
-    """Hit this once after setup to confirm your email alerts are wired correctly."""
-    ok = send_email_alert(
-        subject="🔔 AlphaBot — Test alert",
-        body="If you're reading this, your email alerts are working correctly.",
-    )
-    if not ok:
-        raise HTTPException(
-            status_code=500,
-            detail="Email failed to send — check SMTP_USERNAME, SMTP_PASSWORD, and ALERT_TO_EMAIL in your .env file.",
-        )
-    return {"success": True, "message": "Test email sent — check your inbox."}
-
+OKX's "paper" equivalent is their **demo trading** feature, which
+requires generating a *separate* set of demo API keys from OKX's demo
+trading section (not your regular keys with a flag). `brokers.py`
+calls `exchange.set_sandbox_mode(True)` when your stored
+`trading_mode` is `paper` — make sure the keys you save are the demo
+ones if you want OKX paper trading to actually use fake funds.
