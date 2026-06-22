@@ -67,36 +67,6 @@
             <button class="nav-tab" onclick="goTab('bots')">🤖 Bots</button>
             <button class="nav-tab" onclick="goTab('account')">👤 Account</button>
         </nav>
-        <div id="page-portfolio" class="page">
-            <div class="card">Total Balance: $0.00</div>
-        </div>
-    </div>
-</div>
-
-<script>
-    function showAuthTab(tab) {
-        document.getElementById('login-form').classList.toggle('hidden', tab !== 'login');
-        document.getElementById('signup-form').classList.toggle('hidden', tab !== 'signup');
-        document.getElementById('tab-login').style.background = (tab === 'login') ? 'var(--bg3)' : 'transparent';
-        document.getElementById('tab-signup').style.background = (tab === 'signup') ? 'var(--bg3)' : 'transparent';
-    }
-    
-    function goTab(page) {
-        document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
-        document.getElementById('page-' + page).classList.remove('hidden');
-    }
-</script>
-<script src="/static/js/app.js"></script>
-</body>
-</html>        <div class="topbar">
-            <span>AlphaBot</span>
-            <button class="btn" onclick="doLogout()">Sign out</button>
-        </div>
-        <nav class="nav">
-            <button class="nav-tab active" onclick="goTab('portfolio')">💼 Portfolio</button>
-            <button class="nav-tab" onclick="goTab('bots')">🤖 Bots</button>
-            <button class="nav-tab" onclick="goTab('account')">👤 Account</button>
-        </nav>
 
         <div id="page-portfolio" class="page">
             <div class="card" style="margin-bottom: 15px;">
