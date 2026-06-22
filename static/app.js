@@ -74,14 +74,18 @@ async function doSignup() {
     const confirmPass = document.getElementById('su-pass-confirm').value;
     const errorDiv = document.getElementById('password-error');
 
-    // --- PASTE IT RIGHT HERE ---
     if (pass !== confirmPass) {
         errorDiv.textContent = "Passwords do not match!";
-        errorDiv.style.display = "block"; // This makes it visible
+        // Force the display to block to ensure it shows up
+        errorDiv.style.setProperty('display', 'block', 'important'); 
         return; 
     } else {
-        errorDiv.style.display = "none";  // This hides it if they fix the mistake
+        // Hide it again
+        errorDiv.style.setProperty('display', 'none', 'important');
+    }
+    
     errorDiv.textContent = ""; 
+    
         const data = await api('/signup', {
             method: 'POST',
             body: JSON.stringify({ name, email, password: pass })
