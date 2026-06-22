@@ -96,11 +96,10 @@ async def signup(request: Request):
     # These lines inside the function MUST be indented (usually 4 spaces)
     return {"status": "success"}
 
-# The next route should also be at the top level
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
-    
+
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -122,11 +121,19 @@ async def send_verification(email: str):
 def get_account():
     # Note: Added simple auth handling or token verification as needed
     account = trading_client.get_account()
-    return {
-        "cash": account.cash, 
+    return {"cash": account.cash, 
         "portfolio_value": account.portfolio_value, 
-        "buying_power": account.buying_power
-    }
+        "buying_power": account.buying_power}
+
+@app.get("/account")
+async def get_account():
+    try:
+        account = trading_client.get_account()
+        return {"portfolio_value": account.portfolio_value,
+            "cash": account.cash}
+    except Exception as e:
+        print(f"Alpaca Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/positions")
 def get_positions():
