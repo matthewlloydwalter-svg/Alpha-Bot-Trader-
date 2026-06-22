@@ -23,19 +23,18 @@
         .nav-tab.active { color: var(--t1); border-bottom: 2px solid var(--blue); }
         .page { padding: 14px; }
         .topbar { display: flex; justify-content: space-between; padding: 10px 14px; background: var(--bg1); border-bottom: 1px solid var(--border); }
-        .stk-row { display: flex; padding: 10px 0; border-bottom: 1px solid var(--border); }
     </style>
 </head>
 <body>
 
 <div id="app">
-    <!-- AUTH SCREEN -->
     <div id="auth-screen">
         <div class="card" style="margin: 40px auto; max-width: 320px;">
             <div style="text-align: center; margin-bottom: 20px;">
                 <div style="font-size: 40px;">📈</div>
                 <h2 style="margin-top: 5px;">AlphaBot Trading</h2>
             </div>
+            
             <div style="display: flex; margin-bottom: 15px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;">
                 <button class="btn" id="tab-login" onclick="showAuthTab('login')" style="flex: 1; border: none; background: var(--bg3);">Sign in</button>
                 <button class="btn" id="tab-signup" onclick="showAuthTab('signup')" style="flex: 1; border: none; border-left: 1px solid var(--border);">Sign up</button>
@@ -51,18 +50,45 @@
                 <input type="text" id="su-name" placeholder="Name">
                 <input type="email" id="su-email" placeholder="Email">
                 <input type="password" id="su-pass" placeholder="Password">
+                <input type="password" id="su-pass-confirm" placeholder="Confirm Password">
+                <div id="password-error" style="color: var(--red); font-size: 12px; margin-bottom: 8px;"></div>
                 <button class="btn btn-primary" style="width: 100%;" onclick="doSignup()">Create account</button>
-                <input type="password" id="su-pass" placeholder="Password">
-<input type="password" id="su-pass-confirm" placeholder="Confirm Password">
-<div id="password-error" style="color: var(--red); font-size: 12px; margin-bottom: 8px;"></div>
-<button class="btn btn-primary" style="width: 100%;" onclick="doSignup()">Create account</button>
             </div>
         </div>
     </div>
 
-    <!-- MAIN APP -->
     <div id="main-app" class="hidden">
         <div class="topbar">
+            <span>AlphaBot</span>
+            <button class="btn" onclick="doLogout()">Sign out</button>
+        </div>
+        <nav class="nav">
+            <button class="nav-tab active" onclick="goTab('portfolio')">💼 Portfolio</button>
+            <button class="nav-tab" onclick="goTab('bots')">🤖 Bots</button>
+            <button class="nav-tab" onclick="goTab('account')">👤 Account</button>
+        </nav>
+        <div id="page-portfolio" class="page">
+            <div class="card">Total Balance: $0.00</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    function showAuthTab(tab) {
+        document.getElementById('login-form').classList.toggle('hidden', tab !== 'login');
+        document.getElementById('signup-form').classList.toggle('hidden', tab !== 'signup');
+        document.getElementById('tab-login').style.background = (tab === 'login') ? 'var(--bg3)' : 'transparent';
+        document.getElementById('tab-signup').style.background = (tab === 'signup') ? 'var(--bg3)' : 'transparent';
+    }
+    
+    function goTab(page) {
+        document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
+        document.getElementById('page-' + page).classList.remove('hidden');
+    }
+</script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>        <div class="topbar">
             <span>AlphaBot</span>
             <button class="btn" onclick="doLogout()">Sign out</button>
         </div>
