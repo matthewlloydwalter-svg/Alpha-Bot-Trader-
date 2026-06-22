@@ -76,6 +76,13 @@ class OrderResponse(BaseModel):
 async def root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
+@app.post("/signup")
+async def signup(request: Request):
+    data = await request.json()
+    email = data.get("email")
+    password = data.get("password")
+     return {"status": "success"}
+
 @app.post("/send-verification")
 async def send_verification(email: str):
     code = str(random.randint(100000, 999999))
