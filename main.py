@@ -1,17 +1,3 @@
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_page(request: Request):
-    # 1. Get the logged-in user's email (this requires your auth setup)
-    current_user_email = get_current_user_email(request) 
-    
-    # 2. Get your list of admins from environment variables
-    admin_emails = os.getenv("ADMIN_EMAILS", "").split(",")
-    
-    # 3. The Gatekeeper Check
-    if current_user_email not in admin_emails:
-        raise HTTPException(status_code=403, detail="Access Denied")
-        
-    return templates.TemplateResponse("admin.html", {"request": request})
-    
 import os
 import smtplib
 import logging
@@ -33,6 +19,22 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.common.exceptions import APIError
+
+app = FastAPI()
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    # 1. Get the logged-in user's email (this requires your auth setup)
+    current_user_email = get_current_user_email(request) 
+    
+    # 2. Get your list of admins from environment variables
+    admin_emails = os.getenv("ADMIN_EMAILS", "").split(",")
+    
+    # 3. The Gatekeeper Check
+    if current_user_email not in admin_emails:
+        raise HTTPException(status_code=403, detail="Access Denied")
+        
+    return templates.TemplateResponse("admin.html", {"request": request})
+    
 
 # ──────────────────────────────────────────────────────────────────
 # 1. LOAD SECRETS FROM .env
