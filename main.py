@@ -1,8 +1,39 @@
-from fastapi import FastAPI, Request
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
 import os
+import random
+import resend
+import logging
+from typing import Optional, Literal
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from alpaca.trading.client import TradingClient
+
+# --- 1. SETUP & SECRETS ---
+load_dotenv()
+
+ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
+ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").lower() == "true"
+BACKEND_API_TOKEN = os.getenv("BACKEND_API_TOKEN")
+resend.api_key = os.getenv("RESEND_API_KEY")
+
+if not all([ALPACA_API_KEY, ALPACA_SECRET_KEY]):
+    raise RuntimeError("Missing Alpaca API Keys in Environment Variables!")
+
+# --- 2. CLIENT INITIALIZATION ---
+trading_client = TradingClient(
+    api_key=ALPACA_API_KEY, 
+    secret_key=ALPACA_SECRET_KEY, 
+    paper=ALPACA_PAPER
+)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("alphabot")
 
 app = FastAPI()
 
