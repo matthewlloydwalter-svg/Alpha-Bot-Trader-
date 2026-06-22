@@ -4,3 +4,10 @@ body {
   color: #e8eaf0;
   padding: 2rem;
 }
+#password-error {
+    color: var(--red);
+    font-size: 12px;
+    margin-bottom: 8px;
+    /* This makes sure it doesn't show up as an empty gap if there's no error */
+    display: none; 
+}
