@@ -6,12 +6,10 @@ from email.mime.multipart import MIMEMultipart
 from typing import Optional, Literal
 
 from dotenv import load_dotenv
-# --- UPDATED IMPORTS ---
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
-# -----------------------
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -20,20 +18,29 @@ from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.common.exceptions import APIError
 
-app = FastAPI()
+# 1. INITIALIZE APP FIRST
+app = FastAPI(title="AlphaBot Trading Backend", version="1.0.0")
+
+# 2. ADMIN GATEKEEPER
+def get_current_user_email(request: Request) -> str:
+    # This is a placeholder for your future authentication service (e.g. Clerk/Supabase)
+    return request.session.get("user_email") if hasattr(request, "session") else ""
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
-    # 1. Get the logged-in user's email (this requires your auth setup)
-    current_user_email = get_current_user_email(request) 
-    
-    # 2. Get your list of admins from environment variables
+    # Fetch your list from Railway Variables
     admin_emails = os.getenv("ADMIN_EMAILS", "").split(",")
+    current_user_email = get_current_user_email(request)
     
-    # 3. The Gatekeeper Check
     if current_user_email not in admin_emails:
         raise HTTPException(status_code=403, detail="Access Denied")
         
     return templates.TemplateResponse("admin.html", {"request": request})
+
+# 3. NOW PROCEED TO YOUR EXISTING CODE
+# ──────────────────────────────────────────────────────────────────
+# 1. LOAD SECRETS FROM .env
+# ──────────────────────────────────────────────────────────────────
     
 
 # ──────────────────────────────────────────────────────────────────
