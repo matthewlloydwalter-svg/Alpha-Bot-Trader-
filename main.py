@@ -37,6 +37,16 @@ async def admin_page(request: Request):
         
     return templates.TemplateResponse("admin.html", {"request": request})
 
+Python
+@app.get("/admin/users", dependencies=[Depends(verify_token)])
+async def get_admin_users(request: Request):
+    # Verify Admin Access
+    admin_emails = os.getenv("ADMIN_EMAILS", "").split(",")
+    current_user_email = get_current_user_email(request)
+    if current_user_email not in admin_emails:
+        raise HTTPException(status_code=403, detail="Access Denied")
+     return [{"email": email} for email in admin_emails]
+
 # 3. NOW PROCEED TO YOUR EXISTING CODE
 # ──────────────────────────────────────────────────────────────────
 # 1. LOAD SECRETS FROM .env
