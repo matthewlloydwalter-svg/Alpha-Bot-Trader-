@@ -52,3 +52,20 @@ async function updateDashboard() {
 
 // Initialize
 window.addEventListener('DOMContentLoaded', updateDashboard);
+function doSignup() {
+    const pass = document.getElementById('su-pass').value;
+    const confirmPass = document.getElementById('su-pass-confirm').value;
+    const errorDiv = document.getElementById('password-error');
+
+    // Check if they match
+    if (pass !== confirmPass) {
+        errorDiv.textContent = "Passwords do not match!";
+        return; // Stop the function here
+    }
+
+    // Clear error if they match
+    errorDiv.textContent = "";
+
+    // Proceed with your existing signup logic...
+    // e.g., fetch('/signup', { method: 'POST', body: JSON.stringify({...}) })
+}
