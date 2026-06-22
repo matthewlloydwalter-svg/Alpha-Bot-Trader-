@@ -1,61 +1,54 @@
-// --- AUTHENTICATION ---
-async function login(email, password) {
-  const resp = await fetch("/auth/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ email, password }),
-  });
-  if (!resp.ok) throw new Error((await resp.json()).detail);
-  return resp.json();
-}
-
-async function getMe() {
-  const resp = await fetch("/auth/me", { credentials: "include" });
-  if (!resp.ok) return null;
-  return resp.json();
-}
-
-// --- DATA FETCHING (The "Real" Data) ---
-// Note: You must replace 'YOUR_BACKEND_API_TOKEN' with the value from your .env
-const API_TOKEN = "YOUR_BACKEND_API_TOKEN"; 
-
-async function fetchData(endpoint) {
-  const resp = await fetch(endpoint, {
-    method: "GET",
-    headers: { "x-api-token": API_TOKEN }
-  });
-  if (!resp.ok) throw new Error("Failed to fetch data");
-  return resp.json();
-}
-
-async function updateDashboard() {
-  try {
-    // Fetch account and positions
-    const [account, positions] = await Promise.all([
-      fetchData("/account"),
-      fetchData("/positions")
-    ]);
-
-    // Update HTML elements (IDs must match index.html)
-    document.getElementById('pf-bal').innerText = '$' + parseFloat(account.portfolio_value).toLocaleString(undefined, {minimumFractionDigits: 2});
-    document.getElementById('pf-free').innerText = '$' + parseFloat(account.cash).toLocaleString(undefined, {minimumFractionDigits: 2});
+/**
+ * Unified API helper: Uses session cookies exclusively.
+ * No API tokens needed in the frontend code.
+ */
+async function api(path, options = {}) {
+    const resp = await fetch(path, {
+        ...options,
+        headers: { "Content-Type": "application/json", ...options.headers },
+        credentials: "include" // Automatically handles your session
+    });
     
-    // Update Positions List
-    const posList = document.getElementById('pf-holdings');
-    posList.innerHTML = positions.map(p => `
-      <div class="stk-row">
-        <span>${p.symbol}</span>
-        <span style="margin-left:auto">${p.qty} shares</span>
-      </div>
-    `).join('');
-
-  } catch (err) {
-    console.error("Dashboard update failed:", err);
-  }
+    // Handle empty responses
+    const data = await resp.json().catch(() => ({}));
+    
+    if (!resp.ok) {
+        throw new Error(data.detail || `Error ${resp.status}`);
+    }
+    return data;
 }
 
-// Initialize on load
-window.addEventListener('DOMContentLoaded', () => {
-    updateDashboard();
-});
+// --- DASHBOARD UPDATER ---
+async function updateDashboard() {
+    try {
+        // Fetch account and positions using the unified helper
+        const [account, positions] = await Promise.all([
+            api("/account"),
+            api("/positions")
+        ]);
+
+        // Update Balance
+        document.getElementById('pf-bal').innerText = '$' + 
+            parseFloat(account.portfolio_value || 0).toLocaleString(undefined, {minimumFractionDigits: 2});
+            
+        document.getElementById('pf-free').innerText = '$' + 
+            parseFloat(account.cash || 0).toLocaleString(undefined, {minimumFractionDigits: 2});
+        
+        // Update Positions List
+        const posList = document.getElementById('pf-holdings');
+        posList.innerHTML = positions.length > 0 
+            ? positions.map(p => `
+                <div class="stk-row">
+                    <span>${p.symbol}</span>
+                    <span style="margin-left:auto">${p.qty} shares</span>
+                </div>
+            `).join('')
+            : '<div style="color:var(--t2);padding:10px">No positions</div>';
+
+    } catch (err) {
+        console.error("Dashboard update failed:", err.message);
+    }
+}
+
+// Initialize
+window.addEventListener('DOMContentLoaded', updateDashboard);
