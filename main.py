@@ -18,49 +18,81 @@ from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.common.exceptions import APIError
 
-# 1. INITIALIZE APP FIRST
+# --- 1. SETUP ---
+load_dotenv()
 app = FastAPI(title="AlphaBot Trading Backend", version="1.0.0")
 
-# 2. ADMIN GATEKEEPER
+# --- 2. HELPERS & DEPENDENCIES ---
 def get_current_user_email(request: Request) -> str:
-    # This is a placeholder for your future authentication service (e.g. Clerk/Supabase)
     return request.session.get("user_email") if hasattr(request, "session") else ""
+
+async def verify_token(x_api_token: Optional[str] = Header(None)):
+    if not x_api_token or x_api_token != os.getenv("BACKEND_API_TOKEN"):
+        raise HTTPException(status_code=401, detail="Invalid or missing API token")
+    return True
+
+def send_email_alert(subject: str, body: str) -> bool:
+    smtp_user = os.getenv("SMTP_USERNAME")
+    smtp_pass = os.getenv("SMTP_PASSWORD")
+    alert_to = os.getenv("ALERT_TO_EMAIL")
+    if not smtp_user or not smtp_pass or not alert_to: return False
+    
+    msg = MIMEMultipart()
+    msg["From"], msg["To"], msg["Subject"] = smtp_user, alert_to, subject
+    msg.attach(MIMEText(body, "plain"))
+    try:
+        with smtplib.SMTP(os.getenv("SMTP_HOST", "smtp.gmail.com"), int(os.getenv("SMTP_PORT", "587"))) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(smtp_user, alert_to, msg.as_string())
+        return True
+    except: return False
+
+# --- 3. CLIENTS & LOGGING ---
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger("alphabot")
+trading_client = TradingClient(
+    api_key=os.getenv("ALPACA_API_KEY"), 
+    secret_key=os.getenv("ALPACA_SECRET_KEY"), 
+    paper=os.getenv("ALPACA_PAPER", "true").lower() == "true"
+)
+
+# --- 4. MIDDLEWARE & MOUNTING ---
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+# --- 5. ROUTES ---
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
-    # Fetch your list from Railway Variables
     admin_emails = os.getenv("ADMIN_EMAILS", "").split(",")
-    current_user_email = get_current_user_email(request)
-    
-    if current_user_email not in admin_emails:
+    if get_current_user_email(request) not in admin_emails:
         raise HTTPException(status_code=403, detail="Access Denied")
-        
     return templates.TemplateResponse("admin.html", {"request": request})
 
 @app.get("/admin/users", dependencies=[Depends(verify_token)])
 async def get_admin_users(request: Request):
-    # Verify Admin Access
     admin_emails = os.getenv("ADMIN_EMAILS", "").split(",")
-    current_user_email = get_current_user_email(request)
-    if current_user_email not in admin_emails:
+    if get_current_user_email(request) not in admin_emails:
         raise HTTPException(status_code=403, detail="Access Denied")
     return [{"email": email} for email in admin_emails]
 
-# 3. NOW PROCEED TO YOUR EXISTING CODE
-# ──────────────────────────────────────────────────────────────────
-# 1. LOAD SECRETS FROM .env
-# ──────────────────────────────────────────────────────────────────
-    
+@app.get("/account", dependencies=[Depends(verify_token)])
+def get_account():
+    account = trading_client.get_account()
+    return {"cash": account.cash, "portfolio_value": account.portfolio_value, "buying_power": account.buying_power}
 
-# ──────────────────────────────────────────────────────────────────
-# 1. LOAD SECRETS FROM .env
-# ──────────────────────────────────────────────────────────────────
-load_dotenv()
+@app.get("/positions", dependencies=[Depends(verify_token)])
+def get_positions():
+    return [{"symbol": p.symbol, "qty": p.qty} for p in trading_client.get_all_positions()]
 
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").lower() == "true"
-BACKEND_API_TOKEN = os.getenv("BACKEND_API_TOKEN")
+# (Add your existing buy/sell/order routes here, following the same pattern)BACKEND_API_TOKEN = os.getenv("BACKEND_API_TOKEN")
 
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
