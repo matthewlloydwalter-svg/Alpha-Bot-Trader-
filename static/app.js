@@ -1,34 +1,25 @@
-// This function acts as the gatekeeper for your app
+// --- 1. STATE MANAGER ---
 function setAppState(isLoggedIn) {
     const authScreen = document.getElementById('auth-screen');
     const mainApp = document.getElementById('main-app');
 
     if (isLoggedIn) {
-        authScreen.classList.add('hidden');  // Hide auth
-        mainApp.classList.remove('hidden');  // Show app
+        authScreen.classList.add('hidden');
+        mainApp.classList.remove('hidden');
     } else {
-        authScreen.classList.remove('hidden'); // Show auth
-        mainApp.classList.add('hidden');       // Hide app
+        authScreen.classList.remove('hidden');
+        mainApp.classList.add('hidden');
     }
 }
 
-// Ensure the app starts in the correct state
-window.onload = function() {
-    // By default, assume user is not logged in until they prove it
-    setAppState(false); 
-};
-/**
- * Unified API helper: Uses session cookies exclusively.
- * No API tokens needed in the frontend code.
- */
+// --- 2. API HELPER ---
 async function api(path, options = {}) {
     const resp = await fetch(path, {
         ...options,
         headers: { "Content-Type": "application/json", ...options.headers },
-        credentials: "include" // Automatically handles your session
+        credentials: "include"
     });
     
-    // Handle empty responses
     const data = await resp.json().catch(() => ({}));
     
     if (!resp.ok) {
@@ -37,23 +28,20 @@ async function api(path, options = {}) {
     return data;
 }
 
-// --- DASHBOARD UPDATER ---
+// --- 3. DASHBOARD LOGIC ---
 async function updateDashboard() {
     try {
-        // Fetch account and positions using the unified helper
         const [account, positions] = await Promise.all([
             api("/account"),
             api("/positions")
         ]);
 
-        // Update Balance
         document.getElementById('pf-bal').innerText = '$' + 
             parseFloat(account.portfolio_value || 0).toLocaleString(undefined, {minimumFractionDigits: 2});
             
         document.getElementById('pf-free').innerText = '$' + 
             parseFloat(account.cash || 0).toLocaleString(undefined, {minimumFractionDigits: 2});
         
-        // Update Positions List
         const posList = document.getElementById('pf-holdings');
         posList.innerHTML = positions.length > 0 
             ? positions.map(p => `
@@ -63,40 +51,48 @@ async function updateDashboard() {
                 </div>
             `).join('')
             : '<div style="color:var(--t2);padding:10px">No positions</div>';
-
     } catch (err) {
         console.error("Dashboard update failed:", err.message);
     }
 }
 
-// Initialize
-window.addEventListener('DOMContentLoaded', updateDashboard);
-function doSignup() {
+// --- 4. INITIALIZATION ---
+window.addEventListener('DOMContentLoaded', async () => {
+    try {
+        // Check if user is logged in by fetching account data
+        await api("/account");
+        setAppState(true);
+        updateDashboard();
+    } catch (err) {
+        setAppState(false); // User is not logged in
+    }
+});
+
+// --- 5. SIGNUP LOGIC ---
+async function doSignup() {
+    const name = document.getElementById('su-name').value;
+    const email = document.getElementById('su-email').value;
     const pass = document.getElementById('su-pass').value;
     const confirmPass = document.getElementById('su-pass-confirm').value;
     const errorDiv = document.getElementById('password-error');
 
-    // Check if they match
     if (pass !== confirmPass) {
         errorDiv.textContent = "Passwords do not match!";
-        return; // Stop the function here
+        return;
     }
 
-    // Clear error if they match
-    errorDiv.textContent = "";
+    try {
+        errorDiv.textContent = ""; // Clear errors
+        const data = await api('/signup', {
+            method: 'POST',
+            body: JSON.stringify({ name, email, password: pass })
+        });
 
-    // Proceed with your existing signup logic...
-    // e.g., fetch('/signup', { method: 'POST', body: JSON.stringify({...}) })
-}
-
-// This ensures the main dashboard is hidden when the page first loads
-document.addEventListener('DOMContentLoaded', function() {
-    document.getElementById('main-app').classList.add('hidden');
-    document.getElementById('auth-screen').classList.remove('hidden');
-});
-
-// Use this function to switch screens after a successful login or verification
-function showDashboard() {
-    document.getElementById('auth-screen').classList.add('hidden');
-    document.getElementById('main-app').classList.remove('hidden');
+        if (data.status === 'success') {
+            alert("Signup successful! You can now sign in.");
+            showAuthTab('login');
+        }
+    } catch (err) {
+        errorDiv.textContent = err.message;
+    }
 }
