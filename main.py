@@ -13,6 +13,11 @@ import brokers
 import bot_engine
 
 # Initialize database tables on startup
+file_path = os.path.join(os.getcwd(), "templates", "index.html")
+with open(file_path, "r") as f:
+    content = f.read()
+return HTMLResponse(content=content)
+
 init_db()
 
 app = FastAPI(title="AlphaBot Trading System", version="1.0.0")
