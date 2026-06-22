@@ -7,17 +7,11 @@
 </head>
 <body>
   <h1>{{ platform_name }} Admin</h1>
-
-  <section id="admin-stats">
-    <h2>System Stats</h2>
-    <div id="stats-content">Loading stats...</div>
-  </section>
-
-  <section id="admin-users">
-    <h2>User List</h2>
-    <ul id="users-list">Loading users...</ul>
-  </section>
-
+  <p>
+    Placeholder admin page. Wire this up to call GET /admin/users and
+    GET /admin/stats (both require the logged-in user to be an admin —
+    see ADMIN_EMAILS in your .env).
+  </p>
   <script src="/static/js/admin.js"></script>
 </body>
 </html>
