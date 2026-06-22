@@ -100,3 +100,24 @@ async function doSignup() {
         errorDiv.style.setProperty('display', 'block', 'important');
     }
 }
+
+// Add this to your app.js file
+async function doLogin() {
+    const email = document.getElementById('login-email').value;
+    const password = document.getElementById('login-pass').value;
+
+    try {
+        const data = await api('/login', {
+            method: 'POST',
+            body: JSON.stringify({ email, password })
+        });
+
+        if (data.status === 'success') {
+            alert("Login successful!");
+            setAppState(true); // Switches to the main app view
+            updateDashboard(); // Refreshes your portfolio/account data
+        }
+    } catch (err) {
+        alert("Login failed: " + err.message);
+    }
+}
