@@ -1,4 +1,3 @@
-Python
 import os
 from fastapi import FastAPI, Depends, HTTPException, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
