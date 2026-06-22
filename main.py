@@ -72,16 +72,26 @@ class OrderResponse(BaseModel):
     message: str
 
 # --- 5. ROUTES ---
-@app.get("/", response_class=HTMLResponse)
-async def root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+# --- 5. ROUTES ---
 
+# All routes should be at the "top level" (no spaces at the start of the line)
 @app.post("/signup")
 async def signup(request: Request):
     data = await request.json()
     email = data.get("email")
     password = data.get("password")
-     return {"status": "success"}
+    
+    # These lines inside the function MUST be indented (usually 4 spaces)
+    return {"status": "success"}
+
+# The next route should also be at the top level
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+    
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/send-verification")
 async def send_verification(email: str):
