@@ -20,6 +20,18 @@ from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
 # --- 1. SETUP & SECRETS ---
+# Add this temporary debug code
+import os
+print(f"DEBUG: Key: {os.getenv('ALPACA_API_KEY')}")
+print(f"DEBUG: Secret: {os.getenv('ALPACA_SECRET_KEY')}")
+print(f"DEBUG: Paper: {os.getenv('ALPACA_PAPER')}")
+
+# Then your existing client setup:
+trading_client = TradingClient(
+    os.getenv("ALPACA_API_KEY"), 
+    os.getenv("ALPACA_SECRET_KEY"), 
+    paper=True # Force True for testing to be 100% sure
+)
 load_dotenv()
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
