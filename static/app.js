@@ -1,3 +1,22 @@
+// This function acts as the gatekeeper for your app
+function setAppState(isLoggedIn) {
+    const authScreen = document.getElementById('auth-screen');
+    const mainApp = document.getElementById('main-app');
+
+    if (isLoggedIn) {
+        authScreen.classList.add('hidden');  // Hide auth
+        mainApp.classList.remove('hidden');  // Show app
+    } else {
+        authScreen.classList.remove('hidden'); // Show auth
+        mainApp.classList.add('hidden');       // Hide app
+    }
+}
+
+// Ensure the app starts in the correct state
+window.onload = function() {
+    // By default, assume user is not logged in until they prove it
+    setAppState(false); 
+};
 /**
  * Unified API helper: Uses session cookies exclusively.
  * No API tokens needed in the frontend code.
