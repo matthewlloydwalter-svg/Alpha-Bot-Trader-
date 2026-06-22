@@ -1,6 +1,8 @@
 import os
 import smtplib
 import logging
+import os
+import resend
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional, Literal
@@ -24,6 +26,7 @@ ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").lower() == "true"
 BACKEND_API_TOKEN = os.getenv("BACKEND_API_TOKEN")
+resend.api_key = os.getenv("RESEND_API_KEY")
 
 if not all([ALPACA_API_KEY, ALPACA_SECRET_KEY, BACKEND_API_TOKEN]):
     raise RuntimeError("Missing critical Environment Variables in Railway!")
