@@ -88,3 +88,15 @@ function doSignup() {
     // Proceed with your existing signup logic...
     // e.g., fetch('/signup', { method: 'POST', body: JSON.stringify({...}) })
 }
+
+// This ensures the main dashboard is hidden when the page first loads
+document.addEventListener('DOMContentLoaded', function() {
+    document.getElementById('main-app').classList.add('hidden');
+    document.getElementById('auth-screen').classList.remove('hidden');
+});
+
+// Use this function to switch screens after a successful login or verification
+function showDashboard() {
+    document.getElementById('auth-screen').classList.add('hidden');
+    document.getElementById('main-app').classList.remove('hidden');
+}
