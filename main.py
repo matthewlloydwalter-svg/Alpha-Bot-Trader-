@@ -1,65 +1,25 @@
-import os
-from fastapi import FastAPI, Depends, HTTPException, Response, Request
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Request
+from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
-from sqlalchemy.orm import Session
-from jose import jwt, JWTError
+import os
 
-# Import your finalized modules
-from database import init_db, get_db, User, Bot, Trade
-from auth import hash_password, verify_password, create_session_token, JWT_SECRET, JWT_ALGORITHM
-import brokers
-import bot_engine
+app = FastAPI()
 
-# Initialize database tables on startup
-file_path = os.path.join(os.getcwd(), "templates", "index.html")
-with open(file_path, "r") as f:
-    content = f.read()
-return HTMLResponse(content=content)
-
-init_db()
-
-app = FastAPI(title="AlphaBot Trading System", version="1.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Serve JavaScript and styling files from a 'static' directory
+# Mount the static directory for CSS/JS
+# Make sure you have a folder named 'static' in your root
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# Setup templates to look in the 'templates' folder
+templates = Jinja2Templates(directory="templates")
 
-# ── AUTHENTICATION DEPENDENCY ─────────────────────────────────────
-def get_current_user(request: Request, db: Session = Depends(get_db)):
-    token = request.cookies.get("session_token")
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        user_id = payload.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid session token")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid session token")
-        
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
-
-
-# ── FRONTEND PAGE ROUTE ───────────────────────────────────────────
-@app.get("/", response_class=HTMLResponse)
-def get_dashboard():
-    """Serves the main index.html dashboard file."""
-   
+@app.get("/")
+async def get_index(request: Request):
+    # This will now correctly look for index.html inside the 'templates' folder
     return templates.TemplateResponse("index.html", {"request": request})
-        
+
+# If you have other routes (like trading or auth), put them below here
+# Make sure they are indented exactly like the 'get_index' function
 
 
 # ── AUTH ENDPOINTS ────────────────────────────────────────────────
