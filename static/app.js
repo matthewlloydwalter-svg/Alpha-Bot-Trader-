@@ -70,19 +70,19 @@ window.addEventListener('DOMContentLoaded', async () => {
 
 // --- 5. SIGNUP LOGIC ---
 async function doSignup() {
-    const name = document.getElementById('su-name').value;
-    const email = document.getElementById('su-email').value;
     const pass = document.getElementById('su-pass').value;
     const confirmPass = document.getElementById('su-pass-confirm').value;
     const errorDiv = document.getElementById('password-error');
 
+    // THIS IS THE FEEDBACK PART
     if (pass !== confirmPass) {
-        errorDiv.textContent = "Passwords do not match!";
-        return;
+        errorDiv.textContent = "Passwords do not match!"; // This shows the text
+        errorDiv.style.display = "block";                // This ensures it is visible
+        return; 
     }
-
-    try {
-        errorDiv.textContent = ""; // Clear errors
+    
+    // Clear the message if they match
+    errorDiv.textContent = ""; 
         const data = await api('/signup', {
             method: 'POST',
             body: JSON.stringify({ name, email, password: pass })
