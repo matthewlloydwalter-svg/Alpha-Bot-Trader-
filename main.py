@@ -3,13 +3,15 @@ import random
 import resend
 import logging
 from typing import Optional, Literal
+
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends  # <--- Added Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session # Add this if you are using database sessions
 
 from alpaca.trading.client import TradingClient
 
