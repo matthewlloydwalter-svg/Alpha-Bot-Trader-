@@ -21,6 +21,7 @@ ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split("
 
 def is_user_admin(email: str) -> bool:
     return email.strip().lower() in ADMIN_EMAILS
+def send_email(to_email: str, subject: str, body: str):
     smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
     smtp_port = int(os.getenv("SMTP_PORT", 587))
     smtp_user = os.getenv("SMTP_USER")
