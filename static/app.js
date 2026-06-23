@@ -94,15 +94,28 @@ async function doLogin() {
 async function doSignup() {
   const email = document.getElementById("su-email").value.trim();
   const password = document.getElementById("su-pass").value;
+  const confirm = document.getElementById("su-pass-confirm").value; // Make sure this matches your HTML ID
   const agreed = document.getElementById("su-tos").checked;
-  if (!email || !password) return toast("Fill in all fields", "error");
+
+  // Added 'confirm' to this validation check
+  if (!email || !password || !confirm) return toast("Fill in all fields", "error");
+  
+  // Added this new check
+  if (password !== confirm) return toast("Passwords do not match", "error");
+  
   if (!agreed) return toast("You must agree to the Terms of Service to sign up", "error");
+
   try {
     await api("/auth/signup", {
       method: "POST",
-      body: JSON.stringify({ email, password, agreed_to_tos: true }),
+      body: JSON.stringify({ 
+        email, 
+        password, 
+        confirm_password: confirm, // Sending this to the backend
+        agreed_to_tos: true 
+      }),
     });
-    // Signup succeeded — backend sent a verification email.
+
     document.getElementById("auth-screen").classList.add("hidden");
     document.getElementById("verify-screen").classList.remove("hidden");
     document.getElementById("verify-email-target").textContent = email;
@@ -111,7 +124,6 @@ async function doSignup() {
     toast(e.message, "error");
   }
 }
-
 // ─────────────────────────────────────────────────────────────────
 // EMAIL VERIFICATION
 // ─────────────────────────────────────────────────────────────────
