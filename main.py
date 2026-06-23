@@ -13,8 +13,6 @@ from sqlalchemy.orm import Session
 
 load_dotenv()
 
-print(f"DEBUG: DATABASE_URL is: {os.getenv('DATABASE_URL')}")
-
 from database import engine, Base, init_db, get_db, User, Bot, Trade
 from auth import (
     hash_password, verify_password, create_session_token, decode_session_token,
