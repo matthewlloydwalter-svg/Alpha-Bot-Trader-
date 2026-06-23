@@ -4,14 +4,15 @@
     box-sizing: border-box;
 }
 
+{
     font-family: system-ui, -apple-system, sans-serif;
     background: #0d0f14;
     color: #e8eaf0;
-    /* 0 top, 2rem side/bottom padding */
     padding: 0 2rem 2rem 2rem;
     min-height: 100vh;
 }
 
+/* 3. Password Error */
 #password-error {
     color: var(--red);
     font-size: 12px;
@@ -19,7 +20,7 @@
     display: none; 
 }
 
-/* 4. Admin Dashboard Specifics (The only added styles) */
+/* 4. Admin Dashboard Styles */
 #stats-content {
     background: #1a1d24;
     padding: 15px;
@@ -35,8 +36,6 @@
 }
 
 #users-list li {
-    padding: 10px;
-    border-bottom: 1px solid #333;
     padding: 10px;
     border-bottom: 1px solid #333;
 }
