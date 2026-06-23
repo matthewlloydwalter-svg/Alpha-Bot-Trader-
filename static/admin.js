@@ -1,9 +1,4 @@
 JavaScript
-/**
- * admin.js
- * Handles fetching admin-only data from the FastAPI backend
- * and updating the admin dashboard UI.
- */
 
 async function loadAdminData() {
     try {
