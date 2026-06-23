@@ -3,11 +3,45 @@ body {
   background: #0d0f14;
   color: #e8eaf0;
   padding: 2rem;
+  display: flex;
+  justify-content: center;
 }
+
+/* Ensure the form has structure */
+#signup-form {
+  width: 100%;
+  max-width: 400px;
+}
+
+/* Style for all input fields */
+input {
+  display: block;
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 12px;
+  background: #1a1d24;
+  border: 1px solid #333;
+  color: #e8eaf0;
+  border-radius: 6px;
+  box-sizing: border-box; /* Ensures padding doesn't break width */
+}
+
+/* Error message styling */
 #password-error {
-    color: var(--red);
-    font-size: 12px;
-    margin-bottom: 8px;
-    /* This makes sure it doesn't show up as an empty gap if there's no error */
-    display: none; 
+  color: var(--red);
+  font-size: 12px;
+  margin-bottom: 8px;
+  display: none; 
+}
+
+/* Optional: Make the button look nice */
+button {
+  width: 100%;
+  padding: 12px;
+  background: #4a90e2;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
 }
