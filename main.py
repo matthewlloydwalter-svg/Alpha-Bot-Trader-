@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 load_dotenv()
 
-from database import init_db, get_db, User, Bot, Trade
+from database import engine, Base, init_db, get_db, User, Bot, Trade
 from auth import (
     hash_password, verify_password, create_session_token, decode_session_token,
     generate_verification_code, send_email, is_user_admin, ADMIN_EMAILS, PLATFORM_NAME
