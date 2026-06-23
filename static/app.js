@@ -1,11 +1,3 @@
-/**
- * app.js — production frontend logic for AlphaBot.
- *
- * Every action calls the FastAPI backend at /auth/*, /bots/*, etc.
- * No demo data. No fake timers. No direct calls to api.anthropic.com.
- * The backend holds all secrets and does all AI + broker communication.
- */
-
 // ─────────────────────────────────────────────────────────────────
 // STATE — single source of truth, populated from the server
 // ─────────────────────────────────────────────────────────────────
