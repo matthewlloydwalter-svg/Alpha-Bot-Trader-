@@ -34,8 +34,6 @@ from bot_engine import run_bot_cycle
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("alphabot")
 
-ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
-PLATFORM_NAME = os.getenv("PLATFORM_NAME", "AlphaBot")
 
 # ──────────────────────────────────────────────────────────────────
 # App setup
