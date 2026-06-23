@@ -23,12 +23,17 @@ class BrokerError(Exception):
 
 # ── ALPACA ───────────────────────────────────────────────────────
 def get_alpaca_client(api_key: str, secret_key: str, paper: bool) -> TradingClient:
+    # Instead of crashing, we return None if keys are missing
     if not api_key or not secret_key:
-        raise BrokerError("Alpaca API key/secret not set for this user.")
+        return None 
     return TradingClient(api_key=api_key, secret_key=secret_key, paper=paper)
 
 
 def alpaca_account_info(client: TradingClient) -> dict:
+    # If the client is None (no keys), we handle it gracefully
+    if client is None:
+        return {"error": "API keys not set"}
+        
     try:
         a = client.get_account()
         return {
