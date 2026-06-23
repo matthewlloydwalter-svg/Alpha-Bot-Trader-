@@ -430,6 +430,11 @@ def record_withdrawal(body: CashBody, user: User = Depends(get_current_user), db
 # ──────────────────────────────────────────────────────────────────
 # ADMIN ROUTES
 # ──────────────────────────────────────────────────────────────────
+@app.get("/admin")
+def serve_admin_page(request: Request, current_user: User = Depends(get_current_admin)):
+    # This route renders the actual admin.html file
+    return templates.TemplateResponse("admin.html", {"request": request, "PLATFORM_NAME": "YOUR_PLATFORM_NAME"})
+
 @app.get("/admin/users")
 def admin_list_users(admin: User = Depends(get_current_admin), db: Session = Depends(get_db)):
     users = db.query(User).order_by(User.created_at).all()
