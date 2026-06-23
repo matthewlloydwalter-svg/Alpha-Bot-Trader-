@@ -4,45 +4,22 @@
     box-sizing: border-box;
 }
 
-/* 2. Body - Set up the foundation */
-body {
-    background-color: #0f111a;
-    color: #ffffff;
-    font-family: sans-serif;
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #0d0f14;
+    color: #e8eaf0;
+    /* 0 top, 2rem side/bottom padding */
+    padding: 0 2rem 2rem 2rem;
     min-height: 100vh;
-    display: flex;
-    flex-direction: column; /* Force vertical stacking */
 }
 
-/* 3. Navigation Bar */
-.nav {
-    display: flex;
-    background-color: #1a1d24;
-    padding: 10px;
-    gap: 10px;
-    width: 100%;
+#password-error {
+    color: var(--red);
+    font-size: 12px;
+    margin-bottom: 8px;
+    display: none; 
 }
 
-.nav-tab {
-    padding: 8px 16px;
-    background: #252a33;
-    color: #ffffff;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-}
-
-.nav-tab.active {
-    background: #3b82f6;
-}
-
-/* 4. Main Page Content */
-.page {
-    flex: 1; /* Pushes the footer/content to fill remaining space */
-    padding: 20px;
-}
-
-/* 5. Admin Page Specific Styles */
+/* 4. Admin Dashboard Specifics (The only added styles) */
 #stats-content {
     background: #1a1d24;
     padding: 15px;
@@ -60,34 +37,6 @@ body {
 #users-list li {
     padding: 10px;
     border-bottom: 1px solid #333;
-}button {
-  width: 100%;
-  padding: 12px;
-  background: #4a90e2;
-  color: white;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-weight: 600;
-}
-
-/* --- Admin Page Specific Styles --- */
-
-#stats-content {
-    background: #1a1d24;
-    padding: 15px;
-    border-radius: 6px;
-    margin-bottom: 20px;
-    color: #a0a0a0;
-    font-family: monospace; /* Makes stats data look like code */
-}
-
-#users-list {
-    list-style-type: none; /* Removes the bullet points */
-    padding: 0;
-}
-
-#users-list li {
     padding: 10px;
     border-bottom: 1px solid #333;
 }
