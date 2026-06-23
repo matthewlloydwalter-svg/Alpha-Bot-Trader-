@@ -1,11 +1,3 @@
-"""
-auth.py — password hashing, session tokens, and email sending.
-
-Kept separate from main.py so main.py stays readable as the "routes"
-file. Nothing in here is exotic; it's the same handful of patterns
-every small FastAPI app with login uses.
-"""
-
 import os
 import random
 import smtplib
@@ -15,9 +7,33 @@ from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from jose import jwt, JWTError
+from config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
+
+logger = logging.getLogger("AlphaBot Trading")
 
 PLATFORM_NAME = os.getenv("PLATFORM_NAME", "AlphaBot Trading")
 ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
+
+def send_verification_email(to_email: str, code: str) -> bool:
+    if not SMTP_USER or not SMTP_PASSWORD:
+        logger.error("SMTP credentials missing.")
+        return False
+        
+    msg = MIMEMultipart()
+    msg["From"] = SMTP_USER
+    msg["To"] = to_email
+    msg["Subject"] = "Your Verification Code"
+    msg.attach(MIMEText(f"Your code is: {code}", "plain"))
+    
+    try:
+        with smtplib.SMTP(SMTP_HOST, int(SMTP_PORT)) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(SMTP_USER, to_email, msg.as_string())
+        return True
+    except Exception as e:
+        logger.error(f"Email send failed: {e}")
+        return False
 
 def is_user_admin(email: str) -> bool:
     return email.strip().lower() in ADMIN_EMAILS
