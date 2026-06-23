@@ -72,3 +72,24 @@ button {
   cursor: pointer;
   font-weight: 600;
 }
+
+/* --- Admin Page Specific Styles --- */
+
+#stats-content {
+    background: #1a1d24;
+    padding: 15px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+    color: #a0a0a0;
+    font-family: monospace; /* Makes stats data look like code */
+}
+
+#users-list {
+    list-style-type: none; /* Removes the bullet points */
+    padding: 0;
+}
+
+#users-list li {
+    padding: 10px;
+    border-bottom: 1px solid #333;
+}
