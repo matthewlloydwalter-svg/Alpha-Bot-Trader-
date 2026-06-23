@@ -17,8 +17,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI
-from auth import is_user_admin, PLATFORM_NAME
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
@@ -28,7 +26,7 @@ load_dotenv()
 from database import init_db, get_db, User, Bot, Trade
 from auth import (
     hash_password, verify_password, create_session_token, decode_session_token,
-    generate_verification_code, send_email,
+    generate_verification_code, send_email, is_user_admin, PLATFORM_NAME
 )
 from brokers import get_account_info, BrokerError
 from bot_engine import run_bot_cycle
