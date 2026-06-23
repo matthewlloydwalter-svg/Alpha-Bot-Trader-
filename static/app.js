@@ -1,5 +1,5 @@
 /**
- * v9-app.js — production frontend logic for AlphaBot.
+ * app.js — production frontend logic for AlphaBot.
  *
  * Every action calls the FastAPI backend at /auth/*, /bots/*, etc.
  * No demo data. No fake timers. No direct calls to api.anthropic.com.
