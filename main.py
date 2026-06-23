@@ -12,7 +12,6 @@ import os
 import logging
 from datetime import datetime
 from typing import Optional, Literal
-
 from fastapi import FastAPI, Depends, HTTPException, Request, Cookie, Form, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
