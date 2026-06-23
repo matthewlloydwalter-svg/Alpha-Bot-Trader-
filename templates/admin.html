@@ -16,11 +16,16 @@
 
   <main class="page">
     <h1>{{ PLATFORM_NAME }} Admin</h1>
-    <p>
-      Placeholder admin page. Wire this up to call GET /admin/users and
-      GET /admin/stats (both require the logged-in user to be an admin —
-      see ADMIN_EMAILS in your .env).
-    </p>
+    
+      <div id="stats-content">
+    <p>Loading system statistics...</p>
+  </div>
+
+  <hr>
+   
+    <h3>Registered Users</h3>
+  <ul id="users-list">
+  </ul>
   </main>
 
   <script src="/static/admin.js"></script>
