@@ -1,13 +1,3 @@
-"""
-main.py — the unified FastAPI backend.
-
-Run locally:
-    uvicorn main:app --reload --port 8000
-
-On Railway, the Procfile already points at this file (see README for
-the exact Procfile line and required project layout).
-"""
-
 import os
 import logging
 from datetime import datetime
