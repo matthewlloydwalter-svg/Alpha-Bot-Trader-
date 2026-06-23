@@ -21,6 +21,29 @@ ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split("
 
 def is_user_admin(email: str) -> bool:
     return email.strip().lower() in ADMIN_EMAILS
+    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", 587))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+
+    if not smtp_user or not smtp_password:
+        logging.error("SMTP credentials missing. Cannot send email.")
+        return
+
+    msg = MIMEMultipart()
+    msg["From"] = smtp_user
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "html"))
+
+    try:
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()  # Secure the connection
+            server.login(smtp_user, smtp_password)
+            server.sendmail(smtp_user, to_email, msg.as_string())
+            logging.info(f"Email sent successfully to {to_email}")
+    except Exception as e:
+        logging.error(f"Failed to send email: {e}")
 
 logger = logging.getLogger("AlphaBot Trading")
 
