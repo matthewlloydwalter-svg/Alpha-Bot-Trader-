@@ -40,8 +40,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Use absolute paths derived from this file's location so Railway
-# finds static/ and templates/ regardless of working directory.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
@@ -470,11 +468,7 @@ class PlatformEmailBody(BaseModel):
 
 @app.post("/admin/platform-email")
 def set_platform_email(body: PlatformEmailBody, admin: User = Depends(get_current_admin)):
-    # This updates the *display* of which address is configured to send.
-    # The actual sending address is controlled by SMTP_USERNAME in your
-    # environment variables — change that on Railway's dashboard and
-    # redeploy if you want to change who mail is actually sent from.
-    return {
+  return {
         "success": True,
         "note": (
             "Recorded. To make this the address that ACTUALLY sends mail, "
