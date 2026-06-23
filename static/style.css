@@ -1,26 +1,45 @@
-* {
+*{
     margin: 0;
     padding: 0;
     box-sizing: border-box;
 }
 
-{
+/* Body styling */
+body {
     font-family: system-ui, -apple-system, sans-serif;
     background: #0d0f14;
     color: #e8eaf0;
-    padding: 0 2rem 2rem 2rem;
     min-height: 100vh;
 }
 
-/* 3. Password Error */
-#password-error {
-    color: var(--red);
-    font-size: 12px;
-    margin-bottom: 8px;
-    display: none; 
+/* Navigation */
+.nav {
+    display: flex;
+    gap: 10px;
+    padding: 1rem 2rem;
+    background: #1a1d24;
+    border-bottom: 1px solid #333;
 }
 
-/* 4. Admin Dashboard Styles */
+.nav-tab {
+    padding: 8px 16px;
+    background: transparent;
+    color: #a0a0a0;
+    border: none;
+    cursor: pointer;
+}
+
+.nav-tab.active {
+    color: #fff;
+    border-bottom: 2px solid #fff;
+}
+
+/* Page content - Applies your padding only to the main section */
+.page {
+    padding: 2rem;
+}
+
+/* Dashboard Specifics */
 #stats-content {
     background: #1a1d24;
     padding: 15px;
