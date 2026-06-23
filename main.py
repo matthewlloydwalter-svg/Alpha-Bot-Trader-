@@ -26,7 +26,7 @@ load_dotenv()
 from database import init_db, get_db, User, Bot, Trade
 from auth import (
     hash_password, verify_password, create_session_token, decode_session_token,
-    generate_verification_code, send_email, is_user_admin, PLATFORM_NAME
+    generate_verification_code, send_email, is_user_admin, ADMIN_EMAILS, PLATFORM_NAME, hash_password
 )
 from brokers import get_account_info, BrokerError
 from bot_engine import run_bot_cycle
