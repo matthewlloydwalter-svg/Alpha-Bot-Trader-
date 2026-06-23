@@ -1,9 +1,13 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
 body {
   font-family: system-ui, -apple-system, sans-serif;
   background: #0d0f14;
   color: #e8eaf0;
-  padding: 0;
-  margin: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -19,10 +23,20 @@ body {
   border-bottom: 1px solid #333;
 }
 
-/* Ensure the form has structure */
-#signup-form {
-  width: 100%;
-  max-width: 400px;
+/* OVERRIDE the global button style for nav tabs */
+.nav-tab {
+  width: auto; /* Buttons will only be as wide as the text */
+  padding: 8px 16px;
+  background: transparent;
+  color: #e8eaf0;
+  font-weight: 400;
+  border: none;
+  cursor: pointer;
+}
+
+.nav-tab.active {
+  border-bottom: 2px solid #4a90e2;
+  color: #4a90e2;
 }
 
 .page {
@@ -31,7 +45,12 @@ body {
   padding: 20px;
 }
 
-/* Style for all input fields */
+#signup-form {
+  width: 100%;
+  max-width: 400px;
+  margin-top: 20px;
+}
+
 input {
   display: block;
   width: 100%;
@@ -41,18 +60,8 @@ input {
   border: 1px solid #333;
   color: #e8eaf0;
   border-radius: 6px;
-  box-sizing: border-box; /* Ensures padding doesn't break width */
 }
 
-/* Error message styling */
-#password-error {
-  color: var(--red);
-  font-size: 12px;
-  margin-bottom: 8px;
-  display: none; 
-}
-
-/* Optional: Make the button look nice */
 button {
   width: 100%;
   padding: 12px;
