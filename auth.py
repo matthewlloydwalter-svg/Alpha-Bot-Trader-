@@ -16,7 +16,13 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from jose import jwt, JWTError
 
-logger = logging.getLogger("alphabot")
+PLATFORM_NAME = os.getenv("PLATFORM_NAME", "AlphaBot Trading")
+ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
+
+def is_user_admin(email: str) -> bool:
+    return email.strip().lower() in ADMIN_EMAILS
+
+logger = logging.getLogger("AlphaBot Trading")
 
 # ── password hashing (Direct bcrypt) ────────────────────────────
 def hash_password(password: str) -> str:
