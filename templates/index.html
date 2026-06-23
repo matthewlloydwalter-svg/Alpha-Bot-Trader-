@@ -150,7 +150,6 @@ label.field{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(
           <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px">
             <label class="field">Email<input type="email" id="su-email" placeholder="you@example.com"></label>
             <label class="field">Password<input type="password" id="su-pass" placeholder="Choose a strong password"></label>
-            <label class="field">Confirm Password<input type="password" id="su-pass-confirm" placeholder="Confirm Password"></label>
           </div>
           <label style="display:flex;align-items:flex-start;gap:8px;font-size:11px;color:var(--t2);margin-bottom:14px;cursor:pointer;line-height:1.5">
             <input type="checkbox" id="su-tos" style="width:auto;margin-top:2px;accent-color:var(--blue)">
@@ -621,37 +620,22 @@ async function doLogin() {
 async function doSignup() {
   const email = document.getElementById("su-email").value.trim();
   const password = document.getElementById("su-pass").value;
-  // Capture the value from the new input field
-  const confirm = document.getElementById("su-pass-confirm").value; 
   const agreed = document.getElementById("su-tos").checked;
-
-  // Added 'confirm' to the check below
-  if (!email || !password || !confirm) return toast("Fill in all fields", "error");
-  
-  // Validation: Check if passwords match
-  if (password !== confirm) return toast("Passwords do not match", "error");
-
+  if (!email || !password) return toast("Fill in all fields", "error");
   if (!agreed) return toast("You must agree to the Terms of Service to sign up", "error");
-
   try {
     await api("/auth/signup", {
       method: "POST",
-      body: JSON.stringify({ 
-        email, 
-        password, 
-        confirm_password: confirm, // Pass the confirmation to your backend
-        agreed_to_tos: true 
-      }),
+      body: JSON.stringify({ email, password, agreed_to_tos: true }),
     });
-    
-    // Success flow
+    // Signup succeeded — backend sent a verification email.
     document.getElementById("auth-screen").classList.add("hidden");
     document.getElementById("verify-screen").classList.remove("hidden");
     document.getElementById("verify-email-target").textContent = email;
     toast("Account created — check your email for a verification code", "success");
   } catch (e) {
     toast(e.message, "error");
-    }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────
