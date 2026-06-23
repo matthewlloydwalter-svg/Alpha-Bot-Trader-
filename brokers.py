@@ -23,7 +23,6 @@ class BrokerError(Exception):
 
 # ── ALPACA ───────────────────────────────────────────────────────
 def get_alpaca_client(api_key: str, secret_key: str, paper: bool) -> TradingClient:
-    # Instead of crashing, we return None if keys are missing
     if not api_key or not secret_key:
         return None 
     return TradingClient(api_key=api_key, secret_key=secret_key, paper=paper)
@@ -83,7 +82,7 @@ def alpaca_place_order(client: TradingClient, symbol: str, side: str, qty: float
 # ── OKX (via ccxt) ───────────────────────────────────────────────
 def get_okx_client(api_key: str, secret_key: str, passphrase: str, paper: bool) -> ccxt.okx:
     if not api_key or not secret_key or not passphrase:
-        raise BrokerError("OKX API key/secret/passphrase not set for this user.")
+        return None
     exchange = ccxt.okx({
         "apiKey": api_key,
         "secret": secret_key,
