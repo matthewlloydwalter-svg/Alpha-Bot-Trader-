@@ -27,6 +27,7 @@
             </label>
             <label class="field">Password
               <input type="password" id="login-password" required placeholder="••••••••">
+            <img src="hide-password.jpeg" id="robot-login" onclick="togglePassword('login-password', 'robot-login')">
             </label>
             <button type="submit" class="btn btn-primary" style="width:100%;margin-top:6px">Sign In</button>
           </div>
@@ -44,9 +45,11 @@
             </label>
             <label class="field">Password
               <input type="password" id="reg-password" required placeholder="Minimum 6 characters">
+              <img src="hide-password.jpeg" id="robot-reg" onclick="togglePassword('reg-password', 'robot-reg')">
             </label>
             <label class="field">Confirm Password
               <input type="password" id="reg-confirm" required placeholder="Confirm password">
+              <img src="hide-password.jpeg" id="robot-reg-confirm" onclick="togglePassword('reg-confirm', 'robot-reg-confirm')">
             </label>
             <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--t2);cursor:pointer;line-height:1.6">
               <input type="checkbox" id="reg-tos" style="width:auto;margin-top:3px;accent-color:var(--blue);flex-shrink:0" required>
