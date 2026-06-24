@@ -11,6 +11,26 @@ from config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
 
 logger = logging.getLogger("AlphaBot Trading")
 
+from fastapi import Depends, HTTPException, Request
+from sqlalchemy.orm import Session
+from database import User, get_db
+
+def get_current_user(request: Request, db: Session = Depends(get_db)):
+    token = request.cookies.get("session_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    payload = decode_session_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
+    # We use .get("sub") because that's the key we used in create_session_token
+    user_id = int(payload.get("sub"))
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
 PLATFORM_NAME = os.getenv("PLATFORM_NAME", "AlphaBot Trading")
 ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
 
