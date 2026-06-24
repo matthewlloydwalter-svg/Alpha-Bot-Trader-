@@ -235,3 +235,27 @@ label.field{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(
   .grid2,.grid3{grid-template-columns:1fr}
   .nav-tab{padding:0 10px;font-size:12px}
 }
+
+/* 1. Tell the label to be the anchor point for the robot */
+.field {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+/* 2. Put a "bumper" inside the password inputs so text never overlaps */
+#login-password, #reg-password, #reg-confirm {
+    padding-right: 42px !important; /* Forces the text to stop before hitting the robot */
+}
+
+/* 3. Position the robots perfectly on the right side, inside the box */
+#robot-login, #robot-reg, #robot-reg-confirm {
+    position: absolute;
+    right: 12px;         /* Anchors it to the right edge */
+    bottom: 10px;        /* Pushes it down into the input box area */
+    width: 26px;
+    height: 26px;
+    object-fit: contain;
+    cursor: pointer;
+    z-index: 10;         /* Makes sure the robot sits on top of the input box */
+}
