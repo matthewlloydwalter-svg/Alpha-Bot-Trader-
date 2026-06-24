@@ -87,18 +87,4 @@ def get_db():
     try:
         yield db
     finally:
-        db.close()    broker_order_id = Column(String, nullable=True)
-    status = Column(String, default="submitted")
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    owner = relationship("User", back_populates="trades")
-
-def init_db():
-    Base.metadata.create_all(bind=engine)
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
         db.close()
