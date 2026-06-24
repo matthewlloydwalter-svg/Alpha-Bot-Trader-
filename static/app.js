@@ -414,10 +414,9 @@ function togglePassword(inputId, robotId) {
 
     // 3. Perform the toggle
     if (passwordInput.type === 'password') {
-        passwordInput.type = 'text';
-        robotIcon.src = '../assets/show-password.jpeg'; 
-    } else {
-        passwordInput.type = 'password';
-        robotIcon.src = '../assests/ hide-password.jpeg'; 
-    
+    passwordInput.type = 'text';
+    robotIcon.src = 'show-password.jpeg'; // Just the name!
+} else {
+    passwordInput.type = 'password';
+    robotIcon.src = 'hide-password.jpeg'; // Just the name!
 }
