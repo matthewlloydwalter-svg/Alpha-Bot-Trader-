@@ -3,10 +3,23 @@
 <head>
   <meta charset="UTF-8">
   <title>{{ PLATFORM_NAME }} — Admin</title>
-  
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+
+  <div id="toast-container" class="toast-wrap"></div>
+
+  <div class="topbar">
+    <div class="topbar-left">
+      <span style="font-size:20px">🛡️</span>
+      <span class="logo-text">{{ PLATFORM_NAME }} Controls</span>
+      <span class="badge badge-purple">Admin Mode</span>
+    </div>
+    <div>
+      <button class="btn btn-sm btn-ghost" onclick="window.location.href='/'">Return to Dashboard</button>
+    </div>
+  </div>
+
   <nav class="nav">
     <button class="nav-tab" onclick="window.location.href='/'">💼 Portfolio</button>
     <button class="nav-tab" onclick="window.location.href='/'">🤖 Bots</button>
@@ -15,17 +28,19 @@
   </nav>
 
   <main class="page">
-    <h1>{{ PLATFORM_NAME }} Admin</h1>
-    
+    <div class="card">
+      <div class="slbl">System Metrics Summary</div>
       <div id="stats-content">
-    <p>Loading system statistics...</p>
-  </div>
-
-  <hr>
+        <p style="color:var(--t2)">Querying secure system state telemetry...</p>
+      </div>
+    </div>
    
-    <h3>Registered Users</h3>
-  <div id="users-list">
-  </ul>
+    <div class="card">
+      <div class="slbl">Registered User Ledger</div>
+      <div id="users-list">
+        <p style="color:var(--t2)">Querying database records...</p>
+      </div>
+    </div>
   </main>
 
   <script src="/static/admin.js"></script>
