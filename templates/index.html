@@ -16,7 +16,7 @@
       <div style="text-align:center;margin-bottom:2rem">
         <div style="font-size:48px;margin-bottom:12px">📈</div>
         <div style="font-size:24px;font-weight:700;letter-spacing:-.5px">{{ PLATFORM_NAME }}</div>
-        <div style="font-size:13px;color:var(--t2);margin-top:4px">Algorithmic Trading Dashboard</div>
+        <div style="font-size:13px;color:var(--t2);margin-top:4px">AI-powered autonomous trading</div>
       </div>
       
       <div class="card" id="login-card">
@@ -36,7 +36,7 @@
         </div>
       </div>
 
-      <div class="card id=register-card hidden">
+      <div class="card hidden" id="register-card">
         <form onsubmit="handleRegister(event)">
           <div style="display:flex;flex-direction:column;gap:14px">
             <label class="field">Email Address
@@ -44,6 +44,13 @@
             </label>
             <label class="field">Password
               <input type="password" id="reg-password" required placeholder="Minimum 6 characters">
+            </label>
+            <label class="field">Confirm Password
+              <input type="password" id="reg-confirm" required placeholder="Confirm password">
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--t2);cursor:pointer;line-height:1.6">
+              <input type="checkbox" id="reg-tos" style="width:auto;margin-top:3px;accent-color:var(--blue);flex-shrink:0" required>
+              <span>I agree to the <a href="#" onclick="openTosModal(event)" style="color:var(--blue)">Terms of Service</a>.</span>
             </label>
             <button type="submit" class="btn btn-primary" style="width:100%;margin-top:6px">Create Account</button>
           </div>
@@ -61,10 +68,12 @@
     <div class="topbar-left">
       <span style="font-size:20px">🤖</span>
       <span class="logo-text">{{ PLATFORM_NAME }}</span>
-      <span id="user-badge" class="badge badge-blue">Paper Account</span>
+      <span id="mode-badge" class="badge badge-green">● Paper</span>
+      <span id="broker-badge" class="badge badge-blue">Alpaca</span>
+      <span class="badge badge-purple hidden" id="admin-topbar-badge">★ Admin</span>
     </div>
-    <div>
-      <span id="user-email-display" style="color:var(--t2);margin-right:12px;font-size:12px"></span>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span id="user-email-display" style="color:var(--t2);font-size:12px"></span>
       <button class="btn btn-sm btn-ghost" onclick="handleLogoutClick()">Sign Out</button>
     </div>
   </div>
@@ -74,6 +83,8 @@
     <button class="nav-tab" data-tab="bots">🤖 Bots</button>
     <button class="nav-tab" data-tab="stocks">📈 Stocks</button>
     <button class="nav-tab" data-tab="history">📜 History</button>
+    <button class="nav-tab" data-tab="news">📰 News</button>
+    <div class="nav-spacer"></div>
     <button class="nav-tab" data-tab="account">👤 Account</button>
     <button id="admin-nav-btn" class="nav-tab hidden" onclick="window.location.href='/admin'">🛡️ Admin</button>
   </nav>
@@ -81,31 +92,38 @@
   <main class="page">
     <div id="view-portfolio" class="tab-view">
       <div class="grid3" style="margin-bottom:16px">
-        <div class="card">
-          <div class="slbl">Net Equity</div>
-          <div id="port-equity" class="stat-value">$0.00</div>
-        </div>
-        <div class="card">
-          <div class="slbl">Buying Power</div>
-          <div id="port-buying-power" class="stat-value">$0.00</div>
-        </div>
-        <div class="card">
-          <div class="slbl">Cash Balance</div>
-          <div id="port-cash" class="stat-value">$0.00</div>
+        <div class="stat-card"><div class="slbl">Total deposited</div><div class="stat-value pup" id="pf-deposited">$0.00</div></div>
+        <div class="stat-card"><div class="slbl">Total withdrawn</div><div class="stat-value" id="pf-withdrawn">$0.00</div></div>
+        <div class="stat-card"><div class="slbl">Net position</div><div class="stat-value" id="pf-net">+$0.00</div></div>
+      </div>
+      <div class="card">
+        <div class="slbl">Record cash movement</div>
+        <div class="info-banner">Actual funding happens directly through your broker. Record deposits/withdrawals here to sync your dashboard balance.</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <input type="number" id="dep-amt" placeholder="Deposit amount ($)" min="0.01" step="0.01" style="flex:1;min-width:150px">
+          <button class="btn btn-primary btn-sm" onclick="doDeposit()">⬇ Record deposit</button>
+          <input type="number" id="with-amt" placeholder="Withdrawal amount ($)" min="0.01" step="0.01" style="flex:1;min-width:150px">
+          <button class="btn btn-sm" onclick="doWithdraw()">⬆ Record withdrawal</button>
         </div>
       </div>
       <div class="card">
-        <div class="slbl">Current Broker Context</div>
-        <p style="color:var(--t2);line-height:1.5" id="broker-status-text">Checking API state...</p>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div class="slbl" style="margin-bottom:0">Live broker account</div>
+          <button class="btn btn-sm" onclick="loadBrokerAccount()">🔄 Refresh</button>
+        </div>
+        <div id="broker-account-info" style="font-size:13px;color:var(--t2)">Click Refresh to fetch live balance from your connected broker.</div>
       </div>
     </div>
 
     <div id="view-bots" class="tab-view hidden">
-      <div style="display:flex;justify-content:between;align-items:center;margin-bottom:14px">
-        <div class="slbl" style="margin:0">Active Automated Systems</div>
-        <button class="btn btn-primary btn-sm" onclick="showCreateBotModal()">+ Create New Bot</button>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div>
+          <div style="font-size:18px;font-weight:700">Trading Bots</div>
+          <div style="font-size:12px;color:var(--t2)">RSI + moving average analysis detects dips automatically</div>
+        </div>
+        <button class="btn btn-primary" onclick="showCreateBotModal()">+ New Bot</button>
       </div>
-      <div id="bots-list-container"></div>
+      <div id="bots-list-container" style="display:flex;flex-direction:column;gap:14px"></div>
     </div>
 
     <div id="view-stocks" class="tab-view hidden">
@@ -115,12 +133,7 @@
         <div class="table-wrap">
           <table class="data-table">
             <thead>
-              <tr>
-                <th>Ticker Symbol</th>
-                <th>Asset Class</th>
-                <th>Status</th>
-                <th>Broker Support</th>
-              </tr>
+              <tr><th>Ticker Symbol</th><th>Asset Class</th><th>Status</th><th>Broker Support</th></tr>
             </thead>
             <tbody id="stocks-table-body">
               <tr><td colspan="4" style="color:var(--t2)">Loading active tokens...</td></tr>
@@ -137,14 +150,7 @@
         <div class="table-wrap">
           <table class="data-table">
             <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Ticker</th>
-                <th>Action</th>
-                <th>Quantity</th>
-                <th>Price</th>
-                <th>Environment</th>
-              </tr>
+              <tr><th>Timestamp</th><th>Ticker</th><th>Action</th><th>Quantity</th><th>Price</th><th>Environment</th></tr>
             </thead>
             <tbody id="history-table-body">
               <tr><td colspan="6" style="color:var(--t2)">No trades logged yet.</td></tr>
@@ -154,28 +160,70 @@
       </div>
     </div>
 
+    <div id="view-news" class="tab-view hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-size:18px;font-weight:700">📰 Market News</div>
+          <div style="font-size:12px;color:var(--t2)">Latest headlines from major financial sources</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-sm" id="news-filter-all" onclick="filterNews('all')" style="border-color:var(--blue);color:var(--blue)">All</button>
+          <button class="btn btn-sm" id="news-filter-bullish" onclick="filterNews('bullish')">🟢 Bullish</button>
+          <button class="btn btn-sm" id="news-filter-bearish" onclick="filterNews('bearish')">🔴 Bearish</button>
+          <button class="btn btn-sm" id="news-filter-neutral" onclick="filterNews('neutral')">⚪ Neutral</button>
+          <button class="btn btn-primary btn-sm" onclick="loadNews()" id="news-refresh-btn">🔄 Refresh</button>
+        </div>
+      </div>
+      <div id="news-status" style="text-align:center;padding:40px;color:var(--t2);font-size:13px">
+        <div style="font-size:32px;margin-bottom:10px">📰</div>
+        <div>Click Refresh to load the latest market news</div>
+      </div>
+      <div id="news-list" style="display:flex;flex-direction:column;gap:12px"></div>
+    </div>
+
     <div id="view-account" class="tab-view hidden">
       <div class="card">
-        <div class="slbl">Security Configuration</div>
+        <div class="slbl">Email verification</div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
           <div>
-            <div style="font-weight:600;font-size:14px">Email Verification Status</div>
             <div id="verification-text" style="color:var(--t2);margin-top:2px">Verifying data...</div>
           </div>
-          <button id="verify-email-btn" class="btn btn-primary btn-sm hidden" onclick="triggerEmailVerification()">Verify Email</button>
+          <button id="verify-email-btn" class="btn btn-primary btn-sm hidden" onclick="triggerEmailVerification()">📧 Send Verification Code</button>
         </div>
       </div>
 
       <div class="card">
-        <div class="slbl">Trading Credentials Configuration</div>
-        <form onsubmit="handleSaveKeys(event)" style="display:flex;flex-direction:column;gap:14px">
-          <label class="field">Alpaca API Key
-            <input type="text" id="key-alpaca-key" placeholder="Paste Alpaca Client Key">
-          </label>
-          <label class="field">Alpaca Secret Token
-            <input type="password" id="key-alpaca-secret" placeholder="Paste Alpaca Secret Token">
-          </label>
-          <button type="submit" class="btn btn-primary" style="align-self:flex-start">Save Keys</button>
+        <div class="slbl">Trading mode</div>
+        <div class="mode-toggle" style="max-width:320px;margin-bottom:12px">
+          <button class="mode-btn" id="mode-paper" onclick="setTradingMode('paper')">📄 Paper (simulated)</button>
+          <button class="mode-btn" id="mode-live" onclick="setTradingMode('live')">⚡ Live (real money)</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="slbl">Broker / Exchange</div>
+        <div class="mode-toggle" style="max-width:300px;margin-bottom:12px">
+          <button class="mode-btn" id="broker-alpaca" onclick="setBroker('alpaca')">📈 Alpaca (Stocks)</button>
+          <button class="mode-btn" id="broker-okx" onclick="setBroker('okx')">₿ OKX (Crypto)</button>
+        </div>
+      </div>
+
+      <div class="card" id="alpaca-keys-card">
+        <div class="slbl">Alpaca API Keys</div>
+        <form onsubmit="handleSaveAlpacaKeys(event)" style="display:flex;flex-direction:column;gap:14px;max-width:500px">
+          <label class="field">API Key<input type="text" id="alpaca-key" placeholder="Your Alpaca API key"></label>
+          <label class="field">Secret Key<input type="password" id="alpaca-secret" placeholder="Your Alpaca secret key"></label>
+          <button type="submit" class="btn btn-primary btn-sm" style="align-self:flex-start">💾 Save keys</button>
+        </form>
+      </div>
+      
+      <div class="card hidden" id="okx-keys-card">
+        <div class="slbl">OKX API Keys</div>
+        <form onsubmit="handleSaveOkxKeys(event)" style="display:flex;flex-direction:column;gap:14px;max-width:500px">
+          <label class="field">API Key<input type="text" id="okx-key"></label>
+          <label class="field">Secret Key<input type="password" id="okx-secret"></label>
+          <label class="field">Passphrase<input type="password" id="okx-pass"></label>
+          <button type="submit" class="btn btn-primary btn-sm" style="align-self:flex-start">💾 Save keys</button>
         </form>
       </div>
     </div>
@@ -190,6 +238,34 @@
     <div style="display:flex;justify-content:flex-end;gap:10px">
       <button class="btn" onclick="closeVerificationModal()">Cancel</button>
       <button class="btn btn-primary" id="confirm-verify-btn" onclick="submitVerificationCode()">Confirm Token</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal-bot" class="modal-bg hidden">
+  <div class="modal">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
+      <div>
+        <div style="font-size:16px;font-weight:700">🤖 New Trading Bot</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="hideCreateBotModal()" style="font-size:18px;padding:4px 8px">✕</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:13px">
+      <div class="mode-toggle">
+        <button class="mode-btn active" id="botmode-auto" onclick="setBotMode('auto')">🧠 Fully Autonomous</button>
+        <button class="mode-btn" id="botmode-manual" onclick="setBotMode('manual')">⚙️ Manual Setup</button>
+      </div>
+      <label class="field">Bot name<input type="text" id="b-name" placeholder="e.g. My Dip Hunter"></label>
+      <label class="field">Ticker symbol<input type="text" id="b-ticker" placeholder="e.g. AAPL or BTC" style="text-transform:uppercase"></label>
+      <label class="field">Funds to allocate ($)<input type="number" id="b-funds" placeholder="e.g. 500" min="10" step="1"></label>
+      <div id="manual-limits" class="hidden">
+        <hr class="divider">
+        <div class="grid2" style="margin-bottom:10px">
+          <label class="field">Buy only below ($)<input type="number" id="b-buy"></label>
+          <label class="field">Sell only above ($)<input type="number" id="b-sell"></label>
+        </div>
+      </div>
+      <button class="btn btn-primary" style="margin-top:4px;font-size:14px;padding:10px" onclick="createBot()">🚀 Launch Bot</button>
     </div>
   </div>
 </div>
