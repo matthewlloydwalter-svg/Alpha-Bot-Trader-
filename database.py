@@ -19,6 +19,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=True) # Added Name field
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     is_admin = Column(Boolean, default=False)
@@ -28,6 +29,7 @@ class User(Base):
     
     bots = relationship("Bot", back_populates="owner")
     trades = relationship("Trade", back_populates="owner")
+    logs = relationship("ActivityLog", back_populates="owner") # Added relationship
 
 class Bot(Base):
     __tablename__ = "bots"
@@ -61,6 +63,31 @@ class Trade(Base):
     broker = Column(String, default="alpaca")
     mode = Column(String, default="paper")
     broker_order_id = Column(String, nullable=True)
+    status = Column(String, default="submitted")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    owner = relationship("User", back_populates="trades")
+
+class ActivityLog(Base):
+    __tablename__ = "activity_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    message = Column(String, nullable=False)
+    level = Column(String, default="INFO") 
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    owner = relationship("User", back_populates="logs")
+
+def init_db():
+    Base.metadata.create_all(bind=engine)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()    broker_order_id = Column(String, nullable=True)
     status = Column(String, default="submitted")
     created_at = Column(DateTime, default=datetime.utcnow)
 
