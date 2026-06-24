@@ -400,3 +400,24 @@ function renderNews() {
 (async function boot() {
   try { USER = await api("/auth/me"); await enterApp(); } catch (_) { toggleAuthMode(true); }
 })();
+
+function togglePassword(inputId, robotId) {
+    // 1. Find the elements by their IDs
+    const passwordInput = document.getElementById(inputId);
+    const robotIcon = document.getElementById(robotId);
+
+    // 2. Safety check: If the elements don't exist, stop so it doesn't break the page
+    if (!passwordInput || !robotIcon) {
+        console.error("Oops! Could not find input or robot with these IDs:", inputId, robotId);
+        return;
+    }
+
+    // 3. Perform the toggle
+    if (passwordInput.type === 'password') {
+        passwordInput.type = 'text';
+        robotIcon.src = 'show-password.jpeg'; 
+    } else {
+        passwordInput.type = 'password';
+        robotIcon.src = 'hide-password.jpeg'; 
+    }
+}
