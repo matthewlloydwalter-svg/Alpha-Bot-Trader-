@@ -196,18 +196,13 @@ def admin_users_list(request: Request, db: Session = Depends(get_db)):
     users = db.query(User).all()
     return [{"email": x.email, "is_admin": x.is_admin, "email_verified": x.email_verified} for x in users]
 
-# ════════════════════ BACKEND HISTORICAL TRADES LEDGER ENDPOINT ════════════════════
-@app.get("/broker/trades-ledger")
-def get_trades_ledger(u: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    records = db.query(Trade).filter(Trade.owner_id == u.id).order_by(Trade.created_at.desc()).all()
-    return [
-        {
-            "id": r.id,
-            "ticker": r.ticker,
-            "side": r.side,
-            "qty": r.qty,
-            "price": r.price,
-            "mode": r.mode,
-            "created_at": r.created_at.isoformat()
-        } for r in records
-    ]
+@app.get("/system/logs")
+def get_system_logs(u: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Returns the last 50 operational logs for the logged-in user.
+    """
+    return db.query(ActivityLog)\
+             .filter(ActivityLog.user_id == u.id)\
+             .order_by(ActivityLog.created_at.desc())\
+             .limit(50)\
+             .all()
