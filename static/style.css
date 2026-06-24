@@ -1,3 +1,17 @@
+Yes, please remove the body { display: flex... } code I just gave you. I gave you a bad patch because I realized I made a mistake in my massive code rewrite a few messages ago!
+
+Here is exactly what happened: When I combined and cleaned up your style.css earlier to fix the nav gap, I accidentally deleted a chunk of your utility classes—including .auth-wrap, .stat-card, and .bot-card.
+
+Because .auth-wrap disappeared from your CSS, the login box lost its centering rules and shot up to the top left. If you keep the body { display: flex } rule I just gave you, the login screen will look fine, but your dashboard will be completely broken and jumbled into the center once you log in.
+
+The True Fix
+Remove that body flexbox code from my last message.
+
+Replace your entire style.css with this code below. It contains the nav gap fix, the admin tables, AND I have fully restored all your missing classes (.auth-wrap, .stat-card, .info-banner, etc.).
+
+Once you paste this, your auth screen will be perfectly centered again, and the rest of the app will format correctly!
+
+CSS
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
   --bg0:#0d0f14;--bg1:#13161e;--bg2:#1a1e28;--bg3:#222736;
@@ -15,6 +29,9 @@ body{
   font-size:13px;overflow-x:hidden;min-height:100vh;
 }
 
+/* ════════════════════════════════════════
+   TOPBAR & NAV 
+════════════════════════════════════════ */
 .topbar{
   position:sticky;
   top:0;
@@ -61,6 +78,104 @@ body{
   transition:color .15s, border-color .15s;
 }
 .nav-tab:hover{color:var(--t1)}
+.nav-tab.active{color:var(--t1);border-bottom-color:var(--blue)}
+.nav-spacer{flex:1}
+
+/* ════════════════════════════════════════
+   PAGE LAYOUT
+════════════════════════════════════════ */
+.page{padding:18px 20px;max-width:960px;margin:0 auto}
+
+#main-app{
+  background:
+    radial-gradient(ellipse at 15% 50%,rgba(0,214,143,.04) 0%,transparent 55%),
+    radial-gradient(ellipse at 85% 20%,rgba(77,159,255,.07) 0%,transparent 50%),
+    radial-gradient(ellipse at 50% 80%,rgba(155,89,255,.04) 0%,transparent 50%),
+    linear-gradient(160deg,#0a0d13 0%,#0d0f18 40%,#0a1018 100%);
+  min-height:100vh;
+  position:relative;
+}
+#main-app::before{
+  content:'';position:fixed;inset:0;
+  background-image:
+    linear-gradient(rgba(77,159,255,.025) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(77,159,255,.025) 1px,transparent 1px);
+  background-size:44px 44px;
+  pointer-events:none;z-index:0;
+}
+#main-app>*{position:relative;z-index:1}
+#main-app .topbar, #main-app .nav{z-index:200}
+
+/* ════════════════════════════════════════
+   RESTORED MISSING COMPONENTS (Centered Auth, Cards, etc.)
+════════════════════════════════════════ */
+.auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem;background:radial-gradient(ellipse at 60% 20%,rgba(77,159,255,.06) 0%,transparent 60%)}
+
+.hidden{display:none!important}
+.card{background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:16px}
+.stat-card{background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:16px 18px}
+.stat-value{font-size:24px;font-weight:600;letter-spacing:-.5px;margin-top:4px}
+.bot-card{background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:16px 18px;transition:border-color .2s}
+.bot-card.running{border-color:rgba(0,214,143,.3)}
+.bot-card.paused{border-color:rgba(255,179,71,.2)}
+.user-row{display:flex;align-items:center;padding:11px 0;border-bottom:1px solid var(--border);gap:10px;flex-wrap:wrap}
+.user-row:last-child{border-bottom:none}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 16px;border-radius:7px;border:1px solid var(--border2);background:transparent;color:var(--t1);font-size:13px;cursor:pointer;font-family:inherit;transition:all .15s}
+.btn:hover:not(:disabled){background:var(--bg3)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-primary{background:var(--blue);color:#fff;border-color:var(--blue)}
+.btn-primary:hover:not(:disabled){opacity:.88;background:var(--blue)}
+.btn-sm{padding:5px 11px;font-size:12px}
+.btn-danger{background:var(--rdim);color:var(--red);border-color:rgba(255,77,106,.4)}
+.btn-danger:hover:not(:disabled){background:rgba(255,77,106,.22)}
+.btn-ghost{border-color:transparent;color:var(--t2)}
+
+input,select,textarea{font-family:inherit;font-size:13px;color:var(--t1);background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:8px 11px;width:100%;transition:border .15s}
+input::placeholder,textarea::placeholder{color:var(--t3)}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(77,159,255,.12)}
+select option{background:var(--bg2)}
+label.field{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--t2);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+
+.badge{display:inline-flex;align-items:center;gap:3px;font-size:11px;padding:4px 10px;border-radius:20px;font-weight:600;letter-spacing:.2px}
+.badge-green{background:var(--gdim);color:var(--green)}
+.badge-blue{background:var(--bdim);color:var(--blue)}
+.badge-amber{background:rgba(255,179,71,.15);color:var(--amber)}
+.badge-red{background:var(--rdim);color:var(--red)}
+.badge-purple{background:rgba(155,89,255,.15);color:var(--purple)}
+.ind-pill{display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:20px;background:var(--bg3);color:var(--t2);margin-right:4px}
+
+.info-banner{background:rgba(77,159,255,.07);border:1px solid rgba(77,159,255,.2);border-radius:8px;padding:11px 14px;font-size:12px;color:var(--blue);line-height:1.6;margin-bottom:14px}
+.warn-banner{background:rgba(255,77,106,.07);border:1px solid rgba(255,77,106,.2);border-radius:8px;padding:11px 14px;font-size:12px;color:var(--red);line-height:1.6;margin-bottom:14px}
+
+.pup{color:var(--green)}.pdn{color:var(--red)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.slbl{font-size:10px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.7px;margin-bottom:10px}
+.divider{border:none;border-top:1px solid var(--border);margin:14px 0}
+.log-box{font-family:'SF Mono',Menlo,monospace;font-size:10px;background:var(--bg0);border-radius:6px;padding:9px 11px;max-height:110px;overflow-y:auto;color:var(--t2);line-height:1.7;border:1px solid var(--border)}
+
+/* ════════════════════════════════════════
+   TABLES & MODALS
+════════════════════════════════════════ */
+.table-wrap{width:100%;overflow-x:auto;margin-top:10px}
+.data-table{width:100%;border-collapse:collapse;text-align:left}
+.data-table th{padding:10px;color:var(--t2);font-size:11px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)}
+.data-table td{padding:12px 10px;border-bottom:1px solid var(--border);font-size:13px}
+
+.toast-wrap{position:fixed;top:18px;right:18px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:12px 18px;font-size:13px;max-width:340px;box-shadow:0 8px 24px rgba(0,0,0,.4);animation:slideIn .2s ease;pointer-events:all}
+.toast.error{border-color:var(--red);color:var(--red);background:var(--rdim)}
+.toast.success{border-color:var(--green);color:var(--green);background:var(--gdim)}
+@keyframes slideIn{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}
+
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:500;padding:16px;backdrop-filter:blur(2px)}
+.modal{background:var(--bg1);border-radius:12px;padding:1.5rem;width:100%;max-width:440px;border:1px solid var(--border2);max-height:90vh;overflow-y:auto}
+
+@media(max-width:640px){
+  .grid2,.grid3{grid-template-columns:1fr}
+  .nav-tab{padding:0 10px;font-size:12px}
+}.nav-tab:hover{color:var(--t1)}
 .nav-tab.active{color:var(--t1);border-bottom-color:var(--blue)}
 .nav-spacer{flex:1}
 
