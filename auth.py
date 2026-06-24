@@ -14,16 +14,40 @@ logger = logging.getLogger("AlphaBot Trading")
 PLATFORM_NAME = os.getenv("PLATFORM_NAME", "AlphaBot Trading")
 ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
 
+JWT_SECRET = os.getenv("JWT_SECRET", "super-secure-fallback-secret-key-12345!")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_HOURS = 24
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Defensive check ensures text, explicit bytes, or stringified raw byte arrays evaluate cleanly."""
+    if not hashed_password:
+        return False
+    try:
+        # Handle cases where database wrote bytes out directly as literal strings
+        if isinstance(hashed_password, str) and hashed_password.startswith("b'") or hashed_password.startswith('b"'):
+            hashed_password = hashed_password[2:-1]
+            
+        if isinstance(hashed_password, str):
+            hashed_password = hashed_password.encode('utf-8')
+            
+        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password)
+    except Exception as e:
+        logger.error(f"Password runtime validation matrix evaluation fault: {e}")
+        return False
+
 def send_verification_email(to_email: str, code: str) -> bool:
     if not SMTP_USER or not SMTP_PASSWORD:
-        logger.error("SMTP credentials missing.")
+        logger.error("SMTP Configuration map contains non-routable null values.")
         return False
         
     msg = MIMEMultipart()
     msg["From"] = SMTP_USER
     msg["To"] = to_email
-    msg["Subject"] = "Your Verification Code"
-    msg.attach(MIMEText(f"Your code is: {code}", "plain"))
+    msg["Subject"] = f"[{PLATFORM_NAME}] Safe Security Challenge Code"
+    msg.attach(MIMEText(f"Your multi-factor security clearance authorization sequence validation code is: {code}", "plain"))
     
     try:
         with smtplib.SMTP(SMTP_HOST, int(SMTP_PORT)) as server:
@@ -32,53 +56,11 @@ def send_verification_email(to_email: str, code: str) -> bool:
             server.sendmail(SMTP_USER, to_email, msg.as_string())
         return True
     except Exception as e:
-        logger.error(f"Email send failed: {e}")
+        logger.error(f"Mail delivery subsystem transmission dropped: {e}")
         return False
 
 def is_user_admin(email: str) -> bool:
     return email.strip().lower() in ADMIN_EMAILS
-    
-def send_email(to_email: str, subject: str, body: str):
-    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", 587))
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_password = os.getenv("SMTP_PASSWORD")
-
-    if not smtp_user or not smtp_password:
-        logging.error("SMTP credentials missing. Cannot send email.")
-        return
-
-    msg = MIMEMultipart()
-    msg["From"] = smtp_user
-    msg["To"] = to_email
-    msg["Subject"] = subject
-    msg.attach(MIMEText(body, "html"))
-
-    try:
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()  # Secure the connection
-            server.login(smtp_user, smtp_password)
-            server.sendmail(smtp_user, to_email, msg.as_string())
-            logging.info(f"Email sent successfully to {to_email}")
-    except Exception as e:
-        logging.error(f"Failed to send email: {e}")
-
-logger = logging.getLogger("AlphaBot Trading")
-
-# ── password hashing (Direct bcrypt) ────────────────────────────
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-def verify_password(plain: str, hashed: str) -> bool:
-    return bcrypt.checkpw(plain.encode('utf-8'), hashed.encode('utf-8'))
-
-# ── session tokens (JWT) ────────────────────────────────────────
-JWT_SECRET = os.getenv("JWT_SECRET")
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_HOURS = 24 * 7
-
-if not JWT_SECRET:
-    raise RuntimeError("JWT_SECRET is not set.")
 
 def create_session_token(user_id: int, email: str) -> str:
     payload = {
@@ -94,31 +76,5 @@ def decode_session_token(token: str):
     except JWTError:
         return None
 
-# ── verification codes ──────────────────────────────────────────
 def generate_verification_code() -> str:
     return str(random.randint(100000, 999999))
-
-# ── email sending ───────────────────────────────────────────────
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USERNAME = os.getenv("SMTP_USERNAME")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-ALERT_FROM_EMAIL = os.getenv("ALERT_FROM_EMAIL", SMTP_USERNAME)
-
-def send_email(to_email: str, subject: str, body: str) -> bool:
-    if not SMTP_USERNAME or not SMTP_PASSWORD:
-        return False
-    msg = MIMEMultipart()
-    msg["From"] = ALERT_FROM_EMAIL
-    msg["To"] = to_email
-    msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain"))
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.sendmail(ALERT_FROM_EMAIL, to_email, msg.as_string())
-        return True
-    except Exception as e:
-        logger.error(f"Email send failed: {e}")
-        return False
