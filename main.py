@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 load_dotenv()
 
-from database import engine, Base, init_db, get_db, User, Bot, Trade
+from database import engine, Base, init_db, get_db, User, Bot, Trade, ActivityLog
 from auth import (
     hash_password, verify_password, create_session_token, decode_session_token,
     generate_verification_code, send_verification_email, is_user_admin, PLATFORM_NAME, get_current_user
