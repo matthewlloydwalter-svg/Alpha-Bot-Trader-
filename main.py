@@ -278,6 +278,7 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "name": b.name,
             "ticker": b.ticker,
             "funds_allocated": b.funds_allocated,
+            "is_auto": b.is_auto, # Added to expose the column to the frontend
             "running": b.running,
             "trade_count": b.trade_count,
         }
@@ -348,6 +349,7 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
         name=data.get("name", "Unnamed Bot"),
         ticker=data.get("ticker", "UNKNOWN"),
         funds_allocated=float(data.get("funds_allocated", 0.0)),
+        is_auto=data.get("is_auto", True), # Added is_auto assignment to stop silent drops
         running=False,
         trade_count=0
     )
