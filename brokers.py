@@ -8,6 +8,8 @@ to add more crypto exchanges later without rewriting this file.
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
+
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
@@ -19,6 +21,10 @@ logger = logging.getLogger("alphabot")
 
 class BrokerError(Exception):
     pass
+
+
+# Map a human timeframe ("1h", "15m", "1d") to the args each library needs.
+_OKX_TIMEFRAMES = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "1w"}
 
 
 # ── ALPACA ───────────────────────────────────────────────────────
@@ -132,6 +138,121 @@ def okx_place_order(exchange: ccxt.okx, symbol: str, side: str, qty: float = Non
         }
     except Exception as e:
         raise BrokerError(f"OKX rejected order: {e}")
+
+
+# ── HISTORICAL CANDLE DATA ───────────────────────────────────────
+# Both feeders return a normalized list of dicts:
+#   {"ts": int(epoch_seconds), "open","high","low","close","volume"}
+# so the pattern layer never has to know which exchange it came from.
+
+def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
+                    api_key: str, secret_key: str) -> list[dict]:
+    """
+    Fetch historical stock bars via alpaca-py's market-data client.
+    Works with paper or live keys (data feed = IEX on free plans).
+    """
+    if not api_key or not secret_key:
+        raise BrokerError("Alpaca data requires API keys. Add them in Account → Alpaca API Keys.")
+    try:
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+
+        tf_map = {
+            "1m": TimeFrame(1, TimeFrameUnit.Minute),
+            "5m": TimeFrame(5, TimeFrameUnit.Minute),
+            "15m": TimeFrame(15, TimeFrameUnit.Minute),
+            "30m": TimeFrame(30, TimeFrameUnit.Minute),
+            "1h": TimeFrame(1, TimeFrameUnit.Hour),
+            "1d": TimeFrame(1, TimeFrameUnit.Day),
+        }
+        tf = tf_map.get(timeframe, TimeFrame(1, TimeFrameUnit.Day))
+
+        # Choose a lookback window generous enough to satisfy `limit` bars.
+        per_bar = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "1d": 1440}.get(timeframe, 1440)
+        minutes_back = per_bar * limit * 3 + 1440
+        start = datetime.now(timezone.utc) - timedelta(minutes=minutes_back)
+
+        client = StockHistoricalDataClient(api_key, secret_key)
+        req = StockBarsRequest(symbol_or_symbols=symbol.upper(), timeframe=tf, start=start, limit=limit)
+        bars = client.get_stock_bars(req)
+
+        rows = []
+        data = bars.data.get(symbol.upper(), []) if hasattr(bars, "data") else []
+        for b in data:
+            rows.append({
+                "ts": int(b.timestamp.timestamp()),
+                "open": float(b.open), "high": float(b.high),
+                "low": float(b.low), "close": float(b.close),
+                "volume": float(b.volume or 0),
+            })
+        logger.info("[BARS] Alpaca %s tf=%s -> %d bars", symbol, timeframe, len(rows))
+        return rows[-limit:]
+    except BrokerError:
+        raise
+    except AlpacaAPIError as e:
+        raise BrokerError(f"Alpaca data error: {e}")
+    except Exception as e:
+        raise BrokerError(f"Alpaca data fetch failed: {e}")
+
+
+def get_okx_candles(symbol: str, timeframe: str, limit: int,
+                    api_key: str = None, secret_key: str = None,
+                    passphrase: str = None, paper: bool = True) -> list[dict]:
+    """
+    Fetch OHLCV candles from OKX. Public market data does NOT require keys,
+    so the dashboard works even before a user connects their account.
+    """
+    tf = timeframe if timeframe in _OKX_TIMEFRAMES else "1H".lower()
+    market_symbol = symbol if "/" in symbol else f"{symbol.upper()}/USDT"
+    try:
+        cfg = {"enableRateLimit": True}
+        if api_key and secret_key and passphrase:
+            cfg.update({"apiKey": api_key, "secret": secret_key, "password": passphrase})
+        exchange = ccxt.okx(cfg)
+        if paper and api_key:
+            exchange.set_sandbox_mode(True)
+        raw = exchange.fetch_ohlcv(market_symbol, timeframe=tf, limit=limit)
+        rows = [{
+            "ts": int(r[0] / 1000), "open": float(r[1]), "high": float(r[2]),
+            "low": float(r[3]), "close": float(r[4]), "volume": float(r[5] or 0),
+        } for r in raw]
+        logger.info("[BARS] OKX %s tf=%s -> %d candles", market_symbol, tf, len(rows))
+        return rows[-limit:]
+    except Exception as e:
+        raise BrokerError(f"OKX candle fetch failed for {market_symbol}: {e}")
+
+
+def get_candles(broker: str, symbol: str, timeframe: str = "1h", limit: int = 200,
+                alpaca_key: str = None, alpaca_secret: str = None,
+                okx_key: str = None, okx_secret: str = None, okx_passphrase: str = None,
+                paper: bool = True) -> list[dict]:
+    """Unified candle feeder used by both the dashboard API and the bot engine."""
+    if broker == "alpaca":
+        return get_alpaca_bars(symbol, timeframe, limit, alpaca_key, alpaca_secret)
+    elif broker == "okx":
+        return get_okx_candles(symbol, timeframe, limit, okx_key, okx_secret, okx_passphrase, paper)
+    raise BrokerError(f"Unknown broker: {broker}")
+
+
+def get_spot_price(broker: str, symbol: str,
+                   alpaca_key: str = None, alpaca_secret: str = None,
+                   okx_key: str = None, okx_secret: str = None, okx_passphrase: str = None,
+                   paper: bool = True) -> float:
+    """Best-effort latest traded price for a symbol."""
+    if broker == "okx":
+        market_symbol = symbol if "/" in symbol else f"{symbol.upper()}/USDT"
+        try:
+            exchange = ccxt.okx({"enableRateLimit": True})
+            return float(exchange.fetch_ticker(market_symbol)["last"])
+        except Exception as e:
+            raise BrokerError(f"OKX price fetch failed: {e}")
+    elif broker == "alpaca":
+        bars = get_alpaca_bars(symbol, "1m", 1, alpaca_key, alpaca_secret)
+        if not bars:
+            raise BrokerError("No recent Alpaca price data.")
+        return bars[-1]["close"]
+    raise BrokerError(f"Unknown broker: {broker}")
 
 
 # ── UNIFIED INTERFACE ────────────────────────────────────────────
