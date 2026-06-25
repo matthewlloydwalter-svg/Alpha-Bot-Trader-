@@ -94,6 +94,7 @@ async function enterApp() {
   renderBrokerUI();
   await refreshUserData();
   loadBrokerKeys();
+  loadPortfolioPerformance();  // Portfolio is the default visible tab
 }
 
 function setupTabs() {
@@ -106,11 +107,12 @@ function setupTabs() {
       document.querySelectorAll(".tab-view").forEach(v => v.classList.add("hidden"));
       document.getElementById(`view-${target}`).classList.remove("hidden");
       
-      if (target === "portfolio") renderPortfolio();
+      if (target === "portfolio") loadPortfolioPerformance();
+      if (target === "assets") renderAssets();
       if (target === "bots") loadBots();
       if (target === "stocks") loadStocks();
       if (target === "history") loadTradeHistory();
-      if (target === "account") loadBrokerKeys();
+      if (target === "account") { loadBrokerKeys(); renderOnboarding(); }
       if (target === "news" && ALL_NEWS.length === 0) loadNews();
     };
   });
@@ -119,17 +121,18 @@ function setupTabs() {
 async function refreshUserData() {
   try {
     USER = await api("/auth/me");
-    renderPortfolio();
-    
+    renderAssets();
+
     const vText = document.getElementById("verification-text");
     const vBtn = document.getElementById("verify-email-btn");
     if (USER.email_verified) {
-      vText.textContent = "Verified. Live Production Clearance Permitted.";
+      vText.textContent = "Email verified.";
       vText.style.color = "var(--green)";
       vBtn.classList.add("hidden");
     } else {
-      vText.textContent = "Unverified. Live Trading Locked.";
-      vText.style.color = "var(--amber)";
+      // NOTE: email verification is currently OPTIONAL — live trading is unlocked.
+      vText.textContent = "Email not verified (optional for now — live trading is unlocked).";
+      vText.style.color = "var(--t2)";
       vBtn.classList.remove("hidden");
     }
   } catch (e) { toast("Session sync failed.", "error"); }
@@ -170,6 +173,16 @@ function renderBrokerUI() {
   if (marketsDesc)  marketsDesc.textContent  = b === "okx"
     ? "Live OKX pairs available for automated crypto trading."
     : "Real-time status of equity instruments queried from market endpoints.";
+
+  renderOnboarding();
+}
+
+function renderOnboarding() {
+  const b = (USER && USER.active_broker) || "alpaca";
+  const alp = document.getElementById("onboarding-alpaca");
+  const okx = document.getElementById("onboarding-okx");
+  if (alp) alp.classList.toggle("hidden", b !== "alpaca");
+  if (okx) okx.classList.toggle("hidden", b !== "okx");
 }
 
 async function setBroker(broker) {
@@ -245,16 +258,152 @@ async function submitVerificationCode() {
   } catch (e) { toast(e, "error"); }
 }
 
-/* --- PORTFOLIO --- */
-function renderPortfolio() {
+/* --- ASSETS TAB (manual cash tracking) --- */
+function renderAssets() {
   const dep = USER ? (USER.total_deposited || 0) : 0;
   const wit = USER ? (USER.total_withdrawn || 0) : 0;
   const net = dep - wit;
-  document.getElementById("pf-deposited").textContent = "$" + dep.toFixed(2);
-  document.getElementById("pf-withdrawn").textContent = "$" + wit.toFixed(2);
-  const netEl = document.getElementById("pf-net");
-  netEl.textContent = (net >= 0 ? "+" : "") + "$" + Math.abs(net).toFixed(2);
-  netEl.className = "stat-value " + (net >= 0 ? "pup" : "pdn");
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setTxt("as-deposited", "$" + dep.toFixed(2));
+  setTxt("as-withdrawn", "$" + wit.toFixed(2));
+  const netEl = document.getElementById("as-net");
+  if (netEl) {
+    netEl.textContent = (net >= 0 ? "+" : "") + "$" + Math.abs(net).toFixed(2);
+    netEl.className = "stat-value " + (net >= 0 ? "pup" : "pdn");
+  }
+}
+
+/* --- PORTFOLIO TAB (bot performance graph) --- */
+let PERF_CHART = null, PERF_SERIES = null, PERF_MARKERS_BY_TIME = {};
+
+async function loadPortfolioPerformance() {
+  const msg = document.getElementById("perf-chart-msg");
+  hidePerfTooltip();
+  if (msg) { msg.classList.remove("hidden"); msg.textContent = "Loading performance…"; }
+  let data;
+  try {
+    data = await api("/api/portfolio/performance");
+  } catch (e) {
+    if (msg) { msg.classList.remove("hidden"); msg.textContent = `⚠ ${e.message}`; }
+    return;
+  }
+
+  // Metrics
+  const fa = document.getElementById("pf-funds-allocated");
+  if (fa) fa.textContent = "$" + Number(data.funds_allocated || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const np = document.getElementById("pf-net-position");
+  if (np) {
+    const v = Number(data.net_position || 0);
+    np.textContent = (v >= 0 ? "+" : "-") + "$" + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    np.className = "stat-value " + (v >= 0 ? "pup" : "pdn");
+  }
+
+  renderPerfChart(data);
+}
+
+function renderPerfChart(data) {
+  const msg = document.getElementById("perf-chart-msg");
+  const wrap = document.getElementById("perf-chart");
+  if (typeof LightweightCharts === "undefined") {
+    if (msg) { msg.classList.remove("hidden"); msg.textContent = "Chart library unavailable (offline)."; }
+    return;
+  }
+  const series = data.series || [];
+  if (!series.length) {
+    if (msg) { msg.classList.remove("hidden"); msg.textContent = "No bot trades yet — the performance line will appear once your bots start trading."; }
+    if (PERF_CHART) { try { PERF_CHART.remove(); } catch (_) {} PERF_CHART = null; }
+    return;
+  }
+  if (msg) msg.classList.add("hidden");
+
+  if (PERF_CHART) { try { PERF_CHART.remove(); } catch (_) {} PERF_CHART = null; }
+  PERF_CHART = LightweightCharts.createChart(wrap, {
+    layout: { background: { color: "#0d0f14" }, textColor: "#8b91a8" },
+    grid: { vertLines: { color: "#1a1e28" }, horzLines: { color: "#1a1e28" } },
+    rightPriceScale: { borderColor: "#2a2f3d" },
+    timeScale: { borderColor: "#2a2f3d", timeVisible: true, secondsVisible: false },
+    crosshair: { mode: 0 },
+    localization: {
+      // Force UTC rendering on the time axis + crosshair label.
+      timeFormatter: (t) => new Date(t * 1000).toUTCString().replace(" GMT", " UTC"),
+    },
+    autoSize: true,
+  });
+
+  PERF_SERIES = PERF_CHART.addAreaSeries({
+    lineColor: "#4d9fff", topColor: "rgba(77,159,255,0.25)", bottomColor: "rgba(77,159,255,0.02)",
+    lineWidth: 2, priceLineVisible: false,
+  });
+  PERF_SERIES.setData(series.map(p => ({ time: p.time, value: p.value })));
+
+  // Build markers and a time->markers lookup for click tooltips.
+  PERF_MARKERS_BY_TIME = {};
+  const colorFor = { buy: "#ffb347", sell_profit: "#00d68f", sell_loss: "#ff4d6a" };
+  const lwcMarkers = (data.markers || []).map(m => {
+    (PERF_MARKERS_BY_TIME[m.time] = PERF_MARKERS_BY_TIME[m.time] || []).push(m);
+    return {
+      time: m.time,
+      position: m.type === "buy" ? "belowBar" : "aboveBar",
+      color: colorFor[m.type] || "#8b91a8",
+      shape: "circle",
+      size: 1.4,
+    };
+  });
+  PERF_SERIES.setMarkers(lwcMarkers);
+
+  PERF_CHART.timeScale().fitContent();
+
+  PERF_CHART.subscribeClick((param) => {
+    if (!param || !param.time) { hidePerfTooltip(); return; }
+    const list = PERF_MARKERS_BY_TIME[param.time];
+    if (!list || !list.length) { hidePerfTooltip(); return; }
+    showPerfTooltip(list, param.point);
+  });
+}
+
+function fmtUTC(iso) {
+  if (!iso) return "—";
+  // Render explicitly in UTC.
+  const d = new Date(iso);
+  return d.toUTCString().replace(" GMT", " UTC");
+}
+
+function showPerfTooltip(markers, point) {
+  const tip = document.getElementById("perf-tooltip");
+  if (!tip) return;
+  const labelFor = { buy: "🟠 Bought", sell_profit: "🟢 Sold (profit)", sell_loss: "🔴 Sold (loss)" };
+  tip.innerHTML = markers.map(m => {
+    const rows = [
+      `<div class="pt-row"><span>Bot</span><span>${esc(m.bot_name || "—")}</span></div>`,
+      `<div class="pt-row"><span>Asset</span><span>${esc(m.ticker || "—")}</span></div>`,
+      `<div class="pt-row"><span>Amount</span><span>$${Number(m.amount || 0).toLocaleString()}</span></div>`,
+      `<div class="pt-row"><span>Price</span><span>$${Number(m.price || 0).toLocaleString()}</span></div>`,
+    ];
+    if (m.pnl !== null && m.pnl !== undefined) {
+      const c = m.pnl >= 0 ? "var(--green)" : "var(--red)";
+      rows.push(`<div class="pt-row"><span>P/L</span><span style="color:${c}">${m.pnl >= 0 ? "+" : ""}$${Number(m.pnl).toLocaleString()}</span></div>`);
+    }
+    rows.push(`<div class="pt-row"><span>Time</span><span>${esc(fmtUTC(m.datetime_utc))}</span></div>`);
+    return `<div style="margin-bottom:${markers.length > 1 ? "10px" : "0"}">
+        <div class="pt-title">${labelFor[m.type] || ""}</div>${rows.join("")}
+      </div>`;
+  }).join("");
+  tip.innerHTML = `<span class="pt-close" onclick="hidePerfTooltip()">✕</span>` + tip.innerHTML;
+
+  // Position the tooltip near the click, kept inside the chart wrapper.
+  const wrap = document.getElementById("perf-chart-wrap");
+  tip.classList.remove("hidden");
+  const maxX = wrap.clientWidth - tip.offsetWidth - 8;
+  const maxY = wrap.clientHeight - tip.offsetHeight - 8;
+  let x = (point && point.x ? point.x + 12 : 12);
+  let y = (point && point.y ? point.y + 12 : 12);
+  tip.style.left = Math.max(8, Math.min(x, maxX)) + "px";
+  tip.style.top = Math.max(8, Math.min(y, maxY)) + "px";
+}
+
+function hidePerfTooltip() {
+  const tip = document.getElementById("perf-tooltip");
+  if (tip) tip.classList.add("hidden");
 }
 
 async function doDeposit() {
