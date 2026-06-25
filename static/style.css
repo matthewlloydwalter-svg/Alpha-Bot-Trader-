@@ -299,6 +299,20 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 .mode-btn:hover { background:var(--bg3); color:var(--t1); }
 .mode-btn.active { background:var(--blue); color:#fff; }
 
+/* ══ Portfolio performance graph ══ */
+.perf-chart-wrap { position:relative; height:360px; background:var(--bg0); border:1px solid var(--border); border-radius:10px; overflow:hidden; margin-top:8px; }
+#perf-chart { position:absolute; inset:0; }
+.legend-dot { display:inline-block; width:9px; height:9px; border-radius:50%; vertical-align:middle; margin-right:3px; }
+.perf-tooltip { position:absolute; z-index:20; min-width:180px; max-width:260px; background:var(--bg2); border:1px solid var(--border2); border-radius:8px; padding:10px 12px; font-size:12px; box-shadow:0 8px 24px rgba(0,0,0,.5); pointer-events:auto; }
+.perf-tooltip .pt-title { font-weight:700; margin-bottom:6px; display:flex; align-items:center; gap:6px; }
+.perf-tooltip .pt-row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; color:var(--t2); }
+.perf-tooltip .pt-row span:last-child { color:var(--t1); font-weight:500; }
+.perf-tooltip .pt-close { position:absolute; top:6px; right:8px; cursor:pointer; color:var(--t3); }
+
+/* ══ Exchange onboarding steps ══ */
+.onboarding-steps { margin:6px 0 0 18px; padding:0; color:var(--t2); line-height:1.9; font-size:13px; }
+.onboarding-steps li { margin-bottom:4px; }
+
 /* ══ API key paper/live grid ══ */
 .keys-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
 .keys-col { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }

@@ -97,16 +97,51 @@
     <button class="nav-tab" data-tab="history">📜 History</button>
     <button class="nav-tab" data-tab="news">📰 News</button>
     <div class="nav-spacer"></div>
+    <button class="nav-tab" data-tab="assets">💰 Assets</button>
     <button class="nav-tab" data-tab="account">👤 Account</button>
     <button id="admin-nav-btn" class="nav-tab hidden" onclick="window.location.href='/admin'">🛡️ Admin</button>
   </nav>
 
   <main class="page">
     <div id="view-portfolio" class="tab-view">
+      <div class="grid2" style="margin-bottom:16px">
+        <div class="stat-card">
+          <div class="slbl">Funds allocated to bots</div>
+          <div class="stat-value" id="pf-funds-allocated">$0.00</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:4px">Capital currently deployed in open bot positions</div>
+        </div>
+        <div class="stat-card">
+          <div class="slbl">Net position (bot P/L)</div>
+          <div class="stat-value pup" id="pf-net-position">+$0.00</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:4px">Cumulative realized gains / losses from bot trading</div>
+        </div>
+      </div>
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
+          <div>
+            <div class="slbl" style="margin-bottom:2px">Bot performance</div>
+            <div style="font-size:11px;color:var(--t3)">
+              <span class="legend-dot" style="background:#ffb347"></span> Buy
+              <span class="legend-dot" style="background:#00d68f;margin-left:10px"></span> Profitable sell
+              <span class="legend-dot" style="background:#ff4d6a;margin-left:10px"></span> Losing sell
+              <span style="margin-left:10px">· times shown in UTC · click a dot for details</span>
+            </div>
+          </div>
+          <button class="btn btn-sm" onclick="loadPortfolioPerformance()">🔄 Refresh</button>
+        </div>
+        <div id="perf-chart-wrap" class="perf-chart-wrap">
+          <div id="perf-chart"></div>
+          <div id="perf-chart-msg" class="dash-chart-msg">Loading performance…</div>
+          <div id="perf-tooltip" class="perf-tooltip hidden"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-assets" class="tab-view hidden">
       <div class="grid3" style="margin-bottom:16px">
-        <div class="stat-card"><div class="slbl">Total deposited</div><div class="stat-value pup" id="pf-deposited">$0.00</div></div>
-        <div class="stat-card"><div class="slbl">Total withdrawn</div><div class="stat-value" id="pf-withdrawn">$0.00</div></div>
-        <div class="stat-card"><div class="slbl">Net position</div><div class="stat-value" id="pf-net">+$0.00</div></div>
+        <div class="stat-card"><div class="slbl">Total deposited</div><div class="stat-value pup" id="as-deposited">$0.00</div></div>
+        <div class="stat-card"><div class="slbl">Total withdrawn</div><div class="stat-value" id="as-withdrawn">$0.00</div></div>
+        <div class="stat-card"><div class="slbl">Net position</div><div class="stat-value" id="as-net">+$0.00</div></div>
       </div>
       <div class="card">
         <div class="slbl">Record cash movement</div>
@@ -117,13 +152,6 @@
           <input type="number" id="with-amt" placeholder="Withdrawal amount ($)" min="0.01" step="0.01" style="flex:1;min-width:150px">
           <button class="btn btn-sm" onclick="doWithdraw()">⬆ Record withdrawal</button>
         </div>
-      </div>
-      <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <div class="slbl" style="margin-bottom:0">Live broker account</div>
-          <button class="btn btn-sm" onclick="loadBrokerAccount()">🔄 Refresh</button>
-        </div>
-        <div id="broker-account-info" style="font-size:13px;color:var(--t2)">Click Refresh to fetch live balance from your connected broker.</div>
       </div>
     </div>
 
@@ -213,6 +241,7 @@
           <button class="mode-btn" id="mode-paper" onclick="setTradingMode('paper')">📄 Paper (simulated)</button>
           <button class="mode-btn" id="mode-live" onclick="setTradingMode('live')">⚡ Live (real money)</button>
         </div>
+        <div style="font-size:11px;color:var(--t3)">Live mode is currently unlocked for everyone (email verification not required for now).</div>
       </div>
 
       <div class="card">
@@ -261,6 +290,41 @@
             <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="handleSaveOkxKeys('live')">💾 Save Live Keys</button>
           </div>
         </div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div class="slbl" style="margin-bottom:0">Live broker account</div>
+          <button class="btn btn-sm" onclick="loadBrokerAccount()">🔄 Refresh</button>
+        </div>
+        <div id="broker-account-info" style="font-size:13px;color:var(--t2)">Click Refresh to fetch live balance from your connected broker.</div>
+      </div>
+
+      <div class="card" id="onboarding-card">
+        <div class="slbl">Exchange setup guide</div>
+
+        <div id="onboarding-alpaca">
+          <a href="https://app.alpaca.markets/login" target="_blank" rel="noopener" class="btn btn-primary btn-sm" style="margin-bottom:12px">🔗 Sign in to Alpaca</a>
+          <ol class="onboarding-steps">
+            <li>If you don't have an Alpaca account, click the link above to create one.</li>
+            <li>Log into your Alpaca Dashboard.</li>
+            <li>On the right-hand panel, locate the "API Keys" section.</li>
+            <li>Click "Generate New Keys" to view your Key ID and Secret Key.</li>
+          </ol>
+        </div>
+
+        <div id="onboarding-okx" class="hidden">
+          <a href="https://www.okx.com/account/login" target="_blank" rel="noopener" class="btn btn-primary btn-sm" style="margin-bottom:12px">🔗 Sign in to OKX</a>
+          <ol class="onboarding-steps">
+            <li>If you don't have an OKX account, click the link above to create one.</li>
+            <li>Log into your account and hover over the Profile icon in the top right menu.</li>
+            <li>Click on "API Keys" from the dropdown.</li>
+            <li>Click "Create V5 API Key", choose an API Name, and set a custom Passphrase (keep note of this passphrase!).</li>
+            <li>Set permissions to allow "Read" and "Trade", complete your security verification, and copy your API Key and Secret Key.</li>
+          </ol>
+        </div>
+
+        <div class="info-banner" style="margin-top:14px;margin-bottom:0">and then come back here and enter the keys to start trading.</div>
       </div>
     </div>
   </main>
