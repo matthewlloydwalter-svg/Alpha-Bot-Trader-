@@ -27,7 +27,7 @@
             </label>
             <label class="field">Password
               <input type="password" id="login-password" required placeholder="••••••••">
-              <img src="{{ url_for('static', filename='hide-password.jpeg') }}" id="robot-login" onclick="...">
+              <img src="{{ url_for('static', path='hide-password.jpeg') }}" id="robot-login" onclick="...">
             </label>
             <button type="submit" class="btn btn-primary" style="width:100%;margin-top:6px">Sign In</button>
           </div>
@@ -45,13 +45,13 @@
             </label>
             <label class="field">Password
               <input type="password" id="reg-password" required placeholder="Minimum 6 characters">
-           <img src="{{ url_for('static', filename='hide-password.jpeg') }}" 
+           <img src="{{ url_for('static', path='hide-password.jpeg') }}" 
      id="robot-register" 
      onclick="togglePassword('register-password', 'robot-register')">
             </label>
             <label class="field">Confirm Password
               <input type="password" id="reg-confirm" required placeholder="Confirm password">
-              <img src="{{ url_for('static', filename='hide-password.jpeg') }}" 
+              <img src="{{ url_for('static', path='hide-password.jpeg') }}" 
      id="robot-register" 
      onclick="togglePassword('register-password', 'robot-register')">
             </label>
