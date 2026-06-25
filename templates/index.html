@@ -93,7 +93,7 @@
   <nav class="nav">
     <button class="nav-tab active" data-tab="portfolio">💼 Portfolio</button>
     <button class="nav-tab" data-tab="bots">🤖 Bots</button>
-    <button class="nav-tab" data-tab="stocks">📈 Stocks</button>
+    <button class="nav-tab" id="markets-nav-tab" data-tab="stocks">📊 Markets</button>
     <button class="nav-tab" data-tab="history">📜 History</button>
     <button class="nav-tab" data-tab="news">📰 News</button>
     <div class="nav-spacer"></div>
@@ -140,8 +140,8 @@
 
     <div id="view-stocks" class="tab-view hidden">
       <div class="card">
-        <div class="slbl">Tracked Market Assets</div>
-        <p style="color:var(--t2);margin-bottom:12px">Real-time status of equity instruments queried from market endpoints.</p>
+        <div class="slbl" id="markets-view-label">Tracked Market Assets</div>
+        <p id="markets-view-desc" style="color:var(--t2);margin-bottom:12px">Real-time status of equity instruments queried from market endpoints.</p>
         <div class="table-wrap">
           <table class="data-table">
             <thead>
