@@ -121,7 +121,7 @@ input,select,textarea{font-family:inherit;font-size:13px;color:var(--t1);backgro
 input::placeholder,textarea::placeholder{color:var(--t3)}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(77,159,255,.12)}
 select option{background:var(--bg2)}
-label.field{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--t2);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--t2);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
 
 .badge{display:inline-flex;align-items:center;gap:3px;font-size:11px;padding:4px 10px;border-radius:20px;font-weight:600;letter-spacing:.2px}
 .badge-green{background:var(--gdim);color:var(--green)}
@@ -203,7 +203,7 @@ input,select,textarea{font-family:inherit;font-size:13px;color:var(--t1);backgro
 input::placeholder,textarea::placeholder{color:var(--t3)}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(77,159,255,.12)}
 select option{background:var(--bg2)}
-label.field{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--t2);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--t2);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
 
 .badge{display:inline-flex;align-items:center;gap:3px;font-size:11px;padding:4px 10px;border-radius:20px;font-weight:600;letter-spacing:.2px}
 .badge-green{background:var(--gdim);color:var(--green)}
@@ -254,12 +254,18 @@ label.field{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(
 /* ── Password icon wrapper ── */
 .input-icon-wrap {
     position: relative;
+    display: block;   /* same width as a normal input */
+    line-height: 0;   /* kill any inline ghost space below the input */
 }
 .input-icon-wrap input {
+    display: block;
+    width: 100%;
+    line-height: normal;
     padding-right: 48px !important;
 }
 
-/* Icon sits perfectly centred inside the input box */
+/* Icon is now positioned relative to ONLY the input wrapper,
+   so top:50% lands exactly in the middle of the input box */
 #robot-login,
 #robot-reg,
 #robot-reg-confirm {
@@ -273,4 +279,5 @@ label.field{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(
     cursor: pointer;
     border-radius: 4px;
     z-index: 10;
+    pointer-events: auto;
 }

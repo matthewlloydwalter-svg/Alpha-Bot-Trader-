@@ -401,12 +401,15 @@ function renderNews() {
   try { USER = await api("/auth/me"); await enterApp(); } catch (_) { toggleAuthMode(true); }
 })();
 
-function togglePassword(inputId, robotId) {
+function togglePassword(inputId, robotId, evt) {
+    // Stop the click reaching any parent <label> that might refocus/interfere
+    if (evt) { evt.stopPropagation(); evt.preventDefault(); }
+
     const passwordInput = document.getElementById(inputId);
     const robotIcon = document.getElementById(robotId);
 
     if (!passwordInput || !robotIcon) {
-        console.error("Oops! Could not find input or robot with these IDs:", inputId, robotId);
+        console.error("togglePassword: could not find elements:", inputId, robotId);
         return;
     }
 
