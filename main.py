@@ -20,6 +20,7 @@ from auth import (
     generate_verification_code, send_verification_email, is_user_admin, PLATFORM_NAME, get_current_user
 )
 from brokers import get_account_info, BrokerError
+import bot_engine # Imported bot engine to wire up the run-cycle logic
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("alphabot")
@@ -268,16 +269,6 @@ def get_system_logs(u: User = Depends(get_current_user), db: Session = Depends(g
              .limit(50)\
              .all()
 
-@app.post("/cash/deposit")
-async def deposit_cash(request: Request):
-    data = await request.json()
-    return {"status": "deposit received"}
-
-@app.post("/cash/withdraw")
-async def withdraw_cash(request: Request):
-    data = await request.json()
-    return {"status": "withdrawal processed"}
-
 @app.get("/bots")
 def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     bots = db.query(Bot).filter(Bot.owner_id == u.id).all()
@@ -326,15 +317,77 @@ def get_news():
 
     return []
 
-@app.post("/bots")
-async def create_bot(request: Request):
+@app.post("/cash/deposit")
+async def deposit_cash(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     data = await request.json()
-    return {"status": "bot created"}
+    amount = float(data.get("amount", 0.0))
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Deposit amount must be greater than zero.")
+    
+    u.total_deposited = (u.total_deposited or 0.0) + amount
+    db.commit()
+    return {"status": "deposit received", "new_balance": u.total_deposited}
+
+@app.post("/cash/withdraw")
+async def withdraw_cash(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    data = await request.json()
+    amount = float(data.get("amount", 0.0))
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Withdrawal amount must be greater than zero.")
+        
+    u.total_withdrawn = (u.total_withdrawn or 0.0) + amount
+    db.commit()
+    return {"status": "withdrawal processed", "new_balance": u.total_withdrawn}
+
+@app.post("/bots")
+async def create_bot(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    data = await request.json()
+    
+    new_bot = Bot(
+        owner_id=u.id,
+        name=data.get("name", "Unnamed Bot"),
+        ticker=data.get("ticker", "UNKNOWN"),
+        funds_allocated=float(data.get("funds_allocated", 0.0)),
+        running=False,
+        trade_count=0
+    )
+    
+    db.add(new_bot)
+    db.commit()
+    db.refresh(new_bot)
+    return {"status": "bot created", "bot_id": new_bot.id}
 
 @app.post("/bots/{bot_id}/toggle")
-async def toggle_bot(bot_id: str):
-    return {"status": f"bot {bot_id} toggled"}
+async def toggle_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
+        
+    bot.running = not bot.running
+    db.commit()
+    return {"status": f"bot {bot_id} toggled", "running": bot.running}
 
 @app.delete("/bots/{bot_id}")
-async def delete_bot(bot_id: str):
+async def delete_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
+        
+    db.delete(bot)
+    db.commit()
     return {"status": f"bot {bot_id} deleted"}
+
+@app.post("/bots/{bot_id}/run-cycle")
+async def run_bot_cycle_endpoint(bot_id: int, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
+        
+    try:
+        # Assuming your bot_engine has a function that takes the bot or bot.id
+        result = bot_engine.run_cycle(bot.id) 
+        return {"status": "cycle executed", "details": result}
+    except AttributeError:
+        return {"status": "bot_engine loaded but run_cycle function is missing"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
