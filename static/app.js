@@ -153,6 +153,16 @@ function renderBrokerUI() {
   document.getElementById("broker-okx").classList.toggle("active", b === "okx");
   document.getElementById("alpaca-keys-card").classList.toggle("hidden", b !== "alpaca");
   document.getElementById("okx-keys-card").classList.toggle("hidden", b !== "okx");
+
+  // Rename Markets ↔ Crypto tab and view header based on active broker
+  const marketsTab = document.getElementById("markets-nav-tab");
+  const marketsLabel = document.getElementById("markets-view-label");
+  const marketsDesc  = document.getElementById("markets-view-desc");
+  if (marketsTab) marketsTab.innerHTML = b === "okx" ? "₿ Crypto" : "📊 Markets";
+  if (marketsLabel) marketsLabel.textContent = b === "okx" ? "Tracked Crypto Assets" : "Tracked Market Assets";
+  if (marketsDesc)  marketsDesc.textContent  = b === "okx"
+    ? "Live OKX pairs available for automated crypto trading."
+    : "Real-time status of equity instruments queried from market endpoints.";
 }
 
 async function setBroker(broker) {
@@ -287,7 +297,11 @@ async function createBot() {
 }
 
 async function loadBots() {
-  try { BOTS = await api("/bots"); renderBots(); } catch (e) { toast(e, "error"); }
+  try {
+    const res = await api("/bots");
+    BOTS = Array.isArray(res) ? res : (res.bots || []);
+    renderBots();
+  } catch (e) { toast(e, "error"); }
 }
 
 function renderBots() {
@@ -344,9 +358,58 @@ async function runBotCycle(id) {
 /* --- STOCKS, HISTORY, NEWS --- */
 async function loadStocks() {
   const tbody = document.getElementById("stocks-table-body");
-  const items = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA"];
-  tbody.innerHTML = items.map(sym => `
-    <tr><td style="font-weight:600;color:var(--blue)">${sym}</td><td>Equity</td><td><span class="badge badge-green">Active Tracking</span></td><td>Alpaca Supported</td></tr>
+  const broker = USER ? (USER.active_broker || "alpaca") : "alpaca";
+
+  const ALPACA = [
+    ["AAPL","Equity"],["MSFT","Equity"],["GOOGL","Equity"],["AMZN","Equity"],
+    ["NVDA","Equity"],["META","Equity"],["TSLA","Equity"],["BRK.B","Equity"],
+    ["JPM","Equity"],["V","Equity"],["UNH","Equity"],["XOM","Equity"],
+    ["JNJ","Equity"],["PG","Equity"],["MA","Equity"],["HD","Equity"],
+    ["AVGO","Equity"],["LLY","Equity"],["ABBV","Equity"],["MRK","Equity"],
+    ["PEP","Equity"],["KO","Equity"],["BAC","Equity"],["COST","Equity"],
+    ["TMO","Equity"],["NFLX","Equity"],["CRM","Equity"],["AMD","Equity"],
+    ["ORCL","Equity"],["ACN","Equity"],["DIS","Equity"],["MCD","Equity"],
+    ["WMT","Equity"],["ADBE","Equity"],["TXN","Equity"],["INTC","Equity"],
+    ["QCOM","Equity"],["PFE","Equity"],["INTU","Equity"],["IBM","Equity"],
+    ["GS","Equity"],["MS","Equity"],["CSCO","Equity"],["NKE","Equity"],
+    ["VZ","Equity"],["T","Equity"],["CVX","Equity"],["UPS","Equity"],
+    ["RTX","Equity"],["HON","Equity"],["CAT","Equity"],["BA","Equity"],
+    ["SPGI","Equity"],["NOW","Equity"],["ISRG","Equity"],["DE","Equity"],
+    ["MMM","Equity"],["GE","Equity"],["UNP","Equity"],["PYPL","Equity"],
+    ["SBUX","Equity"],["AXP","Equity"],["BKNG","Equity"],["ADP","Equity"],
+    ["NEE","Equity"],["TMUS","Equity"],["ABT","Equity"],["BMY","Equity"],
+    ["LIN","Equity"],["PM","Equity"],["AMAT","Equity"],["MU","Equity"],
+    ["LRCX","Equity"],["REGN","Equity"],["GILD","Equity"],["MDT","Equity"],
+    ["SYK","Equity"],["BLK","Equity"],["SCHW","Equity"],["TGT","Equity"]
+  ];
+
+  const OKX = [
+    ["BTC","Crypto"],["ETH","Crypto"],["SOL","Crypto"],["BNB","Crypto"],
+    ["XRP","Crypto"],["ADA","Crypto"],["DOGE","Crypto"],["AVAX","Crypto"],
+    ["DOT","Crypto"],["MATIC","Crypto"],["LINK","Crypto"],["LTC","Crypto"],
+    ["ATOM","Crypto"],["UNI","Crypto"],["XLM","Crypto"],["TRX","Crypto"],
+    ["ALGO","Crypto"],["FTM","Crypto"],["NEAR","Crypto"],["FIL","Crypto"],
+    ["ICP","Crypto"],["SAND","Crypto"],["MANA","Crypto"],["AXS","Crypto"],
+    ["AAVE","Crypto"],["COMP","Crypto"],["MKR","Crypto"],["SNX","Crypto"],
+    ["YFI","Crypto"],["SUSHI","Crypto"],["CRV","Crypto"],["1INCH","Crypto"],
+    ["ENJ","Crypto"],["CHZ","Crypto"],["ZEC","Crypto"],["DASH","Crypto"],
+    ["XMR","Crypto"],["THETA","Crypto"],["VET","Crypto"],["EOS","Crypto"],
+    ["RNDR","Crypto"],["APT","Crypto"],["ARB","Crypto"],["OP","Crypto"],
+    ["INJ","Crypto"],["SUI","Crypto"],["TIA","Crypto"],["WLD","Crypto"],
+    ["PYTH","Crypto"],["JUP","Crypto"],["SEI","Crypto"],["TON","Crypto"]
+  ];
+
+  const isOkx = broker === "okx";
+  const items = isOkx ? OKX : ALPACA;
+  const brokerLabel = isOkx ? "OKX Supported" : "Alpaca Supported";
+
+  tbody.innerHTML = items.map(([sym, cls]) => `
+    <tr>
+      <td style="font-weight:600;color:var(--blue)">${esc(sym)}${isOkx ? "/USDT" : ""}</td>
+      <td>${cls}</td>
+      <td><span class="badge badge-green">Active Tracking</span></td>
+      <td>${brokerLabel}</td>
+    </tr>
   `).join("");
 }
 
@@ -370,18 +433,26 @@ async function loadTradeHistory() {
 
 async function loadNews() {
   const status = document.getElementById("news-status");
-  const list = document.getElementById("news-list");
-  status.innerHTML = 'Fetching latest headlines...';
-  status.style.display = "block"; list.innerHTML = "";
+  const list   = document.getElementById("news-list");
+  const btn    = document.getElementById("news-refresh-btn");
+  status.innerHTML = '<div style="font-size:24px;margin-bottom:8px">⏳</div><div>Fetching latest headlines…</div>';
+  status.style.display = "block";
+  list.innerHTML = "";
+  if (btn) { btn.disabled = true; btn.textContent = "Loading…"; }
+
   try {
-    const res = await fetch("https://api.rss2json.com/v1/api.json?rss_url=https://feeds.reuters.com/reuters/businessNews");
-    const data = await res.json();
-    ALL_NEWS = data.items.map(item => ({
-      title: item.title, link: item.link, pubDate: item.pubDate, sentiment: "neutral" 
-    }));
+    ALL_NEWS = await api("/api/news");
+    if (!ALL_NEWS || !ALL_NEWS.length) {
+      status.innerHTML = '<div style="font-size:24px;margin-bottom:8px">📭</div><div>No articles available right now — try again in a moment.</div>';
+      return;
+    }
     status.style.display = "none";
     renderNews();
-  } catch (e) { status.innerHTML = "Failed to load news feeds."; }
+  } catch (e) {
+    status.innerHTML = '<div style="font-size:24px;margin-bottom:8px">⚠️</div><div>Failed to load news. Check your connection and try again.</div>';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "🔄 Refresh"; }
+  }
 }
 
 function filterNews(f) { NEWS_FILTER = f; renderNews(); }
