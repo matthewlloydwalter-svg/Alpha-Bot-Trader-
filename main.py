@@ -191,13 +191,6 @@ async def switch_broker(request: Request):
     data = await request.json()
     return {"status": "switched"}
 
-@app.post("/broker/keys")
-def save_broker_keys(body: UpdateKeysModel, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
-    u.alpaca_key = body.alpaca_key.strip()
-    u.alpaca_secret = body.alpaca_secret.strip()
-    db.commit()
-    return {"success": True}
-
 @app.get("/broker/account")
 def get_broker_account(u: User = Depends(get_current_user_from_cookie)):
     if not getattr(u, 'alpaca_key', None):
