@@ -26,8 +26,6 @@ logger = logging.getLogger("alphabot")
 
 app = FastAPI(title=f"{PLATFORM_NAME} Engine Core")
 
-mount("/static", StaticFiles(directory="static"), name="static")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -58,9 +56,14 @@ class AuthModel(BaseModel):
 class VerificationChallengeModel(BaseModel):
     code: str
 
-class UpdateKeysModel(BaseModel):
+class AlpacaKeysModel(BaseModel):
     alpaca_key: str
     alpaca_secret: str
+
+class OKXKeysModel(BaseModel):
+    okx_key: str
+    okx_secret: str
+    okx_pass: str
 
 def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)) -> User:
     token = request.cookies.get("session_token")
@@ -168,10 +171,20 @@ def confirm_verification(body: VerificationChallengeModel, u: User = Depends(get
     db.commit()
     return {"success": True}
 
-@app.post("/broker/trading-mode")
-async def update_trading_mode(request: Request):
-    data = await request.json()
-    return {"status": "success", "message": "Trading mode updated"}
+@app.post("/broker/alpaca/keys")
+def save_alpaca_keys(body: AlpacaKeysModel, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    u.alpaca_key = body.alpaca_key.strip()
+    u.alpaca_secret = body.alpaca_secret.strip()
+    db.commit()
+    return {"success": True}
+
+@app.post("/broker/okx/keys")
+def save_okx_keys(body: OKXKeysModel, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    u.okx_key = body.okx_key.strip()
+    u.okx_secret = body.okx_secret.strip()
+    u.okx_pass = body.okx_pass.strip()
+    db.commit()
+    return {"success": True}
 
 @app.post("/broker/switch")
 async def switch_broker(request: Request):
@@ -194,7 +207,6 @@ def get_broker_account(u: User = Depends(get_current_user_from_cookie)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# ════════════════════ BACKEND HISTORICAL TRADES LEDGER ENDPOINT ════════════════════
 @app.get("/broker/trades-ledger")
 def get_trades_ledger(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     # Query database and map trade results clean
@@ -240,3 +252,30 @@ def get_system_logs(u: User = Depends(get_current_user), db: Session = Depends(g
              .order_by(ActivityLog.created_at.desc())\
              .limit(50)\
              .all()
+
+@app.post("/cash/deposit")
+async def deposit_cash(request: Request):
+    data = await request.json()
+    return {"status": "deposit received"}
+
+@app.post("/cash/withdraw")
+async def withdraw_cash(request: Request):
+    data = await request.json()
+    return {"status": "withdrawal processed"}
+
+@app.get("/bots")
+async def get_bots():
+    return {"bots": []} 
+
+@app.post("/bots")
+async def create_bot(request: Request):
+    data = await request.json()
+    return {"status": "bot created"}
+
+@app.post("/bots/{bot_id}/toggle")
+async def toggle_bot(bot_id: str):
+    return {"status": f"bot {bot_id} toggled"}
+
+@app.delete("/bots/{bot_id}")
+async def delete_bot(bot_id: str):
+    return {"status": f"bot {bot_id} deleted"}
