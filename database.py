@@ -26,6 +26,15 @@ class User(Base):
     email_verified = Column(Boolean, default=False)
     verification_code = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    trading_mode = Column(String, default="paper")
+    active_broker = Column(String, default="alpaca")
+    total_deposited = Column(Float, default=0.0)
+    total_withdrawn = Column(Float, default=0.0)
+    alpaca_key = Column(String, nullable=True)
+    alpaca_secret = Column(String, nullable=True)
+    okx_key = Column(String, nullable=True)
+    okx_secret = Column(String, nullable=True)
+    okx_pass = Column(String, nullable=True)
     
     bots = relationship("Bot", back_populates="owner")
     trades = relationship("Trade", back_populates="owner")
@@ -46,6 +55,8 @@ class Bot(Base):
     avg_entry_price = Column(Float, nullable=True)
     trade_count = Column(Integer, default=0)
     realized_pnl = Column(Float, default=0)
+    funds_allocated = Column(Float, default=0.0)
+    running = Column(Boolean, default=False)
     
     owner = relationship("User", back_populates="bots")
 
