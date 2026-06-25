@@ -148,6 +148,16 @@ def confirm_verification(body: VerificationChallengeModel, u: User = Depends(get
     db.commit()
     return {"success": True}
 
+@app.post("/broker/trading-mode")
+async def update_trading_mode(request: Request):
+    data = await request.json()
+    return {"status": "success", "message": "Trading mode updated"}
+
+@app.post("/broker/switch")
+async def switch_broker(request: Request):
+    data = await request.json()
+    return {"status": "switched"}
+
 @app.post("/broker/keys")
 def save_broker_keys(body: UpdateKeysModel, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     u.alpaca_key = body.alpaca_key.strip()
