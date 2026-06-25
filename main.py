@@ -119,11 +119,32 @@ def login_endpoint(body: AuthModel, response: Response, db: Session = Depends(ge
         
     token = create_session_token(user.id, user.email)
     response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400)
-    return {"id": user.id, "email": user.email, "is_admin": user.is_admin, "email_verified": user.email_verified}
+    
+    return {
+        "id": user.id, 
+        "email": user.email, 
+        "is_admin": user.is_admin, 
+        "email_verified": user.email_verified,
+        # --- NEW FIELDS FOR FRONTEND ---
+        "trading_mode": "paper",
+        "active_broker": "alpaca",
+        "total_deposited": 0.0,
+        "total_withdrawn": 0.0
+    }
 
 @app.get("/auth/me")
 def current_user_endpoint(u: User = Depends(get_current_user_from_cookie)):
-    return {"id": u.id, "email": u.email, "is_admin": u.is_admin, "email_verified": u.email_verified}
+    return {
+        "id": u.id, 
+        "email": u.email, 
+        "is_admin": u.is_admin, 
+        "email_verified": u.email_verified,
+        # --- NEW FIELDS FOR FRONTEND ---
+        "trading_mode": "paper",
+        "active_broker": "alpaca",
+        "total_deposited": 0.0,
+        "total_withdrawn": 0.0
+    }
 
 @app.post("/auth/logout")
 def logout_endpoint(response: Response):
