@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from database import Bot, Trade, User
 from brokers import place_order, BrokerError
-from auth import send_email
+from auth import send_verification_email
 
 logger = logging.getLogger("alphabot")
 
