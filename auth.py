@@ -46,38 +46,86 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     if not hashed_password:
         return False
     try:
-        # Handle cases where database wrote bytes out directly as literal strings
-        if isinstance(hashed_password, str) and hashed_password.startswith("b'") or hashed_password.startswith('b"'):
+        # Handle cases where database wrote bytes out directly as literal strings.
+        # NOTE: parentheses matter — the original lacked them, so the b'/b" check
+        # mis-evaluated due to `and`/`or` precedence.
+        if isinstance(hashed_password, str) and (
+            hashed_password.startswith("b'") or hashed_password.startswith('b"')
+        ):
             hashed_password = hashed_password[2:-1]
-            
+
         if isinstance(hashed_password, str):
             hashed_password = hashed_password.encode('utf-8')
-            
+
         return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password)
     except Exception as e:
         logger.error(f"Password runtime validation matrix evaluation fault: {e}")
         return False
 
+
+class EmailError(Exception):
+    """Raised with a human-readable reason when an email cannot be sent."""
+    pass
+
+
 def send_verification_email(to_email: str, code: str) -> bool:
+    """
+    Send the verification code. Raises EmailError with a SPECIFIC reason on
+    failure so the API can surface what actually went wrong (the old code
+    swallowed everything into one opaque message).
+
+    Gmail notes:
+      - Use an *App Password* (16 chars), not your normal password, with 2FA on.
+      - Host smtp.gmail.com, port 587 (STARTTLS) or 465 (implicit SSL).
+    """
     if not SMTP_USER or not SMTP_PASSWORD:
-        logger.error("SMTP Configuration map contains non-routable null values.")
-        return False
-        
+        raise EmailError(
+            "Email is not configured on the server. Set SMTP_HOST, SMTP_PORT, "
+            "SMTP_USER and SMTP_PASSWORD (Gmail App Password) in your environment/Railway variables."
+        )
+
+    host = SMTP_HOST or "smtp.gmail.com"
+    try:
+        port = int(SMTP_PORT) if SMTP_PORT else 587
+    except (TypeError, ValueError):
+        port = 587
+
     msg = MIMEMultipart()
     msg["From"] = SMTP_USER
     msg["To"] = to_email
-    msg["Subject"] = f"[{PLATFORM_NAME}] Safe Security Challenge Code"
-    msg.attach(MIMEText(f"Your multi-factor security clearance authorization sequence validation code is: {code}", "plain"))
-    
+    msg["Subject"] = f"[{PLATFORM_NAME}] Your verification code"
+    msg.attach(MIMEText(
+        f"Your {PLATFORM_NAME} verification code is: {code}\n\n"
+        "If you did not request this, you can ignore this email.",
+        "plain",
+    ))
+
     try:
-        with smtplib.SMTP(SMTP_HOST, int(SMTP_PORT)) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(SMTP_USER, to_email, msg.as_string())
+        if port == 465:
+            # Implicit TLS.
+            with smtplib.SMTP_SSL(host, port, timeout=20) as server:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(SMTP_USER, [to_email], msg.as_string())
+        else:
+            # STARTTLS (587 and most others).
+            with smtplib.SMTP(host, port, timeout=20) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(SMTP_USER, [to_email], msg.as_string())
+        logger.info("Verification email sent to %s via %s:%s", to_email, host, port)
         return True
-    except Exception as e:
-        logger.error(f"Mail delivery subsystem transmission dropped: {e}")
-        return False
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error("SMTP auth failed: %s", e)
+        raise EmailError(
+            "SMTP authentication failed. For Gmail you must use a 16-character App Password "
+            "(Google Account → Security → App passwords) with 2-Step Verification enabled — "
+            "your normal Gmail password will not work."
+        )
+    except (smtplib.SMTPException, OSError) as e:
+        logger.error("Mail delivery failed (%s:%s): %s", host, port, e)
+        raise EmailError(f"Could not reach the mail server {host}:{port} — {e}")
 
 def is_user_admin(email: str) -> bool:
     return email.strip().lower() in ADMIN_EMAILS

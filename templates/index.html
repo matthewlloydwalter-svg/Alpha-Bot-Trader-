@@ -225,21 +225,42 @@
 
       <div class="card" id="alpaca-keys-card">
         <div class="slbl">Alpaca API Keys</div>
-        <form onsubmit="handleSaveAlpacaKeys(event)" style="display:flex;flex-direction:column;gap:14px;max-width:500px">
-          <label class="field">API Key<input type="text" id="alpaca-key" placeholder="Your Alpaca API key"></label>
-          <label class="field">Secret Key<input type="password" id="alpaca-secret" placeholder="Your Alpaca secret key"></label>
-          <button type="submit" class="btn btn-primary btn-sm" style="align-self:flex-start">💾 Save keys</button>
-        </form>
+        <div class="info-banner">Enter the keys for each mode separately. Paper keys come from the Alpaca <b>Paper</b> dashboard; Live keys from the Live dashboard. The dashboard and bots automatically use the set matching your current Trading Mode.</div>
+        <div class="keys-grid">
+          <div class="keys-col">
+            <div style="font-weight:700;margin-bottom:8px">📄 Paper Trading</div>
+            <label class="field">Key ID<input type="text" id="alpaca-paper-key" placeholder="Paper API Key ID"></label>
+            <label class="field" style="margin-top:10px">Secret Key<input type="password" id="alpaca-paper-secret" placeholder="Paper Secret Key"></label>
+            <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="handleSaveAlpacaKeys('paper')">💾 Save Paper Keys</button>
+          </div>
+          <div class="keys-col">
+            <div style="font-weight:700;margin-bottom:8px">⚡ Live Trading</div>
+            <label class="field">Key ID<input type="text" id="alpaca-live-key" placeholder="Live API Key ID"></label>
+            <label class="field" style="margin-top:10px">Secret Key<input type="password" id="alpaca-live-secret" placeholder="Live Secret Key"></label>
+            <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="handleSaveAlpacaKeys('live')">💾 Save Live Keys</button>
+          </div>
+        </div>
       </div>
-      
+
       <div class="card hidden" id="okx-keys-card">
         <div class="slbl">OKX API Keys</div>
-        <form onsubmit="handleSaveOkxKeys(event)" style="display:flex;flex-direction:column;gap:14px;max-width:500px">
-          <label class="field">API Key<input type="text" id="okx-key"></label>
-          <label class="field">Secret Key<input type="password" id="okx-secret"></label>
-          <label class="field">Passphrase<input type="password" id="okx-pass"></label>
-          <button type="submit" class="btn btn-primary btn-sm" style="align-self:flex-start">💾 Save keys</button>
-        </form>
+        <div class="info-banner">OKX Paper = <b>Demo Trading</b> keys (generated separately in OKX's demo section). Live = your real account keys. The active set follows your Trading Mode.</div>
+        <div class="keys-grid">
+          <div class="keys-col">
+            <div style="font-weight:700;margin-bottom:8px">📄 Paper (Demo) Trading</div>
+            <label class="field">API Key<input type="text" id="okx-paper-key" placeholder="Demo API Key"></label>
+            <label class="field" style="margin-top:10px">Secret Key<input type="password" id="okx-paper-secret" placeholder="Demo Secret Key"></label>
+            <label class="field" style="margin-top:10px">Passphrase<input type="password" id="okx-paper-pass" placeholder="Demo Passphrase"></label>
+            <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="handleSaveOkxKeys('paper')">💾 Save Paper Keys</button>
+          </div>
+          <div class="keys-col">
+            <div style="font-weight:700;margin-bottom:8px">⚡ Live Trading</div>
+            <label class="field">API Key<input type="text" id="okx-live-key" placeholder="Live API Key"></label>
+            <label class="field" style="margin-top:10px">Secret Key<input type="password" id="okx-live-secret" placeholder="Live Secret Key"></label>
+            <label class="field" style="margin-top:10px">Passphrase<input type="password" id="okx-live-pass" placeholder="Live Passphrase"></label>
+            <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="handleSaveOkxKeys('live')">💾 Save Live Keys</button>
+          </div>
+        </div>
       </div>
     </div>
   </main>
@@ -270,8 +291,9 @@
         <button class="mode-btn active" id="botmode-auto" onclick="setBotMode('auto')">🧠 Fully Autonomous</button>
         <button class="mode-btn" id="botmode-manual" onclick="setBotMode('manual')">⚙️ Manual Setup</button>
       </div>
+      <div id="auto-explainer" class="info-banner">Fully autonomous: just allocate funds and launch. The bot scans every active market on your selected exchange, finds the best confirmed dip via pattern analysis, runs a news sanity check, and deploys capital automatically — no ticker needed.</div>
       <label class="field">Bot name<input type="text" id="b-name" placeholder="e.g. My Dip Hunter"></label>
-      <label class="field">Ticker symbol<input type="text" id="b-ticker" placeholder="e.g. AAPL or BTC" style="text-transform:uppercase"></label>
+      <label class="field hidden" id="ticker-field">Ticker symbol<input type="text" id="b-ticker" placeholder="e.g. AAPL or BTC" style="text-transform:uppercase"></label>
       <label class="field">Funds to allocate ($)<input type="number" id="b-funds" placeholder="e.g. 500" min="10" step="1"></label>
       <div id="manual-limits" class="hidden">
         <hr class="divider">
