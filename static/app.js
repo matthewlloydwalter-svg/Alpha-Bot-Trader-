@@ -420,3 +420,4 @@ function togglePassword(inputId, robotId) {
     passwordInput.type = 'password';
     robotIcon.src = 'hide-password.jpeg'; // Just the name!
 }
+  }
