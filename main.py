@@ -2,13 +2,12 @@ import os
 import logging
 from datetime import datetime
 from typing import Optional
-from fastapi import FastAPI, Depends, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+
+from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
@@ -227,7 +226,7 @@ def admin_stats(request: Request, db: Session = Depends(get_db)):
 @app.get("/admin/users")
 def admin_users_list(request: Request, db: Session = Depends(get_db)):
     u = get_current_user_from_cookie(request, db)
-    if not u.is_admin: raise HTTPException(status_code=43)
+    if not u.is_admin: raise HTTPException(status_code=403)
     users = db.query(User).all()
     return [{"email": x.email, "is_admin": x.is_admin, "email_verified": x.email_verified} for x in users]
 
