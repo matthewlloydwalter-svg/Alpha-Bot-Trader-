@@ -4,6 +4,8 @@
   --border:#2a2f3d;--border2:#3a4055;
   --t1:#e8eaf0;--t2:#8b91a8;--t3:#555d78;
   --green:#00d68f;--red:#ff4d6a;--blue:#4d9fff;--amber:#ffb347;--purple:#9b59ff;
+  --brand:#1f7bef;        /* logo royal blue (matches the AlphaBot logo ring) */
+  --brand-deep:#0d67e6;
   --gdim:rgba(0,214,143,0.13);--rdim:rgba(255,77,106,0.13);--bdim:rgba(77,159,255,0.1);
   --topbar-h:64px;
   --nav-h:52px;
@@ -32,7 +34,7 @@ body{
   border-bottom:1px solid var(--border);
 }
 .topbar-left{display:flex;align-items:center;gap:12px;flex-wrap:nowrap}
-.logo-text{font-size:16px;font-weight:700;letter-spacing:-.3px}
+.logo-text{font-size:16px;font-weight:700;letter-spacing:-.3px;color:var(--brand)}
 
 .nav{
   position:sticky;
@@ -298,6 +300,33 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 .mode-btn:last-child { border-right:none; }
 .mode-btn:hover { background:var(--bg3); color:var(--t1); }
 .mode-btn.active { background:var(--blue); color:#fff; }
+
+/* ══ Brand logo + wordmark ══ */
+.brand-logo{height:34px;width:34px;border-radius:50%;object-fit:contain;display:block;flex-shrink:0}
+.auth-logo{height:96px;width:96px;border-radius:50%;object-fit:contain;display:block;margin:0 auto 14px}
+.brand-title{color:var(--brand)}
+
+/* ══ Sign-in page: match the dashboard background + grid overlay ══ */
+#auth-screen{
+  background:
+    radial-gradient(ellipse at 15% 50%,rgba(0,214,143,.04) 0%,transparent 55%),
+    radial-gradient(ellipse at 85% 20%,rgba(77,159,255,.07) 0%,transparent 50%),
+    radial-gradient(ellipse at 50% 80%,rgba(155,89,255,.04) 0%,transparent 50%),
+    linear-gradient(160deg,#0a0d13 0%,#0d0f18 40%,#0a1018 100%);
+  min-height:100vh;
+  position:relative;
+}
+#auth-screen::before{
+  content:'';position:fixed;inset:0;
+  background-image:
+    linear-gradient(rgba(77,159,255,.025) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(77,159,255,.025) 1px,transparent 1px);
+  background-size:44px 44px;
+  pointer-events:none;z-index:0;
+}
+#auth-screen>*{position:relative;z-index:1}
+/* let the dashboard-style grid show through the centering wrapper */
+.auth-wrap{background:transparent}
 
 /* ══ Portfolio performance graph ══ */
 .perf-chart-wrap { position:relative; height:360px; background:var(--bg0); border:1px solid var(--border); border-radius:10px; overflow:hidden; margin-top:8px; }
