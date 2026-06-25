@@ -50,6 +50,7 @@ class Bot(Base):
     broker = Column(String, default="alpaca")
     buy_limit = Column(Float, nullable=True)
     sell_limit = Column(Float, nullable=True)
+    is_auto = Column(Boolean, default=True) # Added is_auto column to handle layout modes
     in_position = Column(Boolean, default=False)
     shares_held = Column(Float, default=0)
     avg_entry_price = Column(Float, nullable=True)
