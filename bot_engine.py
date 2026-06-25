@@ -1,166 +1,430 @@
 """
-bot_engine.py — the trading bot "brain". Asks Claude for a BUY/SELL/HOLD
-decision given a bot's current state, then (if the decision clears the
-bot's configured limits) places the order through brokers.py and logs
-a Trade row.
+bot_engine.py — the autonomous trading "brain".
 
-This module does NOT run on a background scheduler by default — see
-the note in main.py's /bots/{id}/run-cycle endpoint for two ways to
-trigger it (manual button in your dashboard, or a real scheduler like
-APScheduler/Celery once you're ready for that).
+This is a full rewrite from the old single-spot-price + LLM design. Bots now
+consume the *exact same* structured pattern analysis that powers the Market
+Dashboard (see ``market_data.get_market_analysis``), so the UI and the bots
+always agree on what the chart is doing.
+
+Strategy — "Buy the Dip, Sell the Peak" with hard capital protection:
+
+  ENTRY (strict):
+    Only deploy when the shared signal confirms a structural reversal / oversold
+    dip (signal.action == BUY with conviction >= ENTRY_MIN_STRENGTH). Optional
+    manual buy_limit and first_buy_price gates are respected on top of that.
+
+  RISK (strict):
+    On entry we arm an ATR-based trailing stop and an adaptive take-profit.
+    Every cycle the trailing stop ratchets up with new highs and NEVER loosens,
+    instantly cutting trades that roll over. Take-profit locks gains but ratchets
+    higher while momentum stays bullish so winners are allowed to run.
+
+  CAPITAL ROTATION:
+    If a high-probability setup appears but buying power is fully deployed, the
+    engine ranks the user's open positions, liquidates the weakest/stagnating
+    one, and rotates that freed capital into the stronger setup.
+
+Every scan, pattern match, stop adjustment and execution signal is logged to
+both the terminal (logger) and the per-user ActivityLog table.
 """
 
+from __future__ import annotations
+
 import os
-import re
 import logging
-import requests
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 
-from database import Bot, Trade, User
-from brokers import place_order, BrokerError
-from auth import send_verification_email
+from database import Bot, Trade, User, ActivityLog, SessionLocal
+from brokers import place_order, get_account_info, BrokerError
+from market_data import get_market_analysis
+from pattern_analysis import Analysis
 
-logger = logging.getLogger("alphabot")
+logger = logging.getLogger("alphabot.engine")
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-ANTHROPIC_MODEL = "claude-sonnet-4-6"
+# ── Tunable strategy parameters ──────────────────────────────────────
+ENTRY_MIN_STRENGTH = float(os.getenv("BOT_ENTRY_MIN_STRENGTH", "0.30"))
+DEPLOY_FRACTION = float(os.getenv("BOT_DEPLOY_FRACTION", "0.95"))   # aggressive deployment
+TRAIL_ATR_MULT = float(os.getenv("BOT_TRAIL_ATR_MULT", "1.5"))     # tight trailing stop
+TP_ATR_MULT = float(os.getenv("BOT_TP_ATR_MULT", "3.0"))           # adaptive take-profit
+TRAIL_PCT_FLOOR = float(os.getenv("BOT_TRAIL_PCT_FLOOR", "0.02"))  # min 2% trailing buffer
+ROTATION_STAGNANT_PCT = float(os.getenv("BOT_ROTATION_STAGNANT_PCT", "0.5"))  # <0.5% = stagnating
+CANDLE_LIMIT = int(os.getenv("BOT_CANDLE_LIMIT", "200"))
 
 
-def ask_claude_for_decision(bot: Bot, current_price: float, recent_prices: list[float],
-                             news_summary: str) -> tuple[str, str]:
-    """Returns (action, reasoning) where action is BUY / SELL / HOLD."""
-    if not ANTHROPIC_API_KEY:
-        logger.warning("ANTHROPIC_API_KEY not set — defaulting bot decision to HOLD")
-        return "HOLD", "AI analysis unavailable (no API key configured)."
-
-    limits = []
-    if bot.buy_limit:
-        limits.append(f"buy only below ${bot.buy_limit}")
-    if bot.sell_limit:
-        limits.append(f"sell only above ${bot.sell_limit}")
-    if bot.min_profit_pct:
-        limits.append(f"minimum {bot.min_profit_pct}% profit before selling")
-
-    position_info = (
-        f"Currently holding {bot.shares_held} units at avg entry ${bot.avg_entry_price}."
-        if bot.in_position else "Not in a position — looking for a dip entry."
-    )
-
-    prompt = (
-        f"You are an autonomous AI trading bot for {bot.ticker or 'an asset you should pick'}. "
-        f"Current price: ${current_price:.4f}. Funds allocated: ${bot.funds_allocated}. "
-        f"{position_info} Strategy: buy the dips, sell for profit. "
-        f"Recent price trend: {' -> '.join(f'${p:.2f}' for p in recent_prices[-5:])}. "
-        f"News context (weight ~25%, do not let it dominate): {news_summary}. "
-        f"Constraints: {', '.join(limits) if limits else 'none'}. "
-        f"Respond with exactly one word first — BUY, SELL, or HOLD — then a one-sentence reason."
-    )
-
+# ────────────────────────────────────────────────────────────────────
+# Logging helper — writes to terminal AND the user-visible ActivityLog
+# ────────────────────────────────────────────────────────────────────
+def _log(db: Session, user_id: int, message: str, level: str = "INFO"):
+    getattr(logger, level.lower(), logger.info)(message)
     try:
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": ANTHROPIC_MODEL,
-                "max_tokens": 300,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=30,
+        db.add(ActivityLog(user_id=user_id, message=message, level=level))
+        db.commit()
+    except Exception as e:  # logging must never break the trading loop
+        db.rollback()
+        logger.warning("ActivityLog write failed: %s", e)
+
+
+def _paper(owner: User) -> bool:
+    return (owner.trading_mode or "paper") == "paper"
+
+
+def _keys(owner: User) -> dict:
+    return dict(
+        alpaca_key=owner.alpaca_key, alpaca_secret=owner.alpaca_secret,
+        okx_key=owner.okx_key, okx_secret=owner.okx_secret,
+        okx_passphrase=owner.okx_pass,
+    )
+
+
+# ────────────────────────────────────────────────────────────────────
+# Buying power lookup (broker-aware, never raises)
+# ────────────────────────────────────────────────────────────────────
+def _get_buying_power(owner: User, broker: str) -> float | None:
+    """Return available cash/buying power, or None if it can't be determined."""
+    try:
+        info = get_account_info(
+            broker=broker, alpaca_key=owner.alpaca_key, alpaca_secret=owner.alpaca_secret,
+            okx_key=owner.okx_key, okx_secret=owner.okx_secret,
+            okx_passphrase=owner.okx_pass, paper=_paper(owner),
         )
-        resp.raise_for_status()
-        data = resp.json()
-        text = next((b["text"] for b in data.get("content", []) if b.get("type") == "text"), "HOLD")
-        match = re.search(r"\b(BUY|SELL|HOLD)\b", text.upper())
-        action = match.group(1) if match else "HOLD"
-        return action, text.strip()
+        if broker == "alpaca":
+            return float(info.get("buying_power", 0.0))
+        balances = info.get("balances", {})
+        return float(balances.get("USDT", balances.get("USD", 0.0)))
     except Exception as e:
-        logger.error("Claude API call failed: %s", e)
-        return "HOLD", f"AI call failed: {e}"
+        logger.warning("Buying power lookup failed (%s): %s", broker, e)
+        return None
 
 
-def run_bot_cycle(db: Session, bot: Bot, current_price: float, recent_prices: list[float],
-                   news_summary: str = "") -> dict:
-    """
-    Runs one decision cycle for a bot: ask Claude, then act on the
-    decision if it clears the bot's limits. Returns a summary dict
-    your route can return to the frontend.
-    """
-    if not bot.running:
-        return {"action": "SKIPPED", "reason": "Bot is paused."}
-
-    owner: User = bot.owner
-
-    # Respect an unfilled "first buy" price gate before anything else.
-    if bot.first_buy_price and not bot.first_buy_done:
-        if current_price > bot.first_buy_price:
-            return {"action": "WAIT", "reason": f"Waiting for first buy at ${bot.first_buy_price}"}
-        bot.first_buy_done = True
-
-    action, reasoning = ask_claude_for_decision(bot, current_price, recent_prices, news_summary)
-
-    result = {"action": action, "reasoning": reasoning, "order": None}
-
+# ────────────────────────────────────────────────────────────────────
+# Order helper — real order if keys present, otherwise a logged paper sim
+# ────────────────────────────────────────────────────────────────────
+def _execute(owner: User, broker: str, side: str, symbol: str,
+             qty: float = None, notional: float = None) -> dict:
     try:
-        if action == "BUY" and not bot.in_position and (not bot.buy_limit or current_price <= bot.buy_limit):
-            notional = round(bot.funds_allocated * 0.3, 2)
-            order = place_order(
-                broker=bot.broker, side="buy", symbol=bot.ticker, notional=notional,
-                alpaca_key=owner.alpaca_key, alpaca_secret=owner.alpaca_secret,
-                okx_key=owner.okx_key, okx_secret=owner.okx_secret, okx_passphrase=owner.okx_passphrase,
-                paper=(owner.trading_mode == "paper"),
-            )
-            bot.in_position = True
-            bot.avg_entry_price = current_price
-            bot.shares_held = notional / current_price
-            bot.trade_count += 1
-            db.add(Trade(owner_id=owner.id, bot_id=bot.id, ticker=bot.ticker, side="buy",
-                          notional=notional, price=current_price, broker=bot.broker,
-                          mode=owner.trading_mode, broker_order_id=order["order_id"],
-                          status=order["status"]))
-            result["order"] = order
-            send_email(owner.email, f"✅ AlphaBot bought {bot.ticker}",
-                       f"Bot '{bot.name}' bought ${notional} of {bot.ticker} at ${current_price:.2f}.")
+        order = place_order(
+            broker=broker, side=side, symbol=symbol, qty=qty, notional=notional,
+            alpaca_key=owner.alpaca_key, alpaca_secret=owner.alpaca_secret,
+            okx_key=owner.okx_key, okx_secret=owner.okx_secret,
+            okx_passphrase=owner.okx_pass, paper=_paper(owner),
+        )
+        order["simulated"] = False
+        return order
+    except BrokerError as e:
+        # No/invalid keys → record a simulated fill so the strategy + ledger
+        # remain observable in paper mode without crashing the cycle.
+        logger.warning("[SIM] %s %s %s simulated (broker said: %s)", side, symbol, broker, e)
+        return {"order_id": f"SIM-{datetime.utcnow().timestamp():.0f}",
+                "status": "simulated", "symbol": symbol, "side": side, "simulated": True}
 
-        elif action == "SELL" and bot.in_position:
-            sell_ok = not bot.sell_limit or current_price >= bot.sell_limit
-            profit_pct = ((current_price - bot.avg_entry_price) / bot.avg_entry_price * 100) if bot.avg_entry_price else 0
-            profit_ok = not bot.min_profit_pct or profit_pct >= bot.min_profit_pct
 
+# ────────────────────────────────────────────────────────────────────
+# Risk-management arming / ratcheting
+# ────────────────────────────────────────────────────────────────────
+def _arm_risk(bot: Bot, entry_price: float, atr: float | None,
+              nearest_resistance: float | None):
+    """Set the initial trailing stop and adaptive take-profit on entry."""
+    bot.peak_price = entry_price
+    atr = atr or (entry_price * TRAIL_PCT_FLOOR)
+    trail_dist = max(atr * TRAIL_ATR_MULT, entry_price * TRAIL_PCT_FLOOR)
+    bot.stop_price = round(entry_price - trail_dist, 6)
+
+    tp_atr = entry_price + atr * TP_ATR_MULT
+    # If resistance is overhead, aim just under it; otherwise use the ATR target.
+    if nearest_resistance and nearest_resistance > entry_price:
+        bot.take_profit_price = round(min(tp_atr, nearest_resistance * 0.998), 6)
+    else:
+        bot.take_profit_price = round(tp_atr, 6)
+
+
+def _ratchet_risk(bot: Bot, price: float, atr: float | None, bullish: bool):
+    """Tighten the trailing stop on new highs; let take-profit run if bullish."""
+    if bot.peak_price is None or price > bot.peak_price:
+        bot.peak_price = price
+        atr = atr or (price * TRAIL_PCT_FLOOR)
+        trail_dist = max(atr * TRAIL_ATR_MULT, price * TRAIL_PCT_FLOOR)
+        new_stop = round(price - trail_dist, 6)
+        if bot.stop_price is None or new_stop > bot.stop_price:
+            bot.stop_price = new_stop  # never loosen
+        if bullish and bot.take_profit_price is not None:
+            ratcheted = round(price + (atr * TP_ATR_MULT), 6)
+            if ratcheted > bot.take_profit_price:
+                bot.take_profit_price = ratcheted
+
+
+# ────────────────────────────────────────────────────────────────────
+# Capital rotation
+# ────────────────────────────────────────────────────────────────────
+def _attempt_capital_rotation(db: Session, owner: User, candidate_bot: Bot,
+                              candidate_strength: float, needed_notional: float) -> bool:
+    """
+    Free capital by liquidating the weakest/stagnating open position so the
+    stronger candidate setup can be funded. Returns True if capital was freed.
+    """
+    open_bots = [
+        b for b in db.query(Bot).filter(
+            Bot.owner_id == owner.id, Bot.in_position == True  # noqa: E712
+        ).all() if b.id != candidate_bot.id and b.avg_entry_price
+    ]
+    if not open_bots:
+        _log(db, owner.id, "[ROTATION] No open positions available to rotate capital from.")
+        return False
+
+    ranked = []
+    for b in open_bots:
+        try:
+            a = _safe_analysis(b, owner)
+            cur = a.last_price if a else b.avg_entry_price
+        except Exception:
+            cur = b.avg_entry_price
+        perf_pct = ((cur - b.avg_entry_price) / b.avg_entry_price * 100) if b.avg_entry_price else 0.0
+        ranked.append((perf_pct, cur, b))
+
+    ranked.sort(key=lambda x: x[0])  # weakest first
+    worst_perf, worst_price, worst_bot = ranked[0]
+
+    if worst_perf >= ROTATION_STAGNANT_PCT:
+        _log(db, owner.id,
+             f"[ROTATION] Best exit candidate '{worst_bot.name}' is performing "
+             f"+{worst_perf:.2f}% — above stagnation threshold; NOT rotating capital.")
+        return False
+
+    _log(db, owner.id,
+         f"[ROTATION] Liquidating weakest position '{worst_bot.name}' ({worst_bot.ticker}) "
+         f"at {worst_perf:+.2f}% to fund stronger setup '{candidate_bot.ticker}' "
+         f"(strength {candidate_strength:.2f}).", "WARNING")
+
+    _close_position(db, owner, worst_bot, worst_price, reason="capital rotation")
+    return True
+
+
+# ────────────────────────────────────────────────────────────────────
+# Position close
+# ────────────────────────────────────────────────────────────────────
+def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: str) -> dict:
+    qty = bot.shares_held or 0
+    order = _execute(owner, bot.broker, "sell", bot.ticker, qty=qty)
+    gain = (price - (bot.avg_entry_price or price)) * qty
+    bot.realized_pnl = (bot.realized_pnl or 0) + gain
+    bot.trade_count = (bot.trade_count or 0) + 1
+    db.add(Trade(owner_id=owner.id, bot_id=bot.id, ticker=bot.ticker, side="sell",
+                 qty=qty, price=price, broker=bot.broker, mode=owner.trading_mode,
+                 broker_order_id=order["order_id"], status=order["status"]))
+    _log(db, owner.id,
+         f"[EXECUTE] SELL {qty:.6f} {bot.ticker} @ {price:.4f} ({reason}). "
+         f"Realized P&L: {gain:+.2f}.",
+         "WARNING" if gain < 0 else "INFO")
+    bot.in_position = False
+    bot.shares_held = 0
+    bot.avg_entry_price = None
+    bot.peak_price = None
+    bot.stop_price = None
+    bot.take_profit_price = None
+    db.commit()
+    return {"order": order, "realized_gain": round(gain, 4)}
+
+
+# ────────────────────────────────────────────────────────────────────
+# Analysis fetch wrapper
+# ────────────────────────────────────────────────────────────────────
+def _safe_analysis(bot: Bot, owner: User) -> Analysis | None:
+    try:
+        return get_market_analysis(
+            broker=bot.broker or owner.active_broker or "alpaca",
+            symbol=bot.ticker, timeframe=bot.timeframe or "1h", limit=CANDLE_LIMIT,
+            alpaca_key=owner.alpaca_key, alpaca_secret=owner.alpaca_secret,
+            okx_key=owner.okx_key, okx_secret=owner.okx_secret,
+            okx_passphrase=owner.okx_pass, paper=_paper(owner),
+        )
+    except BrokerError as e:
+        logger.warning("Analysis fetch failed for bot %s (%s): %s", bot.id, bot.ticker, e)
+        return None
+
+
+# ────────────────────────────────────────────────────────────────────
+# Core single-bot cycle (operates on a provided Analysis — testable)
+# ────────────────────────────────────────────────────────────────────
+def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
+    owner: User = bot.owner
+    price = analysis.last_price
+    sig = analysis.signal
+    atr = analysis.indicators.get("atr")
+    nearest_resistance = analysis.levels.get("nearest_resistance")
+
+    # Persist the latest analysis snapshot for the UI's "Internal Bot Status".
+    bot.last_signal = sig.action
+    bot.last_analysis_at = datetime.utcnow()
+    bot.last_pattern_summary = (
+        f"{sig.bias.title()} | {sig.headline} "
+        f"(conviction {sig.confidence}, strength {sig.strength:.2f})"
+    )
+
+    _log(db, owner.id,
+         f"[SCAN] {bot.ticker} @ {price:.4f} | signal={sig.action} "
+         f"strength={sig.strength:.2f} bias={sig.bias} | "
+         f"patterns={[p['name'] for p in analysis.patterns]}")
+
+    if not bot.running:
+        db.commit()
+        return {"action": "SKIPPED", "reason": "Bot is paused.",
+                "analysis": _analysis_brief(analysis)}
+
+    result = {"action": "HOLD", "price": price, "reason": "",
+              "analysis": _analysis_brief(analysis), "order": None}
+
+    # ── MANAGE OPEN POSITION ──────────────────────────────────────
+    if bot.in_position and bot.avg_entry_price:
+        _ratchet_risk(bot, price, atr, bullish=(sig.bias == "bullish"))
+        profit_pct = (price - bot.avg_entry_price) / bot.avg_entry_price * 100
+
+        # 1) Trailing stop — hard capital protection, always fires.
+        if bot.stop_price is not None and price <= bot.stop_price:
+            _log(db, owner.id,
+                 f"[STOP] {bot.ticker} hit trailing stop {bot.stop_price:.4f} "
+                 f"(entry {bot.avg_entry_price:.4f}, {profit_pct:+.2f}%).", "WARNING")
+            closed = _close_position(db, owner, bot, price, reason="trailing stop")
+            result.update({"action": "SELL", "reason": "Trailing stop hit", **closed})
+            return result
+
+        # 2) Take-profit — lock gains at the peak target.
+        if bot.take_profit_price is not None and price >= bot.take_profit_price:
+            _log(db, owner.id,
+                 f"[TAKE-PROFIT] {bot.ticker} reached target {bot.take_profit_price:.4f} "
+                 f"({profit_pct:+.2f}%).")
+            closed = _close_position(db, owner, bot, price, reason="take-profit target")
+            result.update({"action": "SELL", "reason": "Take-profit target hit", **closed})
+            return result
+
+        # 3) Structural peak/breakdown signal (respect manual constraints).
+        if sig.action == "SELL" and sig.strength >= ENTRY_MIN_STRENGTH:
+            sell_ok = (not bot.sell_limit) or price >= bot.sell_limit
+            profit_ok = (not bot.min_profit_pct) or profit_pct >= bot.min_profit_pct
             if sell_ok and profit_ok:
-                order = place_order(
-                    broker=bot.broker, side="sell", symbol=bot.ticker, qty=bot.shares_held,
-                    alpaca_key=owner.alpaca_key, alpaca_secret=owner.alpaca_secret,
-                    okx_key=owner.okx_key, okx_secret=owner.okx_secret, okx_passphrase=owner.okx_passphrase,
-                    paper=(owner.trading_mode == "paper"),
-                )
-                gain = (current_price - bot.avg_entry_price) * bot.shares_held
-                bot.realized_pnl += gain
-                bot.in_position = False
-                bot.trade_count += 1
-                db.add(Trade(owner_id=owner.id, bot_id=bot.id, ticker=bot.ticker, side="sell",
-                              qty=bot.shares_held, price=current_price, broker=bot.broker,
-                              mode=owner.trading_mode, broker_order_id=order["order_id"],
-                              status=order["status"]))
-                bot.shares_held = 0
-                bot.avg_entry_price = None
-                result["order"] = order
-                result["realized_gain"] = gain
-                send_email(owner.email, f"✅ AlphaBot sold {bot.ticker}",
-                           f"Bot '{bot.name}' sold {bot.ticker} at ${current_price:.2f}. Gain: ${gain:.2f}.")
-            else:
-                result["action"] = "HOLD"
-                result["reason"] = "Sell signal did not clear limit/profit constraints."
+                _log(db, owner.id,
+                     f"[SIGNAL] Structural peak on {bot.ticker} ({sig.headline}).")
+                closed = _close_position(db, owner, bot, price, reason="structural peak signal")
+                result.update({"action": "SELL", "reason": sig.headline, **closed})
+                return result
 
         db.commit()
+        result["reason"] = (
+            f"Holding {bot.ticker} {profit_pct:+.2f}% | stop {bot.stop_price} "
+            f"| target {bot.take_profit_price}"
+        )
+        return result
 
-    except BrokerError as e:
-        db.rollback()
-        logger.error("Order failed for bot %s: %s", bot.id, e)
-        send_email(owner.email, f"❌ AlphaBot order failed for {bot.ticker}", str(e))
-        result["error"] = str(e)
+    # ── LOOK FOR AN ENTRY ─────────────────────────────────────────
+    if sig.action != "BUY" or sig.strength < ENTRY_MIN_STRENGTH:
+        db.commit()
+        result["reason"] = f"No confirmed dip/reversal (signal {sig.action} {sig.strength:.2f})."
+        return result
 
+    # Manual gates layered on top of the structural signal.
+    if bot.buy_limit and price > bot.buy_limit:
+        db.commit()
+        result["reason"] = f"Setup confirmed but price {price:.4f} above buy limit {bot.buy_limit}."
+        return result
+    if bot.first_buy_price and not bot.first_buy_done and price > bot.first_buy_price:
+        db.commit()
+        result["reason"] = f"Waiting for first-buy trigger at {bot.first_buy_price}."
+        return result
+
+    notional = round((bot.funds_allocated or 0) * DEPLOY_FRACTION, 2)
+    if notional <= 0:
+        db.commit()
+        result["reason"] = "No funds allocated to this bot."
+        return result
+
+    # Capital availability + rotation.
+    buying_power = _get_buying_power(owner, bot.broker or "alpaca")
+    if buying_power is not None and buying_power < notional:
+        _log(db, owner.id,
+             f"[CAPITAL] Setup on {bot.ticker} needs ${notional:.2f} but only "
+             f"${buying_power:.2f} free — evaluating capital rotation.", "WARNING")
+        freed = _attempt_capital_rotation(db, owner, bot, sig.strength, notional)
+        if not freed:
+            db.commit()
+            result.update({"action": "WAIT",
+                           "reason": "Setup confirmed but capital fully deployed; no weaker position to rotate."})
+            return result
+        buying_power = _get_buying_power(owner, bot.broker or "alpaca")
+        if buying_power is not None:
+            notional = min(notional, round(buying_power * DEPLOY_FRACTION, 2))
+
+    # Execute the entry.
+    order = _execute(owner, bot.broker, "buy", bot.ticker, notional=notional)
+    bot.in_position = True
+    bot.avg_entry_price = price
+    bot.shares_held = notional / price if price else 0
+    bot.trade_count = (bot.trade_count or 0) + 1
+    bot.first_buy_done = True
+    _arm_risk(bot, price, atr, nearest_resistance)
+    db.add(Trade(owner_id=owner.id, bot_id=bot.id, ticker=bot.ticker, side="buy",
+                 notional=notional, price=price, broker=bot.broker, mode=owner.trading_mode,
+                 broker_order_id=order["order_id"], status=order["status"]))
+    _log(db, owner.id,
+         f"[EXECUTE] BUY ${notional:.2f} of {bot.ticker} @ {price:.4f} "
+         f"({sig.headline}). Stop {bot.stop_price:.4f} | Target {bot.take_profit_price:.4f}.")
+    db.commit()
+    result.update({"action": "BUY", "reason": sig.headline, "order": order,
+                   "notional": notional, "stop_price": bot.stop_price,
+                   "take_profit_price": bot.take_profit_price})
     return result
+
+
+def _analysis_brief(a: Analysis) -> dict:
+    return {
+        "signal": a.signal.to_dict(),
+        "indicators": a.indicators,
+        "patterns": a.patterns,
+        "last_price": a.last_price,
+    }
+
+
+# ────────────────────────────────────────────────────────────────────
+# Public entry points
+# ────────────────────────────────────────────────────────────────────
+def run_cycle(bot_id: int) -> dict:
+    """
+    Run one full decision cycle for a single bot by id. Opens its own DB
+    session so it is safe to call from an API route or a background scheduler.
+    """
+    db = SessionLocal()
+    try:
+        bot = db.query(Bot).filter(Bot.id == bot_id).first()
+        if not bot:
+            return {"action": "ERROR", "reason": "Bot not found."}
+        analysis = _safe_analysis(bot, bot.owner)
+        if analysis is None:
+            bot.last_pattern_summary = "Market data unavailable (check broker keys/connectivity)."
+            db.commit()
+            return {"action": "ERROR",
+                    "reason": f"Could not fetch market data for {bot.ticker}."}
+        return run_bot_cycle(db, bot, analysis)
+    finally:
+        db.close()
+
+
+def run_all_active_bots() -> dict:
+    """Scan + act on every running bot. Intended for a background scheduler."""
+    db = SessionLocal()
+    summary = {"scanned": 0, "actions": []}
+    try:
+        bots = db.query(Bot).filter(Bot.running == True).all()  # noqa: E712
+        logger.info("[ENGINE] Scanning %d active bots", len(bots))
+        for bot in bots:
+            summary["scanned"] += 1
+            analysis = _safe_analysis(bot, bot.owner)
+            if analysis is None:
+                continue
+            res = run_bot_cycle(db, bot, analysis)
+            if res.get("action") not in (None, "HOLD", "SKIPPED", "WAIT"):
+                summary["actions"].append({"bot_id": bot.id, "ticker": bot.ticker,
+                                           "action": res["action"]})
+    except Exception as e:
+        logger.error("run_all_active_bots failed: %s", e)
+    finally:
+        db.close()
+    return summary

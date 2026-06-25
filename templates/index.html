@@ -140,15 +140,18 @@
 
     <div id="view-stocks" class="tab-view hidden">
       <div class="card">
-        <div class="slbl" id="markets-view-label">Tracked Market Assets</div>
-        <p id="markets-view-desc" style="color:var(--t2);margin-bottom:12px">Real-time status of equity instruments queried from market endpoints.</p>
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <div class="slbl" id="markets-view-label" style="margin-bottom:0">Tracked Market Assets</div>
+          <input type="text" id="markets-search" placeholder="🔍 Filter symbol…" oninput="filterMarkets()" style="max-width:200px">
+        </div>
+        <p id="markets-view-desc" style="color:var(--t2);margin:10px 0 4px">Real-time status of equity instruments queried from market endpoints. Click any asset to open its live dashboard.</p>
         <div class="table-wrap">
           <table class="data-table">
             <thead>
-              <tr><th>Ticker Symbol</th><th>Asset Class</th><th>Status</th><th>Broker Support</th></tr>
+              <tr><th>Ticker Symbol</th><th>Asset Name</th><th>Asset Class</th><th>Status</th><th></th></tr>
             </thead>
             <tbody id="stocks-table-body">
-              <tr><td colspan="4" style="color:var(--t2)">Loading active tokens...</td></tr>
+              <tr><td colspan="5" style="color:var(--t2)">Loading active tokens...</td></tr>
             </tbody>
           </table>
         </div>
@@ -282,6 +285,57 @@
   </div>
 </div>
 
+<div id="market-dash-modal" class="modal-bg hidden" onclick="if(event.target===this)closeMarketDashboard()">
+  <div class="modal dash-modal">
+    <div class="dash-header">
+      <div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span id="dash-symbol" style="font-size:22px;font-weight:800;letter-spacing:-.5px">—</span>
+          <span id="dash-class-badge" class="badge badge-blue">—</span>
+          <span id="dash-signal-badge" class="badge badge-amber">—</span>
+        </div>
+        <div id="dash-name" style="color:var(--t2);font-size:13px;margin-top:3px">Loading asset…</div>
+      </div>
+      <div style="text-align:right">
+        <div id="dash-price" style="font-size:24px;font-weight:700;font-family:'SF Mono',Menlo,monospace">—</div>
+        <div id="dash-price-sub" style="font-size:11px;color:var(--t3)">spot price</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="closeMarketDashboard()" style="font-size:20px;padding:2px 8px;align-self:flex-start">✕</button>
+    </div>
+
+    <div class="dash-toolbar">
+      <div class="mode-toggle" id="dash-tf-toggle">
+        <button class="mode-btn" data-tf="15m" onclick="changeDashTimeframe('15m')">15m</button>
+        <button class="mode-btn active" data-tf="1h" onclick="changeDashTimeframe('1h')">1H</button>
+        <button class="mode-btn" data-tf="1d" onclick="changeDashTimeframe('1d')">1D</button>
+      </div>
+      <button class="btn btn-sm" onclick="reloadDashboard()">🔄 Refresh</button>
+    </div>
+
+    <div id="dash-chart-wrap" class="dash-chart-wrap">
+      <div id="dash-chart"></div>
+      <div id="dash-chart-msg" class="dash-chart-msg">Loading chart…</div>
+    </div>
+
+    <div class="dash-grid">
+      <div class="dash-panel">
+        <div class="slbl">🤖 Internal Bot Status</div>
+        <div id="dash-bot-status">Scanning…</div>
+      </div>
+      <div class="dash-panel">
+        <div class="slbl">📐 Detected Patterns</div>
+        <div id="dash-patterns" style="display:flex;flex-direction:column;gap:6px">—</div>
+      </div>
+    </div>
+
+    <div class="dash-panel" style="margin-top:12px">
+      <div class="slbl">📊 Technical Indicators</div>
+      <div id="dash-indicators" class="dash-ind-grid">—</div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -14,12 +14,14 @@ from sqlalchemy.orm import Session
 
 load_dotenv()
 
-from database import engine, Base, init_db, get_db, User, Bot, Trade, ActivityLog
+from database import engine, Base, init_db, get_db, SessionLocal, User, Bot, Trade, ActivityLog
 from auth import (
     hash_password, verify_password, create_session_token, decode_session_token,
     generate_verification_code, send_verification_email, is_user_admin, PLATFORM_NAME, get_current_user
 )
-from brokers import get_account_info, BrokerError
+from brokers import get_account_info, get_spot_price, BrokerError
+from market_data import get_market_analysis
+from markets_universe import MARKET_UNIVERSE
 import bot_engine # Imported bot engine to wire up the run-cycle logic
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -81,6 +83,24 @@ def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)
 @app.get("/", response_class=HTMLResponse)
 def index_pane(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "PLATFORM_NAME": PLATFORM_NAME})
+
+@app.get("/terms", response_class=HTMLResponse)
+def terms_pane():
+    return HTMLResponse(
+        f"<html><head><title>{PLATFORM_NAME} — Terms of Service</title>"
+        "<style>body{font-family:system-ui;max-width:760px;margin:40px auto;padding:0 20px;"
+        "background:#0d0f14;color:#e8eaf0;line-height:1.7}h1{color:#4d9fff}</style></head>"
+        f"<body><h1>{PLATFORM_NAME} — Terms of Service</h1>"
+        "<p>This platform provides automated trading tools for educational and "
+        "informational purposes. Trading involves substantial risk of loss. You are "
+        "solely responsible for your broker credentials, capital, and trading decisions. "
+        "Paper trading is strongly recommended before deploying live capital.</p>"
+        "<p>By creating an account you acknowledge that the operators are not liable "
+        "for trading losses, and that automated strategies (including stop-losses and "
+        "capital rotation) may not execute as intended during market disruptions.</p>"
+        "</body></html>"
+    )
+
 
 @app.get("/admin", response_class=HTMLResponse)
 def admin_pane(request: Request, db: Session = Depends(get_db)):
@@ -277,10 +297,21 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "id": b.id,
             "name": b.name,
             "ticker": b.ticker,
+            "broker": b.broker,
+            "timeframe": b.timeframe,
             "funds_allocated": b.funds_allocated,
             "is_auto": b.is_auto, # Added to expose the column to the frontend
             "running": b.running,
             "trade_count": b.trade_count,
+            "in_position": b.in_position,
+            "avg_entry_price": b.avg_entry_price,
+            "shares_held": b.shares_held,
+            "realized_pnl": b.realized_pnl,
+            "stop_price": b.stop_price,
+            "take_profit_price": b.take_profit_price,
+            "last_signal": b.last_signal,
+            "last_pattern_summary": b.last_pattern_summary,
+            "last_analysis_at": b.last_analysis_at.isoformat() if b.last_analysis_at else None,
         }
         for b in bots
     ]
@@ -318,6 +349,119 @@ def get_news():
 
     return []
 
+@app.get("/api/markets/{exchange}")
+def list_markets(exchange: str):
+    """Return the tradable universe for an exchange (drives the Markets tab)."""
+    ex = exchange.lower()
+    if ex not in MARKET_UNIVERSE:
+        raise HTTPException(status_code=404, detail=f"Unknown exchange '{exchange}'.")
+    cfg = MARKET_UNIVERSE[ex]
+    return {
+        "exchange": ex,
+        "asset_class": cfg["asset_class"],
+        "quote": cfg["quote"],
+        "count": len(cfg["items"]),
+        "items": cfg["items"],
+    }
+
+
+@app.get("/api/markets/{exchange}/{symbol}/dashboard")
+def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: int = 200,
+                     u: User = Depends(get_current_user_from_cookie)):
+    """
+    The heart of the clickable Market Dashboard.
+
+    Fetches historical candles for the asset, runs them through the shared
+    pattern-analysis brain (indicators + structural patterns + a normalized
+    signal) and returns a fully-prepared payload the UI can render directly.
+    The bots consume this exact same analysis via market_data.
+    """
+    ex = exchange.lower()
+    if ex not in MARKET_UNIVERSE:
+        raise HTTPException(status_code=404, detail=f"Unknown exchange '{exchange}'.")
+
+    cfg = MARKET_UNIVERSE[ex]
+    meta = next((i for i in cfg["items"] if i["symbol"].upper() == symbol.upper()), None)
+    asset_name = meta["name"] if meta else symbol.upper()
+    display = meta["display"] if meta else symbol.upper()
+
+    limit = max(50, min(int(limit), 500))
+    paper = (u.trading_mode or "paper") == "paper"
+
+    try:
+        analysis = get_market_analysis(
+            broker=ex, symbol=symbol, timeframe=timeframe, limit=limit,
+            alpaca_key=u.alpaca_key, alpaca_secret=u.alpaca_secret,
+            okx_key=u.okx_key, okx_secret=u.okx_secret, okx_passphrase=u.okx_pass,
+            paper=paper,
+        )
+    except BrokerError as e:
+        logger.warning("Dashboard data unavailable for %s:%s — %s", ex, symbol, e)
+        raise HTTPException(status_code=502, detail=str(e))
+
+    # Find the user's bot(s) trading this asset to surface "Internal Bot Status".
+    bot_status = _collect_bot_status(u.id, ex, symbol)
+
+    payload = analysis.to_dict()
+    payload.update({
+        "asset_name": asset_name,
+        "display_symbol": display,
+        "asset_class": cfg["asset_class"],
+        "quote": cfg["quote"],
+        "bot_status": bot_status,
+    })
+    return payload
+
+
+def _collect_bot_status(user_id: int, exchange: str, symbol: str) -> dict:
+    """Summarize what the internal bots think/are doing for this asset."""
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        bots = db.query(Bot).filter(
+            Bot.owner_id == user_id,
+            Bot.ticker.ilike(symbol),
+        ).all()
+        if not bots:
+            return {
+                "has_bot": False,
+                "headline": "No bot deployed on this asset yet.",
+                "detail": "Create a bot on this ticker to let the engine scan it autonomously.",
+                "bots": [],
+            }
+        return {
+            "has_bot": True,
+            "headline": f"{len(bots)} bot(s) monitoring {symbol.upper()}",
+            "bots": [{
+                "id": b.id, "name": b.name, "running": b.running,
+                "in_position": b.in_position, "signal": b.last_signal,
+                "summary": b.last_pattern_summary or "Awaiting first scan.",
+                "stop_price": b.stop_price, "take_profit_price": b.take_profit_price,
+                "avg_entry_price": b.avg_entry_price, "trade_count": b.trade_count,
+                "analyzed_at": b.last_analysis_at.isoformat() if b.last_analysis_at else None,
+            } for b in bots],
+        }
+    finally:
+        db.close()
+
+
+@app.post("/bots/scan-all")
+def scan_all_bots(u: User = Depends(get_current_user_from_cookie)):
+    """Run one decision cycle for every running bot owned by this user."""
+    db = SessionLocal()
+    try:
+        bots = db.query(Bot).filter(Bot.owner_id == u.id, Bot.running == True).all()  # noqa: E712
+    finally:
+        db.close()
+    results = []
+    for b in bots:
+        try:
+            results.append({"bot_id": b.id, "ticker": b.ticker, **bot_engine.run_cycle(b.id)})
+        except Exception as e:
+            results.append({"bot_id": b.id, "ticker": b.ticker, "action": "ERROR", "reason": str(e)})
+    return {"scanned": len(results), "results": results}
+
+
 @app.post("/cash/deposit")
 async def deposit_cash(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     data = await request.json()
@@ -343,20 +487,35 @@ async def withdraw_cash(request: Request, u: User = Depends(get_current_user_fro
 @app.post("/bots")
 async def create_bot(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     data = await request.json()
-    
+
+    def _num(key):
+        v = data.get(key)
+        try:
+            return float(v) if v not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
     new_bot = Bot(
         owner_id=u.id,
         name=data.get("name", "Unnamed Bot"),
-        ticker=data.get("ticker", "UNKNOWN"),
+        ticker=(data.get("ticker") or "UNKNOWN").upper(),
+        broker=data.get("broker") or (u.active_broker or "alpaca"),
+        timeframe=data.get("timeframe") or "1h",
         funds_allocated=float(data.get("funds_allocated", 0.0)),
         is_auto=data.get("is_auto", True), # Added is_auto assignment to stop silent drops
+        buy_limit=_num("buy_limit"),
+        sell_limit=_num("sell_limit"),
+        min_profit_pct=_num("min_profit_pct"),
+        first_buy_price=_num("first_buy_price"),
         running=False,
         trade_count=0
     )
-    
+
     db.add(new_bot)
     db.commit()
     db.refresh(new_bot)
+    logger.info("[BOT CREATED] id=%s ticker=%s broker=%s tf=%s funds=%s",
+                new_bot.id, new_bot.ticker, new_bot.broker, new_bot.timeframe, new_bot.funds_allocated)
     return {"status": "bot created", "bot_id": new_bot.id}
 
 @app.post("/bots/{bot_id}/toggle")
@@ -386,10 +545,40 @@ async def run_bot_cycle_endpoint(bot_id: int, u: User = Depends(get_current_user
         raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
         
     try:
-        # Assuming your bot_engine has a function that takes the bot or bot.id
-        result = bot_engine.run_cycle(bot.id) 
+        result = bot_engine.run_cycle(bot.id)
         return {"status": "cycle executed", "details": result}
-    except AttributeError:
-        return {"status": "bot_engine loaded but run_cycle function is missing"}
     except Exception as e:
+        logger.error("run-cycle failed for bot %s: %s", bot_id, e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Optional background autonomous engine ────────────────────────────
+# Disabled by default for safety. Set BOT_AUTORUN=1 (and an interval via
+# BOT_SCAN_INTERVAL seconds) to let the engine continuously scan + act on
+# every running bot without a manual trigger.
+def _start_autonomous_engine():
+    import threading
+    import time
+
+    interval = int(os.getenv("BOT_SCAN_INTERVAL", "300"))
+
+    def _loop():
+        logger.info("[ENGINE] Autonomous scanner started (interval=%ss)", interval)
+        while True:
+            time.sleep(interval)
+            try:
+                summary = bot_engine.run_all_active_bots()
+                logger.info("[ENGINE] Autonomous scan complete: %s", summary)
+            except Exception as e:
+                logger.error("[ENGINE] Autonomous scan error: %s", e)
+
+    t = threading.Thread(target=_loop, name="alphabot-engine", daemon=True)
+    t.start()
+
+
+@app.on_event("startup")
+def _on_startup():
+    if os.getenv("BOT_AUTORUN", "0") in ("1", "true", "True", "yes"):
+        _start_autonomous_engine()
+    else:
+        logger.info("[ENGINE] Autonomous scanner disabled (set BOT_AUTORUN=1 to enable).")

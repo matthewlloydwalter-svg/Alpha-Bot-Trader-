@@ -293,7 +293,12 @@ async function createBot() {
   try {
     await api("/bots", {
       method: "POST",
-      body: JSON.stringify({ name, ticker, funds_allocated, is_auto: BOT_MODE === "auto", buy_limit, sell_limit })
+      body: JSON.stringify({
+        name, ticker, funds_allocated,
+        broker: USER ? (USER.active_broker || "alpaca") : "alpaca",
+        timeframe: "1h",
+        is_auto: BOT_MODE === "auto", buy_limit, sell_limit
+      })
     });
     hideCreateBotModal();
     toast("Bot launched", "success");
@@ -312,25 +317,41 @@ async function loadBots() {
 function renderBots() {
   const el = document.getElementById("bots-list-container");
   if (!BOTS.length) { el.innerHTML = `<div style="text-align:center;color:var(--t2);padding:20px">No bots yet.</div>`; return; }
-  el.innerHTML = BOTS.map((b, i) => `
+  el.innerHTML = BOTS.map((b) => {
+    const sigColor = b.last_signal === "BUY" ? "badge-green" : b.last_signal === "SELL" ? "badge-red" : "badge-amber";
+    const pos = b.in_position
+      ? `<span class="badge badge-blue">In position @ ${formatPrice(b.avg_entry_price)}</span>`
+      : `<span class="badge badge-amber">Flat — scanning</span>`;
+    const pnlColor = (b.realized_pnl || 0) >= 0 ? "var(--green)" : "var(--red)";
+    return `
     <div class="bot-card ${b.running ? "running" : "paused"}">
       <div style="display:flex;justify-content:space-between;margin-bottom:10px">
-        <div style="font-weight:700">${esc(b.name)} <span class="badge ${b.running?"badge-green":"badge-amber"}">${b.running?"Running":"Paused"}</span></div>
+        <div style="font-weight:700">${esc(b.name)}
+          <span class="badge ${b.running?"badge-green":"badge-amber"}">${b.running?"Running":"Paused"}</span>
+          ${b.last_signal ? `<span class="badge ${sigColor}">${esc(b.last_signal)}</span>` : ""}
+        </div>
         <div style="display:flex;gap:6px">
+          <button class="btn btn-sm" onclick="openMarketDashboard('${esc(b.broker||'alpaca')}','${esc(b.ticker)}')">📈 Chart</button>
           <button class="btn btn-sm" onclick="toggleBot(${b.id})">${b.running?"⏸":"▶"}</button>
           <button class="btn btn-sm btn-danger" onclick="deleteBot(${b.id})">🗑</button>
         </div>
       </div>
-      <div style="color:var(--t2);font-size:12px;margin-bottom:10px">Ticker: ${b.ticker||"Auto"} | Funds: $${b.funds_allocated} | Trades: ${b.trade_count}</div>
+      <div style="color:var(--t2);font-size:12px;margin-bottom:8px">
+        ${esc(b.ticker||"Auto")} · ${esc((b.broker||"alpaca").toUpperCase())} · ${esc(b.timeframe||"1h")} |
+        Funds: $${b.funds_allocated} | Trades: ${b.trade_count} |
+        P&L: <span style="color:${pnlColor}">${(b.realized_pnl||0)>=0?"+":""}$${(b.realized_pnl||0).toFixed(2)}</span>
+      </div>
+      <div style="margin-bottom:8px">${pos}
+        ${b.in_position && b.stop_price ? `<span class="ind-pill">Stop ${formatPrice(b.stop_price)}</span>` : ""}
+        ${b.in_position && b.take_profit_price ? `<span class="ind-pill">Target ${formatPrice(b.take_profit_price)}</span>` : ""}
+      </div>
       <div style="background:var(--bg2);padding:10px;border-radius:6px;border:1px solid var(--border)">
-        <div style="display:flex;gap:8px">
-          <input type="number" id="price-${b.id}" placeholder="Current Price" style="flex:1">
-          <button class="btn btn-sm btn-primary" onclick="runBotCycle(${b.id})">Run Cycle</button>
-        </div>
+        <div style="font-size:11px;color:var(--t2);margin-bottom:8px">${esc(b.last_pattern_summary || "Awaiting first scan — run a scan to analyze the chart.")}</div>
+        <button class="btn btn-sm btn-primary" onclick="runBotCycle(${b.id})">⚡ Run Pattern Scan</button>
         <div class="log-box" id="blog-${b.id}" style="display:none;margin-top:8px"></div>
       </div>
-    </div>
-  `).join("");
+    </div>`;
+  }).join("");
 }
 
 async function toggleBot(id) {
@@ -342,80 +363,258 @@ async function deleteBot(id) {
 }
 
 async function runBotCycle(id) {
-  const price = parseFloat(document.getElementById(`price-${id}`).value);
-  if (!price) return toast("Enter price", "error");
-  
-  if (!PRICE_HISTORY[id]) PRICE_HISTORY[id] = [];
-  PRICE_HISTORY[id].push(price);
-  
   const logEl = document.getElementById(`blog-${id}`);
-  logEl.style.display = "block"; logEl.innerHTML = `Running cycle with ${PRICE_HISTORY[id].length} data points...`;
-  
+  logEl.style.display = "block";
+  logEl.innerHTML = `Fetching live chart and analyzing structure…`;
   try {
-    const result = await api(`/bots/${id}/run-cycle`, {
-      method: "POST", body: JSON.stringify({ current_price: price, recent_prices: PRICE_HISTORY[id], news_summary: "" })
-    });
-    logEl.innerHTML = `<span style="color:var(--blue)">Action: ${result.action}</span><br>${result.reasoning || ""}`;
+    const res = await api(`/bots/${id}/run-cycle`, { method: "POST" });
+    const d = res.details || {};
+    const sig = (d.analysis && d.analysis.signal) || {};
+    logEl.innerHTML =
+      `<span style="color:var(--blue)">Action: ${esc(d.action || "—")}</span><br>` +
+      `${esc(d.reason || sig.headline || "")}` +
+      (sig.action ? `<br><span style="color:var(--t3)">Signal ${esc(sig.action)} · strength ${sig.strength ?? "—"} · ${esc(sig.confidence || "")}</span>` : "");
     await loadBots();
   } catch (e) { logEl.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; }
 }
 
-/* --- STOCKS, HISTORY, NEWS --- */
+/* --- STOCKS / MARKETS --- */
+let MARKETS = [];          // current exchange universe from backend
+let MARKETS_EXCHANGE = "alpaca";
+
 async function loadStocks() {
   const tbody = document.getElementById("stocks-table-body");
-  const broker = USER ? (USER.active_broker || "alpaca") : "alpaca";
+  const exchange = USER ? (USER.active_broker || "alpaca") : "alpaca";
+  MARKETS_EXCHANGE = exchange;
+  tbody.innerHTML = `<tr><td colspan="5" style="color:var(--t2)">Loading active markets…</td></tr>`;
+  try {
+    const data = await api(`/api/markets/${exchange}`);
+    MARKETS = data.items || [];
+    renderMarkets();
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="5" style="color:var(--red)">Failed to load markets: ${esc(e.message)}</td></tr>`;
+  }
+}
 
-  const ALPACA = [
-    ["AAPL","Equity"],["MSFT","Equity"],["GOOGL","Equity"],["AMZN","Equity"],
-    ["NVDA","Equity"],["META","Equity"],["TSLA","Equity"],["BRK.B","Equity"],
-    ["JPM","Equity"],["V","Equity"],["UNH","Equity"],["XOM","Equity"],
-    ["JNJ","Equity"],["PG","Equity"],["MA","Equity"],["HD","Equity"],
-    ["AVGO","Equity"],["LLY","Equity"],["ABBV","Equity"],["MRK","Equity"],
-    ["PEP","Equity"],["KO","Equity"],["BAC","Equity"],["COST","Equity"],
-    ["TMO","Equity"],["NFLX","Equity"],["CRM","Equity"],["AMD","Equity"],
-    ["ORCL","Equity"],["ACN","Equity"],["DIS","Equity"],["MCD","Equity"],
-    ["WMT","Equity"],["ADBE","Equity"],["TXN","Equity"],["INTC","Equity"],
-    ["QCOM","Equity"],["PFE","Equity"],["INTU","Equity"],["IBM","Equity"],
-    ["GS","Equity"],["MS","Equity"],["CSCO","Equity"],["NKE","Equity"],
-    ["VZ","Equity"],["T","Equity"],["CVX","Equity"],["UPS","Equity"],
-    ["RTX","Equity"],["HON","Equity"],["CAT","Equity"],["BA","Equity"],
-    ["SPGI","Equity"],["NOW","Equity"],["ISRG","Equity"],["DE","Equity"],
-    ["MMM","Equity"],["GE","Equity"],["UNP","Equity"],["PYPL","Equity"],
-    ["SBUX","Equity"],["AXP","Equity"],["BKNG","Equity"],["ADP","Equity"],
-    ["NEE","Equity"],["TMUS","Equity"],["ABT","Equity"],["BMY","Equity"],
-    ["LIN","Equity"],["PM","Equity"],["AMAT","Equity"],["MU","Equity"],
-    ["LRCX","Equity"],["REGN","Equity"],["GILD","Equity"],["MDT","Equity"],
-    ["SYK","Equity"],["BLK","Equity"],["SCHW","Equity"],["TGT","Equity"]
-  ];
+function renderMarkets() {
+  const tbody = document.getElementById("stocks-table-body");
+  const filter = (document.getElementById("markets-search")?.value || "").trim().toUpperCase();
+  const cls = MARKETS_EXCHANGE === "okx" ? "Crypto" : "Equity";
+  const items = filter
+    ? MARKETS.filter(m => m.symbol.toUpperCase().includes(filter) || (m.name || "").toUpperCase().includes(filter))
+    : MARKETS;
 
-  const OKX = [
-    ["BTC","Crypto"],["ETH","Crypto"],["SOL","Crypto"],["BNB","Crypto"],
-    ["XRP","Crypto"],["ADA","Crypto"],["DOGE","Crypto"],["AVAX","Crypto"],
-    ["DOT","Crypto"],["MATIC","Crypto"],["LINK","Crypto"],["LTC","Crypto"],
-    ["ATOM","Crypto"],["UNI","Crypto"],["XLM","Crypto"],["TRX","Crypto"],
-    ["ALGO","Crypto"],["FTM","Crypto"],["NEAR","Crypto"],["FIL","Crypto"],
-    ["ICP","Crypto"],["SAND","Crypto"],["MANA","Crypto"],["AXS","Crypto"],
-    ["AAVE","Crypto"],["COMP","Crypto"],["MKR","Crypto"],["SNX","Crypto"],
-    ["YFI","Crypto"],["SUSHI","Crypto"],["CRV","Crypto"],["1INCH","Crypto"],
-    ["ENJ","Crypto"],["CHZ","Crypto"],["ZEC","Crypto"],["DASH","Crypto"],
-    ["XMR","Crypto"],["THETA","Crypto"],["VET","Crypto"],["EOS","Crypto"],
-    ["RNDR","Crypto"],["APT","Crypto"],["ARB","Crypto"],["OP","Crypto"],
-    ["INJ","Crypto"],["SUI","Crypto"],["TIA","Crypto"],["WLD","Crypto"],
-    ["PYTH","Crypto"],["JUP","Crypto"],["SEI","Crypto"],["TON","Crypto"]
-  ];
-
-  const isOkx = broker === "okx";
-  const items = isOkx ? OKX : ALPACA;
-  const brokerLabel = isOkx ? "OKX Supported" : "Alpaca Supported";
-
-  tbody.innerHTML = items.map(([sym, cls]) => `
-    <tr>
-      <td style="font-weight:600;color:var(--blue)">${esc(sym)}${isOkx ? "/USDT" : ""}</td>
+  if (!items.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="color:var(--t2)">No matching assets.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = items.map(m => `
+    <tr class="market-row" onclick="openMarketDashboard('${MARKETS_EXCHANGE}','${esc(m.symbol)}')">
+      <td>${esc(m.display || m.symbol)}</td>
+      <td style="color:var(--t1)">${esc(m.name || "")}</td>
       <td>${cls}</td>
       <td><span class="badge badge-green">Active Tracking</span></td>
-      <td>${brokerLabel}</td>
+      <td class="market-open-hint">Open dashboard →</td>
     </tr>
   `).join("");
+}
+
+function filterMarkets() { renderMarkets(); }
+
+/* --- MARKET DASHBOARD --- */
+let DASH_STATE = { exchange: null, symbol: null, timeframe: "1h" };
+let DASH_CHART = null, DASH_CANDLE_SERIES = null, DASH_SMA20 = null, DASH_SMA50 = null;
+
+async function openMarketDashboard(exchange, symbol) {
+  DASH_STATE = { exchange, symbol, timeframe: "1h" };
+  document.getElementById("market-dash-modal").classList.remove("hidden");
+  document.getElementById("dash-symbol").textContent = symbol;
+  document.getElementById("dash-name").textContent = "Loading asset…";
+  document.getElementById("dash-price").textContent = "—";
+  document.querySelectorAll("#dash-tf-toggle .mode-btn").forEach(b =>
+    b.classList.toggle("active", b.getAttribute("data-tf") === "1h"));
+  await reloadDashboard();
+}
+
+function closeMarketDashboard() {
+  document.getElementById("market-dash-modal").classList.add("hidden");
+  if (DASH_CHART) { try { DASH_CHART.remove(); } catch (_) {} DASH_CHART = null; }
+  DASH_CANDLE_SERIES = DASH_SMA20 = DASH_SMA50 = null;
+}
+
+function changeDashTimeframe(tf) {
+  DASH_STATE.timeframe = tf;
+  document.querySelectorAll("#dash-tf-toggle .mode-btn").forEach(b =>
+    b.classList.toggle("active", b.getAttribute("data-tf") === tf));
+  reloadDashboard();
+}
+
+async function reloadDashboard() {
+  const { exchange, symbol, timeframe } = DASH_STATE;
+  if (!exchange || !symbol) return;
+  const msg = document.getElementById("dash-chart-msg");
+  msg.classList.remove("hidden");
+  msg.textContent = "Loading market data…";
+  try {
+    const d = await api(`/api/markets/${exchange}/${symbol}/dashboard?timeframe=${encodeURIComponent(timeframe)}&limit=200`);
+    if (DASH_STATE.symbol !== symbol || DASH_STATE.timeframe !== timeframe) return; // stale
+    renderDashboard(d);
+  } catch (e) {
+    msg.classList.remove("hidden");
+    msg.textContent = `⚠ ${e.message}`;
+    document.getElementById("dash-bot-status").innerHTML =
+      `<span style="color:var(--red)">${esc(e.message)}</span>`;
+  }
+}
+
+function renderDashboard(d) {
+  document.getElementById("dash-symbol").textContent = d.display_symbol || d.symbol;
+  document.getElementById("dash-name").textContent = d.asset_name || "";
+  document.getElementById("dash-class-badge").textContent = d.asset_class || d.exchange;
+  document.getElementById("dash-price").textContent = formatPrice(d.last_price, d.quote);
+
+  // Signal badge
+  const sig = d.signal || {};
+  const sBadge = document.getElementById("dash-signal-badge");
+  sBadge.textContent = `${sig.action || "—"} · ${sig.confidence || ""}`;
+  sBadge.className = "badge " + (sig.bias === "bullish" ? "badge-green" : sig.bias === "bearish" ? "badge-red" : "badge-amber");
+
+  renderDashChart(d);
+  renderDashPatterns(d.patterns || []);
+  renderDashIndicators(d.indicators || {});
+  renderDashBotStatus(d.bot_status || {}, sig);
+}
+
+function formatPrice(p, quote) {
+  if (p == null) return "—";
+  const digits = p >= 100 ? 2 : p >= 1 ? 4 : 6;
+  return (quote === "USDT" ? "" : "$") + Number(p).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: digits }) + (quote === "USDT" ? " USDT" : "");
+}
+
+function renderDashChart(d) {
+  const msg = document.getElementById("dash-chart-msg");
+  const wrap = document.getElementById("dash-chart");
+  if (typeof LightweightCharts === "undefined") {
+    msg.classList.remove("hidden");
+    msg.textContent = "Chart library unavailable (offline). Indicators below are still live.";
+    return;
+  }
+  const candles = (d.candles || []).filter(c => c && c.time);
+  if (!candles.length) {
+    msg.classList.remove("hidden");
+    msg.textContent = "No candle data available for this asset/timeframe.";
+    return;
+  }
+  msg.classList.add("hidden");
+
+  if (DASH_CHART) { try { DASH_CHART.remove(); } catch (_) {} DASH_CHART = null; }
+  DASH_CHART = LightweightCharts.createChart(wrap, {
+    layout: { background: { color: "#0d0f14" }, textColor: "#8b91a8" },
+    grid: { vertLines: { color: "#1a1e28" }, horzLines: { color: "#1a1e28" } },
+    rightPriceScale: { borderColor: "#2a2f3d" },
+    timeScale: { borderColor: "#2a2f3d", timeVisible: true, secondsVisible: false },
+    crosshair: { mode: 0 },
+    autoSize: true,
+  });
+  DASH_CANDLE_SERIES = DASH_CHART.addCandlestickSeries({
+    upColor: "#00d68f", downColor: "#ff4d6a", borderVisible: false,
+    wickUpColor: "#00d68f", wickDownColor: "#ff4d6a",
+  });
+  DASH_CANDLE_SERIES.setData(candles);
+
+  // Overlay moving averages aligned to candle timestamps.
+  const series = d.series || {};
+  const overlay = (arr, color) => {
+    if (!Array.isArray(arr)) return;
+    const pts = [];
+    for (let i = 0; i < candles.length; i++) {
+      if (arr[i] != null) pts.push({ time: candles[i].time, value: arr[i] });
+    }
+    if (pts.length) {
+      const line = DASH_CHART.addLineSeries({ color, lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false });
+      line.setData(pts);
+    }
+  };
+  overlay(series.sma20, "#4d9fff");
+  overlay(series.sma50, "#9b59ff");
+
+  // Mark support / resistance levels as price lines.
+  const lv = d.levels || {};
+  if (lv.nearest_support != null)
+    DASH_CANDLE_SERIES.createPriceLine({ price: lv.nearest_support, color: "#00d68f", lineStyle: 2, lineWidth: 1, title: "Support" });
+  if (lv.nearest_resistance != null)
+    DASH_CANDLE_SERIES.createPriceLine({ price: lv.nearest_resistance, color: "#ff4d6a", lineStyle: 2, lineWidth: 1, title: "Resistance" });
+
+  DASH_CHART.timeScale().fitContent();
+}
+
+function renderDashPatterns(patterns) {
+  const el = document.getElementById("dash-patterns");
+  if (!patterns.length) { el.innerHTML = `<span style="color:var(--t3);font-size:12px">No structural pattern triggered on the current chart.</span>`; return; }
+  el.innerHTML = patterns.map(p => `
+    <div class="pattern-chip ${esc(p.bias)}">
+      <div>
+        <div class="pname">${esc(p.name)}</div>
+        <div class="pdetail">${esc(p.detail || "")}</div>
+      </div>
+    </div>`).join("");
+}
+
+function renderDashIndicators(ind) {
+  const el = document.getElementById("dash-indicators");
+  const fmt = v => (v == null ? "—" : (typeof v === "number" ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }) : v));
+  const rsi = ind.rsi;
+  const rsiColor = rsi == null ? "var(--t1)" : rsi <= 30 ? "var(--green)" : rsi >= 70 ? "var(--red)" : "var(--t1)";
+  const cells = [
+    ["RSI (14)", fmt(rsi), rsiColor],
+    ["Trend", ind.trend || "—", ind.trend === "up" ? "var(--green)" : ind.trend === "down" ? "var(--red)" : "var(--t1)"],
+    ["SMA 20", fmt(ind.sma20)], ["SMA 50", fmt(ind.sma50)],
+    ["MACD", fmt(ind.macd), (ind.macd_hist >= 0 ? "var(--green)" : "var(--red)")],
+    ["MACD Signal", fmt(ind.macd_signal)],
+    ["Boll Upper", fmt(ind.bb_upper)], ["Boll Lower", fmt(ind.bb_lower)],
+    ["ATR (14)", fmt(ind.atr)],
+  ];
+  el.innerHTML = cells.map(([k, v, c]) =>
+    `<div class="dash-ind"><div class="k">${k}</div><div class="v" style="color:${c || "var(--t1)"}">${v}</div></div>`).join("");
+}
+
+function renderDashBotStatus(status, sig) {
+  const el = document.getElementById("dash-bot-status");
+  let html = "";
+  if (status.has_bot && status.bots && status.bots.length) {
+    html = status.bots.map(b => `
+      <div style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+          <span style="font-weight:700">${esc(b.name)}</span>
+          <span class="badge ${b.running ? "badge-green" : "badge-amber"}">${b.running ? "Running" : "Paused"}</span>
+        </div>
+        <div class="bot-status-line"><span class="lbl">Analysis</span><span>${esc(b.summary || "—")}</span></div>
+        <div class="bot-status-line"><span class="lbl">Position</span><span>${b.in_position ? `In @ ${formatPrice(b.avg_entry_price)}` : "Flat — scanning for dip"}</span></div>
+        ${b.in_position ? `<div class="bot-status-line"><span class="lbl">Stop / Target</span><span>${formatPrice(b.stop_price)} / ${formatPrice(b.take_profit_price)}</span></div>` : ""}
+        <div class="bot-status-line"><span class="lbl">Trades</span><span>${b.trade_count || 0}</span></div>
+      </div>`).join("");
+  } else {
+    // No bot yet — present the live engine read on this asset based on the signal.
+    const action = sig.action === "BUY" ? "Scanning for confirmed dip → ready to BUY"
+      : sig.action === "SELL" ? "Detecting peak/breakdown → ready to protect capital"
+      : "Scanning for dip — no confirmed edge yet";
+    html = `
+      <div class="bot-status-line"><span class="lbl">Pattern Analysis</span><span>${esc((sig.bias || "neutral"))} bias</span></div>
+      <div class="bot-status-line"><span class="lbl">Action</span><span>${esc(action)}</span></div>
+      <div class="bot-status-line"><span class="lbl">Conviction</span><span>${esc(sig.confidence || "low")} (${(sig.strength != null ? sig.strength : 0)})</span></div>
+      <div style="margin-top:10px"><button class="btn btn-primary btn-sm" onclick="prefillBotFromDashboard()">🤖 Deploy a bot on ${esc(DASH_STATE.symbol)}</button></div>`;
+  }
+  el.innerHTML = html;
+}
+
+function prefillBotFromDashboard() {
+  closeMarketDashboard();
+  document.querySelector('.nav-tab[data-tab="bots"]')?.click();
+  showCreateBotModal();
+  const t = document.getElementById("b-ticker");
+  if (t) t.value = DASH_STATE.symbol;
+  const n = document.getElementById("b-name");
+  if (n && !n.value) n.value = `${DASH_STATE.symbol} Dip Hunter`;
 }
 
 async function loadTradeHistory() {
