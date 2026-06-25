@@ -49,15 +49,6 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 init_db()
 
-from sqlalchemy import text
-try:
-    with engine.connect() as connection:
-        connection.execute(text("ALTER TABLE bots ADD COLUMN is_auto BOOLEAN DEFAULT TRUE;"))
-        connection.commit()
-        logger.info("MIGRATION SUCCESS: is_auto column added.")
-except Exception as e:
-    logger.warning(f"MIGRATION NOTE: {e}")
-
 # Models
 class AuthModel(BaseModel):
     email: str
