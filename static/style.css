@@ -299,6 +299,11 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 .mode-btn:hover { background:var(--bg3); color:var(--t1); }
 .mode-btn.active { background:var(--blue); color:#fff; }
 
+/* ══ API key paper/live grid ══ */
+.keys-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.keys-col { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
+@media(max-width:640px){ .keys-grid{ grid-template-columns:1fr; } }
+
 /* ══ Clickable market rows ══ */
 .market-row { cursor:pointer; transition:background .12s; }
 .market-row:hover { background:var(--bg2); }

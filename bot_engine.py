@@ -39,6 +39,9 @@ from sqlalchemy.orm import Session
 from database import Bot, Trade, User, ActivityLog, SessionLocal
 from brokers import place_order, get_account_info, BrokerError
 from market_data import get_market_analysis
+from markets_universe import MARKET_UNIVERSE
+from credentials import resolve_credentials
+from news_analysis import get_asset_sentiment
 from pattern_analysis import Analysis
 
 logger = logging.getLogger("alphabot.engine")
@@ -51,6 +54,8 @@ TP_ATR_MULT = float(os.getenv("BOT_TP_ATR_MULT", "3.0"))           # adaptive ta
 TRAIL_PCT_FLOOR = float(os.getenv("BOT_TRAIL_PCT_FLOOR", "0.02"))  # min 2% trailing buffer
 ROTATION_STAGNANT_PCT = float(os.getenv("BOT_ROTATION_STAGNANT_PCT", "0.5"))  # <0.5% = stagnating
 CANDLE_LIMIT = int(os.getenv("BOT_CANDLE_LIMIT", "200"))
+AUTO_SCAN_LIMIT = int(os.getenv("BOT_AUTO_SCAN_LIMIT", "12"))      # markets scanned per autonomous cycle
+NEWS_OVERLAY = os.getenv("BOT_NEWS_OVERLAY", "1") in ("1", "true", "True", "yes")
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -70,12 +75,18 @@ def _paper(owner: User) -> bool:
     return (owner.trading_mode or "paper") == "paper"
 
 
-def _keys(owner: User) -> dict:
-    return dict(
-        alpaca_key=owner.alpaca_key, alpaca_secret=owner.alpaca_secret,
-        okx_key=owner.okx_key, okx_secret=owner.okx_secret,
-        okx_passphrase=owner.okx_pass,
-    )
+def _creds(owner: User, broker: str) -> dict:
+    """Mode-aware broker credentials (paper vs live, with legacy fallback)."""
+    return resolve_credentials(owner, broker, _paper(owner))
+
+
+def _asset_meta(broker: str, symbol: str) -> tuple[str, str]:
+    """Return (display name, asset_class) for a symbol from the universe."""
+    cfg = MARKET_UNIVERSE.get((broker or "alpaca").lower(), {})
+    for item in cfg.get("items", []):
+        if item["symbol"].upper() == (symbol or "").upper():
+            return item.get("name", symbol), cfg.get("asset_class", "Equity")
+    return symbol, cfg.get("asset_class", "Equity")
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -84,11 +95,7 @@ def _keys(owner: User) -> dict:
 def _get_buying_power(owner: User, broker: str) -> float | None:
     """Return available cash/buying power, or None if it can't be determined."""
     try:
-        info = get_account_info(
-            broker=broker, alpaca_key=owner.alpaca_key, alpaca_secret=owner.alpaca_secret,
-            okx_key=owner.okx_key, okx_secret=owner.okx_secret,
-            okx_passphrase=owner.okx_pass, paper=_paper(owner),
-        )
+        info = get_account_info(broker=broker, paper=_paper(owner), **_creds(owner, broker))
         if broker == "alpaca":
             return float(info.get("buying_power", 0.0))
         balances = info.get("balances", {})
@@ -106,9 +113,7 @@ def _execute(owner: User, broker: str, side: str, symbol: str,
     try:
         order = place_order(
             broker=broker, side=side, symbol=symbol, qty=qty, notional=notional,
-            alpaca_key=owner.alpaca_key, alpaca_secret=owner.alpaca_secret,
-            okx_key=owner.okx_key, okx_secret=owner.okx_secret,
-            okx_passphrase=owner.okx_pass, paper=_paper(owner),
+            paper=_paper(owner), **_creds(owner, broker),
         )
         order["simulated"] = False
         return order
@@ -222,6 +227,11 @@ def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: st
     bot.peak_price = None
     bot.stop_price = None
     bot.take_profit_price = None
+    # Fully autonomous bots release the ticker so the next cycle re-scans the
+    # whole market for the freshest dip rather than re-buying the same asset.
+    if bot.auto_select:
+        _log(db, owner.id, f"[AUTO] '{bot.name}' released {bot.ticker} — will re-scan all markets next cycle.")
+        bot.ticker = None
     db.commit()
     return {"order": order, "realized_gain": round(gain, 4)}
 
@@ -229,18 +239,93 @@ def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: st
 # ────────────────────────────────────────────────────────────────────
 # Analysis fetch wrapper
 # ────────────────────────────────────────────────────────────────────
-def _safe_analysis(bot: Bot, owner: User) -> Analysis | None:
+def _safe_analysis(bot: Bot, owner: User, symbol: str = None) -> Analysis | None:
+    broker = bot.broker or owner.active_broker or "alpaca"
+    sym = symbol or bot.ticker
+    if not sym:
+        return None
     try:
         return get_market_analysis(
-            broker=bot.broker or owner.active_broker or "alpaca",
-            symbol=bot.ticker, timeframe=bot.timeframe or "1h", limit=CANDLE_LIMIT,
-            alpaca_key=owner.alpaca_key, alpaca_secret=owner.alpaca_secret,
-            okx_key=owner.okx_key, okx_secret=owner.okx_secret,
-            okx_passphrase=owner.okx_pass, paper=_paper(owner),
+            broker=broker, symbol=sym, timeframe=bot.timeframe or "1h", limit=CANDLE_LIMIT,
+            paper=_paper(owner), **_creds(owner, broker),
         )
     except BrokerError as e:
-        logger.warning("Analysis fetch failed for bot %s (%s): %s", bot.id, bot.ticker, e)
+        logger.warning("Analysis fetch failed for bot %s (%s): %s", bot.id, sym, e)
         return None
+
+
+# ────────────────────────────────────────────────────────────────────
+# News sanity overlay (NOT the primary driver — just a veto on strong bad news)
+# ────────────────────────────────────────────────────────────────────
+def _news_sanity(broker: str, symbol: str) -> dict:
+    """Return the news verdict. Always safe — failures degrade to neutral."""
+    if not NEWS_OVERLAY:
+        return {"label": "neutral", "score": 0.0, "veto": False,
+                "note": "News overlay disabled.", "headlines": []}
+    try:
+        name, asset_class = _asset_meta(broker, symbol)
+        return get_asset_sentiment(symbol, name, asset_class)
+    except Exception as e:
+        logger.debug("News sanity failed for %s: %s", symbol, e)
+        return {"label": "neutral", "score": 0.0, "veto": False,
+                "note": f"News check skipped ({e}).", "headlines": []}
+
+
+# ────────────────────────────────────────────────────────────────────
+# Fully autonomous market selection
+# ────────────────────────────────────────────────────────────────────
+def _pick_best_setup(db: Session, owner: User, bot: Bot) -> Analysis | None:
+    """
+    Scan the active markets for the bot's broker, analyze each chart, and pick
+    the strongest CONFIRMED dip/reversal BUY setup. Applies the news overlay as
+    a sanity veto only. Returns the chosen Analysis (with .symbol set) or None.
+    """
+    broker = bot.broker or owner.active_broker or "alpaca"
+    cfg = MARKET_UNIVERSE.get(broker.lower(), {})
+    items = cfg.get("items", [])
+    if not items:
+        return None
+
+    scan_n = min(AUTO_SCAN_LIMIT, len(items))
+    _log(db, owner.id,
+         f"[AUTO-SCAN] Bot '{bot.name}' scanning {scan_n}/{len(items)} {broker} markets for the best dip…")
+
+    candidates = []  # (strength, analysis)
+    scanned = 0
+    for item in items[:scan_n]:
+        sym = item["symbol"]
+        analysis = _safe_analysis(bot, owner, symbol=sym)
+        scanned += 1
+        if analysis is None:
+            continue
+        sig = analysis.signal
+        logger.info("[AUTO-SCAN] %s -> %s strength=%.2f", sym, sig.action, sig.strength)
+        if sig.action == "BUY" and sig.strength >= ENTRY_MIN_STRENGTH:
+            candidates.append((sig.strength, analysis))
+
+    if not candidates:
+        _log(db, owner.id,
+             f"[AUTO-SCAN] Scanned {scanned} markets — no confirmed dip/reversal met the "
+             f"entry bar (strength >= {ENTRY_MIN_STRENGTH}). Standing by.")
+        return None
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+
+    # Walk best-first; news overlay can veto a candidate (sanity check only).
+    for strength, analysis in candidates:
+        verdict = _news_sanity(broker, analysis.symbol)
+        if verdict.get("veto"):
+            _log(db, owner.id,
+                 f"[AUTO-SCAN] Skipping {analysis.symbol} (strength {strength:.2f}) — "
+                 f"news sanity VETO: {verdict.get('note')}", "WARNING")
+            continue
+        _log(db, owner.id,
+             f"[AUTO-SCAN] Selected {analysis.symbol} (strength {strength:.2f}, "
+             f"news {verdict.get('label')}): {analysis.signal.headline}")
+        return analysis
+
+    _log(db, owner.id, "[AUTO-SCAN] All confirmed setups vetoed by news sanity layer. Standing by.", "WARNING")
+    return None
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -337,6 +422,21 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         result["reason"] = "No funds allocated to this bot."
         return result
 
+    # News sanity overlay — secondary check, never the primary driver. The chart
+    # dip is confirmed above; here we only stand down on STRONG negative news.
+    verdict = _news_sanity(bot.broker or owner.active_broker or "alpaca", bot.ticker)
+    if verdict.get("veto"):
+        _log(db, owner.id,
+             f"[NEWS-VETO] Confirmed dip on {bot.ticker} but news sanity layer vetoed entry "
+             f"({verdict.get('note')}).", "WARNING")
+        bot.last_pattern_summary = f"Dip confirmed but held — negative news ({verdict.get('label')})."
+        db.commit()
+        result.update({"action": "WAIT",
+                       "reason": f"Chart dip confirmed; entry deferred by news sanity ({verdict.get('label')}).",
+                       "news": verdict})
+        return result
+    result["news"] = verdict
+
     # Capital availability + rotation.
     buying_power = _get_buying_power(owner, bot.broker or "alpaca")
     if buying_power is not None and buying_power < notional:
@@ -396,12 +496,31 @@ def run_cycle(bot_id: int) -> dict:
         bot = db.query(Bot).filter(Bot.id == bot_id).first()
         if not bot:
             return {"action": "ERROR", "reason": "Bot not found."}
-        analysis = _safe_analysis(bot, bot.owner)
+
+        owner = bot.owner
+
+        # Fully autonomous + flat → scan all markets and pick the best dip.
+        if bot.auto_select and not bot.in_position:
+            if not bot.running:
+                return {"action": "SKIPPED", "reason": "Bot is paused."}
+            analysis = _pick_best_setup(db, owner, bot)
+            if analysis is None:
+                bot.last_signal = "HOLD"
+                bot.last_analysis_at = datetime.utcnow()
+                bot.last_pattern_summary = "Scanning all markets — no confirmed dip yet."
+                db.commit()
+                return {"action": "WAIT",
+                        "reason": "Autonomous scan found no confirmed dip this cycle."}
+            bot.ticker = analysis.symbol  # lock onto the chosen asset for this trade
+            db.commit()
+            return run_bot_cycle(db, bot, analysis)
+
+        analysis = _safe_analysis(bot, owner)
         if analysis is None:
             bot.last_pattern_summary = "Market data unavailable (check broker keys/connectivity)."
             db.commit()
             return {"action": "ERROR",
-                    "reason": f"Could not fetch market data for {bot.ticker}."}
+                    "reason": f"Could not fetch market data for {bot.ticker or 'this bot'}."}
         return run_bot_cycle(db, bot, analysis)
     finally:
         db.close()
@@ -409,22 +528,20 @@ def run_cycle(bot_id: int) -> dict:
 
 def run_all_active_bots() -> dict:
     """Scan + act on every running bot. Intended for a background scheduler."""
-    db = SessionLocal()
     summary = {"scanned": 0, "actions": []}
+    db = SessionLocal()
     try:
-        bots = db.query(Bot).filter(Bot.running == True).all()  # noqa: E712
-        logger.info("[ENGINE] Scanning %d active bots", len(bots))
-        for bot in bots:
-            summary["scanned"] += 1
-            analysis = _safe_analysis(bot, bot.owner)
-            if analysis is None:
-                continue
-            res = run_bot_cycle(db, bot, analysis)
-            if res.get("action") not in (None, "HOLD", "SKIPPED", "WAIT"):
-                summary["actions"].append({"bot_id": bot.id, "ticker": bot.ticker,
-                                           "action": res["action"]})
-    except Exception as e:
-        logger.error("run_all_active_bots failed: %s", e)
+        bot_ids = [b.id for b in db.query(Bot.id).filter(Bot.running == True).all()]  # noqa: E712
     finally:
         db.close()
+
+    logger.info("[ENGINE] Scanning %d active bots", len(bot_ids))
+    for bot_id in bot_ids:
+        summary["scanned"] += 1
+        try:
+            res = run_cycle(bot_id)  # handles autonomous selection + its own session
+            if res.get("action") not in (None, "HOLD", "SKIPPED", "WAIT", "ERROR"):
+                summary["actions"].append({"bot_id": bot_id, "action": res["action"]})
+        except Exception as e:
+            logger.error("Cycle failed for bot %s: %s", bot_id, e)
     return summary

@@ -93,6 +93,7 @@ async function enterApp() {
   renderModeUI();
   renderBrokerUI();
   await refreshUserData();
+  loadBrokerKeys();
 }
 
 function setupTabs() {
@@ -109,6 +110,7 @@ function setupTabs() {
       if (target === "bots") loadBots();
       if (target === "stocks") loadStocks();
       if (target === "history") loadTradeHistory();
+      if (target === "account") loadBrokerKeys();
       if (target === "news" && ALL_NEWS.length === 0) loadNews();
     };
   });
@@ -179,25 +181,43 @@ async function setBroker(broker) {
   } catch (e) { toast(e, "error"); }
 }
 
-async function handleSaveAlpacaKeys(e) {
-  e.preventDefault();
-  const api_key = document.getElementById("alpaca-key").value.trim();
-  const secret_key = document.getElementById("alpaca-secret").value.trim();
+async function handleSaveAlpacaKeys(mode) {
+  const api_key = document.getElementById(`alpaca-${mode}-key`).value.trim();
+  const secret_key = document.getElementById(`alpaca-${mode}-secret`).value.trim();
+  if (!api_key || !secret_key) return toast(`Enter both ${mode} Alpaca keys`, "error");
   try {
-    await api("/broker/alpaca/keys", { method: "POST", body: JSON.stringify({ api_key, secret_key }) });
-    toast("Alpaca keys saved.", "success");
+    await api("/broker/alpaca/keys", { method: "POST", body: JSON.stringify({ api_key, secret_key, mode }) });
+    toast(`Alpaca ${mode} keys saved.`, "success");
   } catch (e) { toast(e, "error"); }
 }
 
-async function handleSaveOkxKeys(e) {
-  e.preventDefault();
-  const api_key = document.getElementById("okx-key").value.trim();
-  const secret_key = document.getElementById("okx-secret").value.trim();
-  const passphrase = document.getElementById("okx-pass").value.trim();
+async function handleSaveOkxKeys(mode) {
+  const api_key = document.getElementById(`okx-${mode}-key`).value.trim();
+  const secret_key = document.getElementById(`okx-${mode}-secret`).value.trim();
+  const passphrase = document.getElementById(`okx-${mode}-pass`).value.trim();
+  if (!api_key || !secret_key || !passphrase) return toast(`Enter all ${mode} OKX fields`, "error");
   try {
-    await api("/broker/okx/keys", { method: "POST", body: JSON.stringify({ api_key, secret_key, passphrase }) });
-    toast("OKX keys saved.", "success");
+    await api("/broker/okx/keys", { method: "POST", body: JSON.stringify({ api_key, secret_key, passphrase, mode }) });
+    toast(`OKX ${mode} keys saved.`, "success");
   } catch (e) { toast(e, "error"); }
+}
+
+async function loadBrokerKeys() {
+  // Auto-populate the key boxes with whatever is stored for this user.
+  try {
+    const k = await api("/broker/keys");
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ""; };
+    set("alpaca-paper-key", k.alpaca.paper.api_key);
+    set("alpaca-paper-secret", k.alpaca.paper.secret_key);
+    set("alpaca-live-key", k.alpaca.live.api_key);
+    set("alpaca-live-secret", k.alpaca.live.secret_key);
+    set("okx-paper-key", k.okx.paper.api_key);
+    set("okx-paper-secret", k.okx.paper.secret_key);
+    set("okx-paper-pass", k.okx.paper.passphrase);
+    set("okx-live-key", k.okx.live.api_key);
+    set("okx-live-secret", k.okx.live.secret_key);
+    set("okx-live-pass", k.okx.live.passphrase);
+  } catch (e) { /* non-fatal — boxes just stay empty */ }
 }
 
 /* --- EMAIL VERIFICATION --- */
@@ -279,6 +299,9 @@ function setBotMode(m) {
   document.getElementById("botmode-auto").classList.toggle("active", m === "auto");
   document.getElementById("botmode-manual").classList.toggle("active", m === "manual");
   document.getElementById("manual-limits").classList.toggle("hidden", m === "auto");
+  // Fully autonomous mode needs only a funds amount — hide the ticker field.
+  document.getElementById("ticker-field").classList.toggle("hidden", m === "auto");
+  document.getElementById("auto-explainer").classList.toggle("hidden", m !== "auto");
 }
 function showCreateBotModal() { document.getElementById("modal-bot").classList.remove("hidden"); }
 function hideCreateBotModal() { document.getElementById("modal-bot").classList.add("hidden"); }
@@ -286,9 +309,15 @@ function hideCreateBotModal() { document.getElementById("modal-bot").classList.a
 async function createBot() {
   const name = document.getElementById("b-name").value.trim();
   const funds_allocated = parseFloat(document.getElementById("b-funds").value);
-  const ticker = document.getElementById("b-ticker").value.trim().toUpperCase() || null;
+  // Fully autonomous mode sends NO ticker — the engine picks the asset.
+  const ticker = BOT_MODE === "manual"
+    ? (document.getElementById("b-ticker").value.trim().toUpperCase() || null)
+    : null;
   const buy_limit = document.getElementById("b-buy").value ? +document.getElementById("b-buy").value : null;
   const sell_limit = document.getElementById("b-sell").value ? +document.getElementById("b-sell").value : null;
+
+  if (!funds_allocated || funds_allocated <= 0) return toast("Enter a funds amount to allocate", "error");
+  if (BOT_MODE === "manual" && !ticker) return toast("Manual bots need a ticker symbol", "error");
 
   try {
     await api("/bots", {
@@ -301,7 +330,7 @@ async function createBot() {
       })
     });
     hideCreateBotModal();
-    toast("Bot launched", "success");
+    toast(BOT_MODE === "auto" ? "Autonomous bot launched — it will scan all markets" : "Bot launched", "success");
     await loadBots();
   } catch (e) { toast(e, "error"); }
 }
@@ -323,21 +352,26 @@ function renderBots() {
       ? `<span class="badge badge-blue">In position @ ${formatPrice(b.avg_entry_price)}</span>`
       : `<span class="badge badge-amber">Flat — scanning</span>`;
     const pnlColor = (b.realized_pnl || 0) >= 0 ? "var(--green)" : "var(--red)";
+    const assetLabel = b.ticker ? esc(b.ticker) : (b.auto_select ? "🧠 Auto-select (all markets)" : "Auto");
+    const chartBtn = b.ticker
+      ? `<button class="btn btn-sm" onclick="openMarketDashboard('${esc(b.broker||'alpaca')}','${esc(b.ticker)}')">📈 Chart</button>`
+      : "";
     return `
     <div class="bot-card ${b.running ? "running" : "paused"}">
       <div style="display:flex;justify-content:space-between;margin-bottom:10px">
         <div style="font-weight:700">${esc(b.name)}
           <span class="badge ${b.running?"badge-green":"badge-amber"}">${b.running?"Running":"Paused"}</span>
+          ${b.auto_select ? `<span class="badge badge-purple">Autonomous</span>` : ""}
           ${b.last_signal ? `<span class="badge ${sigColor}">${esc(b.last_signal)}</span>` : ""}
         </div>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-sm" onclick="openMarketDashboard('${esc(b.broker||'alpaca')}','${esc(b.ticker)}')">📈 Chart</button>
+          ${chartBtn}
           <button class="btn btn-sm" onclick="toggleBot(${b.id})">${b.running?"⏸":"▶"}</button>
           <button class="btn btn-sm btn-danger" onclick="deleteBot(${b.id})">🗑</button>
         </div>
       </div>
       <div style="color:var(--t2);font-size:12px;margin-bottom:8px">
-        ${esc(b.ticker||"Auto")} · ${esc((b.broker||"alpaca").toUpperCase())} · ${esc(b.timeframe||"1h")} |
+        ${assetLabel} · ${esc((b.broker||"alpaca").toUpperCase())} · ${esc(b.timeframe||"1h")} |
         Funds: $${b.funds_allocated} | Trades: ${b.trade_count} |
         P&L: <span style="color:${pnlColor}">${(b.realized_pnl||0)>=0?"+":""}$${(b.realized_pnl||0).toFixed(2)}</span>
       </div>

@@ -151,12 +151,16 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
     Fetch historical stock bars via alpaca-py's market-data client.
     Works with paper or live keys (data feed = IEX on free plans).
     """
+    api_key = (api_key or "").strip()
+    secret_key = (secret_key or "").strip()
     if not api_key or not secret_key:
-        raise BrokerError("Alpaca data requires API keys. Add them in Account → Alpaca API Keys.")
+        raise BrokerError("Alpaca data requires API keys. Add them in Account → Alpaca API Keys "
+                          "for the mode you are in (Paper or Live).")
     try:
         from alpaca.data.historical import StockHistoricalDataClient
         from alpaca.data.requests import StockBarsRequest
         from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+        from alpaca.data.enums import DataFeed
 
         tf_map = {
             "1m": TimeFrame(1, TimeFrameUnit.Minute),
@@ -173,8 +177,13 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
         minutes_back = per_bar * limit * 3 + 1440
         start = datetime.now(timezone.utc) - timedelta(minutes=minutes_back)
 
+        # IMPORTANT: market-data keys are the SAME account keys (paper or live) —
+        # the historical data API lives at data.alpaca.markets, NOT the paper
+        # trading host. We force the free IEX feed so paper / free-tier accounts
+        # are not rejected for lacking a paid SIP subscription.
         client = StockHistoricalDataClient(api_key, secret_key)
-        req = StockBarsRequest(symbol_or_symbols=symbol.upper(), timeframe=tf, start=start, limit=limit)
+        req = StockBarsRequest(symbol_or_symbols=symbol.upper(), timeframe=tf,
+                               start=start, limit=limit, feed=DataFeed.IEX)
         bars = client.get_stock_bars(req)
 
         rows = []
@@ -186,14 +195,39 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
                 "low": float(b.low), "close": float(b.close),
                 "volume": float(b.volume or 0),
             })
-        logger.info("[BARS] Alpaca %s tf=%s -> %d bars", symbol, timeframe, len(rows))
+        logger.info("[BARS] Alpaca %s tf=%s feed=IEX -> %d bars", symbol, timeframe, len(rows))
+        if not rows:
+            raise BrokerError(
+                f"Alpaca returned no IEX bars for {symbol.upper()} ({timeframe}). "
+                "This is normal outside US market hours for very short timeframes — try the 1D timeframe."
+            )
         return rows[-limit:]
     except BrokerError:
         raise
     except AlpacaAPIError as e:
-        raise BrokerError(f"Alpaca data error: {e}")
+        raise BrokerError(_humanize_alpaca_error(e))
     except Exception as e:
-        raise BrokerError(f"Alpaca data fetch failed: {e}")
+        raise BrokerError(_humanize_alpaca_error(e))
+
+
+def _humanize_alpaca_error(e) -> str:
+    """
+    Turn raw Alpaca/transport errors (including nginx HTML 401 pages) into a
+    short, actionable message for the UI instead of dumping markup.
+    """
+    msg = str(e)
+    low = msg.lower()
+    if "401" in low or "authorization required" in low or "unauthorized" in low:
+        return ("Alpaca rejected the API keys (401 Unauthorized). Make sure you saved the keys "
+                "for the mode you're in: Paper mode needs your *paper* keys from "
+                "https://app.alpaca.markets/paper/dashboard/overview, Live mode needs live keys.")
+    if "403" in low or "forbidden" in low or "subscription" in low:
+        return ("Alpaca returned 403 (data subscription required). The dashboard uses the free IEX "
+                "feed — confirm your keys are valid and active.")
+    if "<html" in low or "nginx" in low:
+        return ("Alpaca data endpoint returned an authorization error. Re-check that your API "
+                "key and secret are correct for the selected (Paper/Live) mode.")
+    return f"Alpaca data error: {msg[:300]}"
 
 
 def get_okx_candles(symbol: str, timeframe: str, limit: int,

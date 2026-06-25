@@ -17,11 +17,13 @@ load_dotenv()
 from database import engine, Base, init_db, get_db, SessionLocal, User, Bot, Trade, ActivityLog
 from auth import (
     hash_password, verify_password, create_session_token, decode_session_token,
-    generate_verification_code, send_verification_email, is_user_admin, PLATFORM_NAME, get_current_user
+    generate_verification_code, send_verification_email, is_user_admin, PLATFORM_NAME,
+    get_current_user, EmailError
 )
 from brokers import get_account_info, get_spot_price, BrokerError
 from market_data import get_market_analysis
 from markets_universe import MARKET_UNIVERSE
+from credentials import resolve_credentials, has_credentials, keys_payload
 import bot_engine # Imported bot engine to wire up the run-cycle logic
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -62,11 +64,13 @@ class VerificationChallengeModel(BaseModel):
 class AlpacaKeysModel(BaseModel):
     api_key: str
     secret_key: str
+    mode: Optional[str] = "paper"   # "paper" or "live"
 
 class OKXKeysModel(BaseModel):
     api_key: str
     secret_key: str
     passphrase: str
+    mode: Optional[str] = "paper"   # "paper" or "live"
 
 def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)) -> User:
     token = request.cookies.get("session_token")
@@ -177,8 +181,15 @@ def trigger_verification(u: User = Depends(get_current_user_from_cookie), db: Se
     code = generate_verification_code()
     u.verification_code = code
     db.commit()
-    if not send_verification_email(u.email, code):
-        raise HTTPException(status_code=500, detail="Subsystem transmission fault deploying validation mail.")
+    try:
+        send_verification_email(u.email, code)
+    except EmailError as e:
+        # Surface the ACTUAL reason (SMTP not configured / bad app password / etc.)
+        logger.error("Verification email failed for %s: %s", u.email, e)
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error("Unexpected email error for %s: %s", u.email, e)
+        raise HTTPException(status_code=500, detail=f"Unexpected mail error: {e}")
     return {"success": True}
 
 @app.post("/auth/confirm-verification")
@@ -192,18 +203,42 @@ def confirm_verification(body: VerificationChallengeModel, u: User = Depends(get
 
 @app.post("/broker/alpaca/keys")
 def save_alpaca_keys(body: AlpacaKeysModel, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
-    u.alpaca_key    = body.api_key.strip()
-    u.alpaca_secret = body.secret_key.strip()
+    mode = (body.mode or "paper").lower()
+    if mode not in ("paper", "live"):
+        raise HTTPException(status_code=400, detail="mode must be 'paper' or 'live'.")
+    key, secret = body.api_key.strip(), body.secret_key.strip()
+    if mode == "paper":
+        u.alpaca_key_paper, u.alpaca_secret_paper = key, secret
+        # Keep legacy columns in sync so existing flows stay consistent.
+        u.alpaca_key, u.alpaca_secret = key, secret
+    else:
+        u.alpaca_key_live, u.alpaca_secret_live = key, secret
     db.commit()
-    return {"success": True}
+    logger.info("[KEYS] Saved Alpaca %s keys for user %s", mode, u.id)
+    return {"success": True, "mode": mode}
 
 @app.post("/broker/okx/keys")
 def save_okx_keys(body: OKXKeysModel, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
-    u.okx_key    = body.api_key.strip()
-    u.okx_secret = body.secret_key.strip()
-    u.okx_pass   = body.passphrase.strip()
+    mode = (body.mode or "paper").lower()
+    if mode not in ("paper", "live"):
+        raise HTTPException(status_code=400, detail="mode must be 'paper' or 'live'.")
+    key, secret, passphrase = body.api_key.strip(), body.secret_key.strip(), body.passphrase.strip()
+    if mode == "paper":
+        u.okx_key_paper, u.okx_secret_paper, u.okx_pass_paper = key, secret, passphrase
+        u.okx_key, u.okx_secret, u.okx_pass = key, secret, passphrase
+    else:
+        u.okx_key_live, u.okx_secret_live, u.okx_pass_live = key, secret, passphrase
     db.commit()
-    return {"success": True}
+    logger.info("[KEYS] Saved OKX %s keys for user %s", mode, u.id)
+    return {"success": True, "mode": mode}
+
+@app.get("/broker/keys")
+def get_broker_keys(u: User = Depends(get_current_user_from_cookie)):
+    """
+    Return the user's stored keys per exchange/mode so the Account UI can
+    auto-populate the boxes. Only ever returns the requesting user's own keys.
+    """
+    return keys_payload(u)
 
 @app.post("/broker/trading-mode")
 async def set_trading_mode(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
@@ -229,15 +264,17 @@ async def switch_broker(request: Request, u: User = Depends(get_current_user_fro
 def get_broker_account(u: User = Depends(get_current_user_from_cookie)):
     broker = u.active_broker or "alpaca"
     paper  = (u.trading_mode or "paper") == "paper"
+    mode_label = "Paper" if paper else "Live"
+    creds = resolve_credentials(u, broker, paper)
     try:
         if broker == "alpaca":
-            if not getattr(u, "alpaca_key", None):
-                raise HTTPException(status_code=400, detail="Alpaca API credentials not configured. Add them in Account → Alpaca API Keys.")
-            return get_account_info(broker="alpaca", alpaca_key=u.alpaca_key, alpaca_secret=u.alpaca_secret, paper=paper)
+            if not creds.get("alpaca_key"):
+                raise HTTPException(status_code=400, detail=f"No Alpaca {mode_label} API keys configured. Add them in Account → Alpaca API Keys.")
+            return get_account_info(broker="alpaca", paper=paper, **creds)
         elif broker == "okx":
-            if not getattr(u, "okx_key", None):
-                raise HTTPException(status_code=400, detail="OKX API credentials not configured. Add them in Account → OKX API Keys.")
-            return get_account_info(broker="okx", okx_key=u.okx_key, okx_secret=u.okx_secret, okx_passphrase=u.okx_pass, paper=paper)
+            if not creds.get("okx_key"):
+                raise HTTPException(status_code=400, detail=f"No OKX {mode_label} API keys configured. Add them in Account → OKX API Keys.")
+            return get_account_info(broker="okx", paper=paper, **creds)
     except HTTPException:
         raise
     except Exception as e:
@@ -282,12 +319,21 @@ def admin_users_list(request: Request, db: Session = Depends(get_db)):
 def get_system_logs(u: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     Returns the last 50 operational logs for the logged-in user.
+    Serialized to plain dicts so FastAPI doesn't choke on raw ORM rows.
     """
-    return db.query(ActivityLog)\
+    rows = db.query(ActivityLog)\
              .filter(ActivityLog.user_id == u.id)\
              .order_by(ActivityLog.created_at.desc())\
              .limit(50)\
              .all()
+    return [
+        {
+            "id": r.id,
+            "message": r.message,
+            "level": r.level,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        } for r in rows
+    ]
 
 @app.get("/bots")
 def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
@@ -297,6 +343,7 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "id": b.id,
             "name": b.name,
             "ticker": b.ticker,
+            "auto_select": b.auto_select,
             "broker": b.broker,
             "timeframe": b.timeframe,
             "funds_allocated": b.funds_allocated,
@@ -335,12 +382,14 @@ def get_news():
                 continue
             root = ET.fromstring(resp.content)
             items = []
+            from news_analysis import classify_headline_sentiment
             for item in root.findall(".//item")[:30]:
                 title    = (item.findtext("title") or "").strip()
                 link     = (item.findtext("link")  or "").strip()
                 pub_date = (item.findtext("pubDate") or "").strip()
                 if title and link:
-                    items.append({"title": title, "link": link, "pubDate": pub_date, "sentiment": "neutral"})
+                    items.append({"title": title, "link": link, "pubDate": pub_date,
+                                  "sentiment": classify_headline_sentiment(title)})
             if items:
                 return items
         except Exception as e:
@@ -387,12 +436,14 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
 
     limit = max(50, min(int(limit), 500))
     paper = (u.trading_mode or "paper") == "paper"
+    creds = resolve_credentials(u, ex, paper)
 
     try:
         analysis = get_market_analysis(
             broker=ex, symbol=symbol, timeframe=timeframe, limit=limit,
-            alpaca_key=u.alpaca_key, alpaca_secret=u.alpaca_secret,
-            okx_key=u.okx_key, okx_secret=u.okx_secret, okx_passphrase=u.okx_pass,
+            alpaca_key=creds.get("alpaca_key"), alpaca_secret=creds.get("alpaca_secret"),
+            okx_key=creds.get("okx_key"), okx_secret=creds.get("okx_secret"),
+            okx_passphrase=creds.get("okx_passphrase"),
             paper=paper,
         )
     except BrokerError as e:
@@ -495,14 +546,26 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
         except (TypeError, ValueError):
             return None
 
+    is_auto = bool(data.get("is_auto", True))
+    ticker_raw = (data.get("ticker") or "").strip().upper() or None
+    # Fully autonomous = autonomous mode with NO fixed ticker → engine picks the asset.
+    auto_select = bool(is_auto and not ticker_raw)
+
+    funds = float(data.get("funds_allocated", 0.0) or 0.0)
+    if funds <= 0:
+        raise HTTPException(status_code=400, detail="Allocate a funds amount greater than zero.")
+    if not auto_select and not ticker_raw:
+        raise HTTPException(status_code=400, detail="Manual bots require a ticker symbol.")
+
     new_bot = Bot(
         owner_id=u.id,
-        name=data.get("name", "Unnamed Bot"),
-        ticker=(data.get("ticker") or "UNKNOWN").upper(),
+        name=data.get("name") or (f"Autonomous {('OKX' if (data.get('broker') or u.active_broker)=='okx' else 'Alpaca')} Bot" if auto_select else "Unnamed Bot"),
+        ticker=ticker_raw,  # None for fully autonomous
         broker=data.get("broker") or (u.active_broker or "alpaca"),
         timeframe=data.get("timeframe") or "1h",
-        funds_allocated=float(data.get("funds_allocated", 0.0)),
-        is_auto=data.get("is_auto", True), # Added is_auto assignment to stop silent drops
+        funds_allocated=funds,
+        is_auto=is_auto, # Added is_auto assignment to stop silent drops
+        auto_select=auto_select,
         buy_limit=_num("buy_limit"),
         sell_limit=_num("sell_limit"),
         min_profit_pct=_num("min_profit_pct"),
@@ -514,8 +577,9 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
     db.add(new_bot)
     db.commit()
     db.refresh(new_bot)
-    logger.info("[BOT CREATED] id=%s ticker=%s broker=%s tf=%s funds=%s",
-                new_bot.id, new_bot.ticker, new_bot.broker, new_bot.timeframe, new_bot.funds_allocated)
+    logger.info("[BOT CREATED] id=%s ticker=%s auto_select=%s broker=%s tf=%s funds=%s",
+                new_bot.id, new_bot.ticker, new_bot.auto_select, new_bot.broker,
+                new_bot.timeframe, new_bot.funds_allocated)
     return {"status": "bot created", "bot_id": new_bot.id}
 
 @app.post("/bots/{bot_id}/toggle")

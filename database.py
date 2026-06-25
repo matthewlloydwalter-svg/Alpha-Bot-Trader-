@@ -12,8 +12,35 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL must be set in Railway variables.")
 
-# Postgres setup
-engine = create_engine(DATABASE_URL)
+# ── Railway / Postgres compliance ────────────────────────────────────
+# Railway (and Heroku-style providers) hand out URLs prefixed with the legacy
+# "postgres://" scheme, which SQLAlchemy 2.x + psycopg2 no longer recognize.
+# Normalize it to the canonical "postgresql+psycopg2://" form.
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+if DATABASE_URL.startswith("postgresql://") and "+psycopg2" not in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+_is_sqlite = DATABASE_URL.startswith("sqlite")
+
+# Pool settings tuned for Railway: pre_ping recovers from connections the
+# managed Postgres drops while idle; recycle keeps connections fresh. SQLite
+# (used for local/dev/testing) needs check_same_thread disabled instead.
+if _is_sqlite:
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        pool_pre_ping=True,
+    )
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+        max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "10")),
+    )
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -33,12 +60,25 @@ class User(Base):
     active_broker = Column(String, default="alpaca")
     total_deposited = Column(Float, default=0.0)
     total_withdrawn = Column(Float, default=0.0)
+    # ── Legacy single-set key columns (kept for backward compatibility) ──
     alpaca_key = Column(String, nullable=True)
     alpaca_secret = Column(String, nullable=True)
     okx_key = Column(String, nullable=True)
     okx_secret = Column(String, nullable=True)
     okx_pass = Column(String, nullable=True)
-    
+
+    # ── Per-mode credentials (paper vs live) ──
+    alpaca_key_paper = Column(String, nullable=True)
+    alpaca_secret_paper = Column(String, nullable=True)
+    alpaca_key_live = Column(String, nullable=True)
+    alpaca_secret_live = Column(String, nullable=True)
+    okx_key_paper = Column(String, nullable=True)
+    okx_secret_paper = Column(String, nullable=True)
+    okx_pass_paper = Column(String, nullable=True)
+    okx_key_live = Column(String, nullable=True)
+    okx_secret_live = Column(String, nullable=True)
+    okx_pass_live = Column(String, nullable=True)
+
     bots = relationship("Bot", back_populates="owner")
     trades = relationship("Trade", back_populates="owner")
     logs = relationship("ActivityLog", back_populates="owner") # Added relationship
@@ -49,13 +89,14 @@ class Bot(Base):
     id = Column(Integer, primary_key=True, index=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     name = Column(String, nullable=False)
-    ticker = Column(String, nullable=False)
+    ticker = Column(String, nullable=True)          # null = fully autonomous (engine picks the asset)
     broker = Column(String, default="alpaca")
     timeframe = Column(String, default="1h")        # candle interval the bot analyzes
     buy_limit = Column(Float, nullable=True)
     sell_limit = Column(Float, nullable=True)
     min_profit_pct = Column(Float, nullable=True)   # min % gain before a discretionary sell
     is_auto = Column(Boolean, default=True) # Added is_auto column to handle layout modes
+    auto_select = Column(Boolean, default=False)  # True = engine picks the asset (no fixed ticker)
     in_position = Column(Boolean, default=False)
     shares_held = Column(Float, default=0)
     avg_entry_price = Column(Float, nullable=True)
@@ -114,6 +155,7 @@ class ActivityLog(Base):
 _MIGRATIONS = {
     "bots": {
         "timeframe": "VARCHAR DEFAULT '1h'",
+        "auto_select": "BOOLEAN DEFAULT FALSE",
         "min_profit_pct": "FLOAT",
         "first_buy_price": "FLOAT",
         "first_buy_done": "BOOLEAN DEFAULT FALSE",
@@ -123,6 +165,18 @@ _MIGRATIONS = {
         "last_signal": "VARCHAR",
         "last_analysis_at": "TIMESTAMP",
         "last_pattern_summary": "VARCHAR",
+    },
+    "users": {
+        "alpaca_key_paper": "VARCHAR",
+        "alpaca_secret_paper": "VARCHAR",
+        "alpaca_key_live": "VARCHAR",
+        "alpaca_secret_live": "VARCHAR",
+        "okx_key_paper": "VARCHAR",
+        "okx_secret_paper": "VARCHAR",
+        "okx_pass_paper": "VARCHAR",
+        "okx_key_live": "VARCHAR",
+        "okx_secret_live": "VARCHAR",
+        "okx_pass_live": "VARCHAR",
     },
 }
 
@@ -141,6 +195,16 @@ def _run_additive_migrations():
                     if col not in present:
                         logger.info("[MIGRATION] Adding %s.%s", table, col)
                         conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} {ddl}'))
+
+            # Fully-autonomous bots need a NULLable ticker. SQLite can't ALTER a
+            # constraint in place (and recreates aren't worth it for dev DBs),
+            # so only relax this on Postgres where it matters for Railway.
+            if "bots" in existing_tables and not _is_sqlite:
+                try:
+                    conn.execute(text('ALTER TABLE bots ALTER COLUMN ticker DROP NOT NULL'))
+                    logger.info("[MIGRATION] Relaxed bots.ticker NOT NULL constraint")
+                except Exception as e:
+                    logger.debug("ticker NOT NULL relax skipped: %s", e)
     except Exception as e:
         logger.warning("Additive migration skipped: %s", e)
 
