@@ -190,7 +190,7 @@ async function triggerEmailVerification() {
   const btn = document.getElementById("verify-email-btn");
   btn.disabled = true; btn.textContent = "Sending...";
   try {
-    await api("/auth/send-verification", { method: "POST" });
+    await api("/auth/trigger-verification", { method: "POST" });
     toast("Verification code sent to inbox!", "success");
     document.getElementById("verify-modal").classList.remove("hidden");
   } catch (e) { toast(e, "error"); } 
@@ -203,7 +203,7 @@ async function submitVerificationCode() {
   const code = document.getElementById("verification-input-code").value.trim();
   if (code.length !== 6) return toast("Code must be 6 characters", "error");
   try {
-    await api("/auth/verify-email", { method: "POST", body: JSON.stringify({ code }) });
+    await api("/auth/confirm-verification", { method: "POST", body: JSON.stringify({ code }) });
     toast("Email verification complete!", "success");
     closeVerificationModal();
     await refreshUserData();
