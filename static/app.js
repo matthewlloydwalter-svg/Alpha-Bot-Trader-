@@ -411,10 +411,10 @@ function togglePassword(inputId, robotId) {
     }
 
     if (passwordInput.type === 'password') {
-    passwordInput.type = 'text';
-    robotIcon.src = 'show-password.jpeg';
-} else {
-    passwordInput.type = 'password';
-    robotIcon.src = 'hide-password.jpeg';
+        passwordInput.type = 'text';
+        robotIcon.src = '/static/show-password.jpeg';
+    } else {
+        passwordInput.type = 'password';
+        robotIcon.src = '/static/hide-password.jpeg';
+    }
 }
-  }
