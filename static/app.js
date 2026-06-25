@@ -72,6 +72,11 @@ async function handleRegister(e) {
   } catch (err) { toast(err, "error"); }
 }
 
+function openTosModal(e) {
+  if (e) e.preventDefault();
+  window.open('/terms', '_blank');
+}
+
 async function handleLogoutClick() {
   try { await api("/auth/logout", { method: "POST" }); location.reload(); } 
   catch (e) { location.reload(); }
