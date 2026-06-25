@@ -281,3 +281,20 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
     z-index: 10;
     pointer-events: auto;
 }
+
+/* ══════════════════════════════════════════════
+   SPECIFICITY FIX — sticky topbar & nav
+   #main-app>* (1,0,0) was overriding position:sticky
+   on .topbar (0,1,0) and nav (0,0,1), turning
+   top:64px into a relative offset (the visible gap).
+   These rules have specificity 1,1,0 / 1,0,1 → win.
+══════════════════════════════════════════════ */
+#main-app .topbar { position: sticky; top: 0; }
+#main-app .nav    { position: sticky; top: var(--topbar-h); }
+
+/* ══ Mode-toggle buttons (Trading Mode & Broker cards) ══ */
+.mode-toggle { display:flex; border:1px solid var(--border2); border-radius:8px; overflow:hidden; width:fit-content; }
+.mode-btn { padding:7px 16px; background:transparent; border:none; border-right:1px solid var(--border2); color:var(--t2); font-size:13px; font-family:inherit; cursor:pointer; transition:all .15s; white-space:nowrap; }
+.mode-btn:last-child { border-right:none; }
+.mode-btn:hover { background:var(--bg3); color:var(--t1); }
+.mode-btn.active { background:var(--blue); color:#fff; }
