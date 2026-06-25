@@ -57,13 +57,13 @@ class VerificationChallengeModel(BaseModel):
     code: str
 
 class AlpacaKeysModel(BaseModel):
-    alpaca_key: str
-    alpaca_secret: str
+    api_key: str
+    secret_key: str
 
 class OKXKeysModel(BaseModel):
-    okx_key: str
-    okx_secret: str
-    okx_pass: str
+    api_key: str
+    secret_key: str
+    passphrase: str
 
 def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)) -> User:
     token = request.cookies.get("session_token")
@@ -123,29 +123,27 @@ def login_endpoint(body: AuthModel, response: Response, db: Session = Depends(ge
     response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400)
     
     return {
-        "id": user.id, 
-        "email": user.email, 
-        "is_admin": user.is_admin, 
+        "id": user.id,
+        "email": user.email,
+        "is_admin": user.is_admin,
         "email_verified": user.email_verified,
-        # --- NEW FIELDS FOR FRONTEND ---
-        "trading_mode": "paper",
-        "active_broker": "alpaca",
-        "total_deposited": 0.0,
-        "total_withdrawn": 0.0
+        "trading_mode": user.trading_mode or "paper",
+        "active_broker": user.active_broker or "alpaca",
+        "total_deposited": user.total_deposited or 0.0,
+        "total_withdrawn": user.total_withdrawn or 0.0,
     }
 
 @app.get("/auth/me")
 def current_user_endpoint(u: User = Depends(get_current_user_from_cookie)):
     return {
-        "id": u.id, 
-        "email": u.email, 
-        "is_admin": u.is_admin, 
+        "id": u.id,
+        "email": u.email,
+        "is_admin": u.is_admin,
         "email_verified": u.email_verified,
-        # --- NEW FIELDS FOR FRONTEND ---
-        "trading_mode": "paper",
-        "active_broker": "alpaca",
-        "total_deposited": 0.0,
-        "total_withdrawn": 0.0
+        "trading_mode": u.trading_mode or "paper",
+        "active_broker": u.active_broker or "alpaca",
+        "total_deposited": u.total_deposited or 0.0,
+        "total_withdrawn": u.total_withdrawn or 0.0,
     }
 
 @app.post("/auth/logout")
@@ -173,30 +171,54 @@ def confirm_verification(body: VerificationChallengeModel, u: User = Depends(get
 
 @app.post("/broker/alpaca/keys")
 def save_alpaca_keys(body: AlpacaKeysModel, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
-    u.alpaca_key = body.alpaca_key.strip()
-    u.alpaca_secret = body.alpaca_secret.strip()
+    u.alpaca_key    = body.api_key.strip()
+    u.alpaca_secret = body.secret_key.strip()
     db.commit()
     return {"success": True}
 
 @app.post("/broker/okx/keys")
 def save_okx_keys(body: OKXKeysModel, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
-    u.okx_key = body.okx_key.strip()
-    u.okx_secret = body.okx_secret.strip()
-    u.okx_pass = body.okx_pass.strip()
+    u.okx_key    = body.api_key.strip()
+    u.okx_secret = body.secret_key.strip()
+    u.okx_pass   = body.passphrase.strip()
     db.commit()
     return {"success": True}
 
-@app.post("/broker/switch")
-async def switch_broker(request: Request):
+@app.post("/broker/trading-mode")
+async def set_trading_mode(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     data = await request.json()
-    return {"status": "switched"}
+    mode = data.get("mode", "paper")
+    if mode not in ["paper", "live"]:
+        raise HTTPException(status_code=400, detail="Invalid mode. Use 'paper' or 'live'.")
+    u.trading_mode = mode
+    db.commit()
+    return {"trading_mode": u.trading_mode}
+
+@app.post("/broker/switch")
+async def switch_broker(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    data = await request.json()
+    broker = data.get("broker", "alpaca")
+    if broker not in ["alpaca", "okx"]:
+        raise HTTPException(status_code=400, detail="Invalid broker. Use 'alpaca' or 'okx'.")
+    u.active_broker = broker
+    db.commit()
+    return {"active_broker": u.active_broker}
 
 @app.get("/broker/account")
 def get_broker_account(u: User = Depends(get_current_user_from_cookie)):
-    if not getattr(u, 'alpaca_key', None):
-        raise HTTPException(status_code=400, detail="API credentials unconfigured.")
+    broker = u.active_broker or "alpaca"
+    paper  = (u.trading_mode or "paper") == "paper"
     try:
-        return get_account_info(broker="alpaca", alpaca_key=u.alpaca_key, alpaca_secret=u.alpaca_secret, paper=True)
+        if broker == "alpaca":
+            if not getattr(u, "alpaca_key", None):
+                raise HTTPException(status_code=400, detail="Alpaca API credentials not configured. Add them in Account → Alpaca API Keys.")
+            return get_account_info(broker="alpaca", alpaca_key=u.alpaca_key, alpaca_secret=u.alpaca_secret, paper=paper)
+        elif broker == "okx":
+            if not getattr(u, "okx_key", None):
+                raise HTTPException(status_code=400, detail="OKX API credentials not configured. Add them in Account → OKX API Keys.")
+            return get_account_info(broker="okx", okx_key=u.okx_key, okx_secret=u.okx_secret, okx_passphrase=u.okx_pass, paper=paper)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -257,8 +279,52 @@ async def withdraw_cash(request: Request):
     return {"status": "withdrawal processed"}
 
 @app.get("/bots")
-async def get_bots():
-    return {"bots": []} 
+def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    bots = db.query(Bot).filter(Bot.owner_id == u.id).all()
+    return [
+        {
+            "id": b.id,
+            "name": b.name,
+            "ticker": b.ticker,
+            "funds_allocated": b.funds_allocated,
+            "running": b.running,
+            "trade_count": b.trade_count,
+        }
+        for b in bots
+    ]
+
+@app.get("/api/news")
+def get_news():
+    """Server-side RSS proxy — avoids browser CORS restrictions."""
+    import requests as req
+    import xml.etree.ElementTree as ET
+
+    feeds = [
+        "https://feeds.marketwatch.com/marketwatch/topstories/",
+        "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+        "https://finance.yahoo.com/news/rssindex",
+    ]
+
+    for url in feeds:
+        try:
+            resp = req.get(url, timeout=7, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code != 200:
+                continue
+            root = ET.fromstring(resp.content)
+            items = []
+            for item in root.findall(".//item")[:30]:
+                title    = (item.findtext("title") or "").strip()
+                link     = (item.findtext("link")  or "").strip()
+                pub_date = (item.findtext("pubDate") or "").strip()
+                if title and link:
+                    items.append({"title": title, "link": link, "pubDate": pub_date, "sentiment": "neutral"})
+            if items:
+                return items
+        except Exception as e:
+            logger.warning(f"News feed failed ({url}): {e}")
+            continue
+
+    return []
 
 @app.post("/bots")
 async def create_bot(request: Request):
