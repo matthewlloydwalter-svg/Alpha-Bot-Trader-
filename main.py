@@ -7,6 +7,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
@@ -24,6 +26,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 logger = logging.getLogger("alphabot")
 
 app = FastAPI(title=f"{PLATFORM_NAME} Engine Core")
+
+mount("/static", StaticFiles(directory="static"), name="static")
 
 app.add_middleware(
     CORSMiddleware,
