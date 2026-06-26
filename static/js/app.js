@@ -873,9 +873,9 @@ function togglePassword(inputId, robotId, evt) {
 
     if (passwordInput.type === 'password') {
         passwordInput.type = 'text';
-        robotIcon.src = '/static/show-password.png';
+        robotIcon.src = '/static/images/show-password.png';
     } else {
         passwordInput.type = 'password';
-        robotIcon.src = '/static/hide-password.png';
+        robotIcon.src = '/static/images/hide-password.png';
     }
 }

@@ -15,8 +15,8 @@ import time
 import logging
 import threading
 
-from brokers import get_candles, BrokerError
-from pattern_analysis import Candle, analyze_candles, Analysis
+from app.brokers import get_candles, BrokerError
+from app.pattern_analysis import Candle, analyze_candles, Analysis
 
 logger = logging.getLogger("alphabot.marketdata")
 

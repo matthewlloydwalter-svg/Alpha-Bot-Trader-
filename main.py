@@ -14,17 +14,17 @@ from sqlalchemy.orm import Session
 
 load_dotenv()
 
-from database import engine, Base, init_db, get_db, SessionLocal, User, Bot, Trade, ActivityLog
-from auth import (
+from app.database import engine, Base, init_db, get_db, SessionLocal, User, Bot, Trade, ActivityLog
+from app.auth import (
     hash_password, verify_password, create_session_token, decode_session_token,
     generate_verification_code, send_verification_email, is_user_admin, PLATFORM_NAME,
     get_current_user, EmailError
 )
-from brokers import get_account_info, get_spot_price, BrokerError
-from market_data import get_market_analysis
-from markets_universe import MARKET_UNIVERSE
-from credentials import resolve_credentials, has_credentials, keys_payload
-import bot_engine # Imported bot engine to wire up the run-cycle logic
+from app.brokers import get_account_info, get_spot_price, BrokerError
+from app.market_data import get_market_analysis
+from app.markets_universe import MARKET_UNIVERSE
+from app.credentials import resolve_credentials, has_credentials, keys_payload
+from app import bot_engine  # Imported bot engine to wire up the run-cycle logic
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("alphabot")
@@ -382,7 +382,7 @@ def get_news():
                 continue
             root = ET.fromstring(resp.content)
             items = []
-            from news_analysis import classify_headline_sentiment
+            from app.news_analysis import classify_headline_sentiment
             for item in root.findall(".//item")[:30]:
                 title    = (item.findtext("title") or "").strip()
                 link     = (item.findtext("link")  or "").strip()
@@ -466,7 +466,7 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
 
 def _collect_bot_status(user_id: int, exchange: str, symbol: str) -> dict:
     """Summarize what the internal bots think/are doing for this asset."""
-    from database import SessionLocal
+    from app.database import SessionLocal
     db = SessionLocal()
     try:
         bots = db.query(Bot).filter(
