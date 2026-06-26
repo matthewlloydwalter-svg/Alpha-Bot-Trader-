@@ -1,5 +1,8 @@
 import os
+import json
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -11,10 +14,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
+from sse_starlette.sse import EventSourceResponse
 
 load_dotenv()
 
-from app.database import engine, Base, init_db, get_db, SessionLocal, User, Bot, Trade, ActivityLog
+from app.database import engine, Base, init_db, get_db, SessionLocal, User, Bot, Trade, ActivityLog, MarketQuote
 from app.auth import (
     hash_password, verify_password, create_session_token, decode_session_token,
     generate_verification_code, send_verification_email, is_user_admin, PLATFORM_NAME,
@@ -25,11 +29,31 @@ from app.market_data import get_market_analysis
 from app.markets_universe import MARKET_UNIVERSE
 from app.credentials import resolve_credentials, has_credentials, keys_payload
 from app import bot_engine  # Imported bot engine to wire up the run-cycle logic
+from app import market_store, ai_assistant
+from app.realtime import bus
+from app import scheduler as engine_scheduler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("alphabot")
 
-app = FastAPI(title=f"{PLATFORM_NAME} Engine Core")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Capture the running event loop so background worker threads can stream
+    # events to SSE subscribers, then start the always-on background engine.
+    try:
+        bus.bind_loop(asyncio.get_running_loop())
+    except RuntimeError:
+        pass
+    engine_scheduler.start_scheduler()
+    logger.info("[STARTUP] %s engine core online.", PLATFORM_NAME)
+    try:
+        yield
+    finally:
+        engine_scheduler.shutdown_scheduler()
+
+
+app = FastAPI(title=f"{PLATFORM_NAME} Engine Core", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -282,16 +306,31 @@ def get_broker_account(u: User = Depends(get_current_user_from_cookie)):
 
 @app.get("/broker/trades-ledger")
 def get_trades_ledger(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
-    # Query database and map trade results clean
+    # Query database and map trade results with full quantity + bot attribution.
     records = db.query(Trade).filter(Trade.owner_id == u.id).order_by(Trade.created_at.desc()).all()
+    bot_names = {b.id: b.name for b in db.query(Bot).filter(Bot.owner_id == u.id).all()}
+
+    def _qty(r):
+        # Never surface a misleading 0: reconstruct from notional/price if needed.
+        if r.qty:
+            return float(r.qty)
+        if r.notional and r.price:
+            return float(r.notional) / float(r.price)
+        return 0.0
+
     return [
         {
             "id": r.id,
             "ticker": r.ticker,
             "side": r.side,
-            "qty": r.qty,
+            "qty": round(_qty(r), 8),
+            "notional": r.notional,
             "price": r.price,
             "mode": r.mode,
+            "broker": r.broker,
+            "bot_id": r.bot_id,
+            "bot_uuid": r.bot_uuid,
+            "bot_name": bot_names.get(r.bot_id, "Manual / Unlinked" if r.bot_id is None else f"Bot #{r.bot_id}"),
             "created_at": r.created_at.isoformat()
         } for r in records
     ]
@@ -416,7 +455,8 @@ def list_markets(exchange: str):
 
 @app.get("/api/markets/{exchange}/{symbol}/dashboard")
 def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: int = 200,
-                     u: User = Depends(get_current_user_from_cookie)):
+                     u: User = Depends(get_current_user_from_cookie),
+                     db: Session = Depends(get_db)):
     """
     The heart of the clickable Market Dashboard.
 
@@ -449,6 +489,21 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
     except BrokerError as e:
         logger.warning("Dashboard data unavailable for %s:%s — %s", ex, symbol, e)
         raise HTTPException(status_code=502, detail=str(e))
+
+    # Keep the live market-of-record fresh from this on-demand fetch too.
+    try:
+        candle_ts = analysis.candles[-1]["time"] if analysis.candles else None
+        market_store.upsert_quote(db, ex, symbol, analysis.last_price,
+                                  signal_action=analysis.signal.action,
+                                  signal_strength=analysis.signal.strength,
+                                  candle_ts=candle_ts)
+        bus.publish("market_quote", {
+            "broker": ex, "symbol": symbol.upper(), "price": analysis.last_price,
+            "signal_action": analysis.signal.action,
+            "signal_strength": analysis.signal.strength,
+        })
+    except Exception:
+        pass
 
     # Find the user's bot(s) trading this asset to surface "Internal Bot Status".
     bot_status = _collect_bot_status(u.id, ex, symbol)
@@ -583,12 +638,36 @@ def portfolio_performance(u: User = Depends(get_current_user_from_cookie), db: S
 
         series_map[ts] = round(cumulative, 2)
 
+    # Bind every marker to the exact line value at its timestamp so the
+    # scatter dots sit ON the portfolio line (chronologically AND vertically),
+    # instead of floating at an arbitrary offset.
+    for m in markers:
+        m["value"] = series_map.get(m["time"], round(cumulative, 2))
+
+    # ── Live tail: extend the line to "now" with unrealized mark-to-market so
+    # the curve tracks the real-time feed instead of freezing at the last sell.
+    unrealized = 0.0
+    for b in bots:
+        if b.in_position and b.avg_entry_price and b.shares_held:
+            q = market_store.get_quote(db, b.broker or "alpaca", b.ticker or "")
+            mark = q.price if (q and q.price) else b.avg_entry_price
+            unrealized += (float(mark) - float(b.avg_entry_price)) * float(b.shares_held)
+
+    live_value = round(cumulative + unrealized, 2)
     series = [{"time": ts, "value": v} for ts, v in sorted(series_map.items())]
+    if series:
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        if now_ts > series[-1]["time"]:
+            series.append({"time": now_ts, "value": live_value})
+        else:
+            series[-1] = {"time": series[-1]["time"], "value": live_value}
     markers.sort(key=lambda m: m["time"])
 
     return {
         "funds_allocated": round(funds_allocated, 2),
         "net_position": round(cumulative, 2),
+        "unrealized": round(unrealized, 2),
+        "live_value": live_value,
         "trade_count": len(trades),
         "series": series,
         "markers": markers,
@@ -698,33 +777,124 @@ async def run_bot_cycle_endpoint(bot_id: int, u: User = Depends(get_current_user
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Optional background autonomous engine ────────────────────────────
-# Disabled by default for safety. Set BOT_AUTORUN=1 (and an interval via
-# BOT_SCAN_INTERVAL seconds) to let the engine continuously scan + act on
-# every running bot without a manual trigger.
-def _start_autonomous_engine():
-    import threading
-    import time
+# ── Live data streaming (Server-Sent Events) ─────────────────────────
+@app.get("/stream/updates")
+async def stream_updates(request: Request, db: Session = Depends(get_db)):
+    """
+    Server-Sent Events feed that streams market-quote, trade and portfolio
+    events from the always-on background engine to the browser. Replaces manual
+    refresh: the frontend subscribes once and reacts to pushes.
 
-    interval = int(os.getenv("BOT_SCAN_INTERVAL", "300"))
+    Market quotes are broadcast to everyone; trade/portfolio events are scoped
+    to the authenticated user.
+    """
+    try:
+        user = get_current_user_from_cookie(request, db)
+        user_id = user.id
+    except HTTPException:
+        user_id = None  # allow anonymous market-quote stream
 
-    def _loop():
-        logger.info("[ENGINE] Autonomous scanner started (interval=%ss)", interval)
-        while True:
-            time.sleep(interval)
-            try:
-                summary = bot_engine.run_all_active_bots()
-                logger.info("[ENGINE] Autonomous scan complete: %s", summary)
-            except Exception as e:
-                logger.error("[ENGINE] Autonomous scan error: %s", e)
+    queue = bus.subscribe(user_id=user_id)
 
-    t = threading.Thread(target=_loop, name="alphabot-engine", daemon=True)
-    t.start()
+    async def event_generator():
+        # Initial hello so the client flips to "live" immediately.
+        yield {"event": "hello", "data": '{"ok": true}'}
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=20.0)
+                    yield {"event": payload.get("type", "message"),
+                           "data": json.dumps(payload.get("data", {}))}
+                except asyncio.TimeoutError:
+                    # Heartbeat keeps proxies (Railway) from closing the stream.
+                    yield {"event": "ping", "data": "{}"}
+        finally:
+            bus.unsubscribe(queue)
+
+    return EventSourceResponse(event_generator())
 
 
-@app.on_event("startup")
-def _on_startup():
-    if os.getenv("BOT_AUTORUN", "0") in ("1", "true", "True", "yes"):
-        _start_autonomous_engine()
-    else:
-        logger.info("[ENGINE] Autonomous scanner disabled (set BOT_AUTORUN=1 to enable).")
+@app.get("/api/market/quotes")
+def market_quotes(broker: Optional[str] = None, u: User = Depends(get_current_user_from_cookie),
+                  db: Session = Depends(get_db)):
+    """Latest stored quotes from the background poller (database-of-record)."""
+    rows = market_store.get_quotes(db, broker)
+    return [market_store.quote_to_dict(r) for r in rows]
+
+
+# ── Admin AI assistant (secure, human-in-the-loop) ───────────────────
+class AIAuditModel(BaseModel):
+    prompt: str
+    paths: Optional[list[str]] = None
+
+
+class AIProposalModel(BaseModel):
+    proposal_id: str
+
+
+def _require_admin(request: Request, db: Session) -> User:
+    u = get_current_user_from_cookie(request, db)
+    if not u.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    return u
+
+
+@app.get("/admin/ai/status")
+def ai_status(request: Request, db: Session = Depends(get_db)):
+    _require_admin(request, db)
+    return ai_assistant.provider_status()
+
+
+@app.get("/admin/ai/files")
+def ai_files(request: Request, db: Session = Depends(get_db)):
+    _require_admin(request, db)
+    return {"files": ai_assistant.list_repo_files()}
+
+
+@app.get("/admin/ai/file")
+def ai_file(path: str, request: Request, db: Session = Depends(get_db)):
+    _require_admin(request, db)
+    try:
+        return {"path": path, "content": ai_assistant.read_file(path)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/admin/ai/audit")
+def ai_audit(body: AIAuditModel, request: Request, db: Session = Depends(get_db)):
+    """
+    Run an audit/edit request. Returns findings + a unified-diff PREVIEW of any
+    proposed changes plus a proposal_id. NOTHING is written until /admin/ai/approve.
+    """
+    _require_admin(request, db)
+    if not (body.prompt or "").strip():
+        raise HTTPException(status_code=400, detail="Prompt is required.")
+    try:
+        return ai_assistant.audit(body.prompt.strip(), body.paths)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("AI audit failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"AI audit failed: {e}")
+
+
+@app.post("/admin/ai/approve")
+def ai_approve(body: AIProposalModel, request: Request, db: Session = Depends(get_db)):
+    """APPROVE — explicitly apply a previously-previewed proposal to disk."""
+    u = _require_admin(request, db)
+    try:
+        result = ai_assistant.apply_proposal(body.proposal_id)
+        logger.warning("[AI] Admin %s APPROVED proposal %s -> wrote %s",
+                       u.email, body.proposal_id, result.get("written"))
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/admin/ai/deny")
+def ai_deny(body: AIProposalModel, request: Request, db: Session = Depends(get_db)):
+    """DENY — discard a pending proposal without writing anything."""
+    _require_admin(request, db)
+    return ai_assistant.deny_proposal(body.proposal_id)

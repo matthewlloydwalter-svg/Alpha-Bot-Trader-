@@ -1,5 +1,46 @@
 # AlphaBot Backend — Full Stack
 
+## Always-on, event-driven architecture (new)
+
+The trading engine is fully decoupled from the frontend. Two background worker
+loops (APScheduler, thread-backed) run independently of any HTTP request and are
+started/stopped via the FastAPI lifespan:
+
+- **Market-data worker** (`app/scheduler.py: poll_market_data`) fetches live data
+  24/7 and continuously upserts it into Postgres (`market_quotes`), then streams
+  each update over SSE. This is the database-of-record for prices, so values
+  never freeze waiting on a page refresh.
+- **Bot-evaluation worker** (`evaluate_bots`) re-evaluates every running bot
+  against the stored market state and executes trades automatically.
+
+**Live streaming:** the browser subscribes once to `GET /stream/updates`
+(Server-Sent Events). Market quotes are broadcast; trade/portfolio events are
+scoped to the authenticated user. No more manual refresh.
+
+**Integrity:** every `Bot` has an immutable `uuid`; every `Trade` records the
+exact `qty`, `notional`, `price`, `created_at`, the linking `bot_id` AND the
+immutable `bot_uuid`. Cross-bot capital rotation is **off by default**
+(`BOT_CAPITAL_ROTATION=1` to enable) so a bot only ever manages its own position.
+
+**Admin AI assistant:** `templates/admin.html` exposes a secure, admin-only chat
+box. `POST /admin/ai/audit` lets an LLM (Anthropic/OpenAI) scan & read the repo
+and return a unified-diff preview of proposed edits; nothing is written until an
+admin explicitly hits Approve (`/admin/ai/approve`) — Deny discards.
+
+### Relevant environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ENGINE_ENABLED` | `1` | Master switch for the background engine. |
+| `MARKET_POLL_INTERVAL` | `30` | Seconds between market-data polls. |
+| `BOT_SCAN_INTERVAL` | `60` | Seconds between bot evaluation cycles. |
+| `MARKET_WATCHLIST_LIMIT` | `20` | Symbols/broker polled even without a bot. |
+| `ALPACA_DATA_KEY` / `ALPACA_DATA_SECRET` | — | Server keys to poll the Alpaca watchlist. |
+| `BOT_CAPITAL_ROTATION` | `0` | Allow a bot to liquidate another bot's position. |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | — | LLM provider for the Admin AI assistant. |
+
+
+
 ## Does this match the standard FastAPI-on-Railway structure?
 
 Yes — your pro-tip layout is exactly right, with one addition (a `.env`

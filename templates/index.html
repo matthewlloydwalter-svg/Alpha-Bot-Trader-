@@ -127,7 +127,10 @@
               <span style="margin-left:10px">· times shown in UTC · click a dot for details</span>
             </div>
           </div>
-          <button class="btn btn-sm" onclick="loadPortfolioPerformance()">🔄 Refresh</button>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span id="live-indicator" class="badge badge-amber" title="Live data stream">● Connecting…</span>
+            <button class="btn btn-sm" onclick="loadPortfolioPerformance()">🔄 Refresh</button>
+          </div>
         </div>
         <div id="perf-chart-wrap" class="perf-chart-wrap">
           <div id="perf-chart"></div>
@@ -193,10 +196,10 @@
         <div class="table-wrap">
           <table class="data-table">
             <thead>
-              <tr><th>Timestamp</th><th>Ticker</th><th>Action</th><th>Quantity</th><th>Price</th><th>Environment</th></tr>
+              <tr><th>Timestamp</th><th>Bot</th><th>Ticker</th><th>Action</th><th>Quantity</th><th>Price</th><th>Environment</th></tr>
             </thead>
             <tbody id="history-table-body">
-              <tr><td colspan="6" style="color:var(--t2)">No trades logged yet.</td></tr>
+              <tr><td colspan="7" style="color:var(--t2)">No trades logged yet.</td></tr>
             </tbody>
           </table>
         </div>

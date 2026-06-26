@@ -40,6 +40,36 @@
         <p style="color:var(--t2)">Querying database records...</p>
       </div>
     </div>
+
+    <div class="card" id="ai-assistant-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:6px">
+        <div class="slbl" style="margin-bottom:0">🧠 AI Code Assistant</div>
+        <span id="ai-provider-status" class="badge badge-amber">Checking provider…</span>
+      </div>
+      <div class="info-banner" style="margin-bottom:12px">
+        Ask the assistant to audit the codebase for bugs or request changes. It can read the
+        frontend &amp; backend source, but <b>nothing is written to disk</b> until you review the
+        diff and click <b>Approve</b>. Click <b>Deny</b> to discard. Admin-only.
+      </div>
+      <textarea id="ai-prompt" rows="4" placeholder="e.g. Audit main.py and bot_engine.py for logical errors and propose fixes."
+        style="width:100%;resize:vertical;font-family:inherit;padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--t1)"></textarea>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-primary btn-sm" id="ai-audit-btn" onclick="runAiAudit()">🔍 Audit / Propose Changes</button>
+        <button class="btn btn-sm" onclick="document.getElementById('ai-prompt').value='Scan the entire repository for logical errors, syntax bugs and security issues. List findings; only propose edits for clear, safe fixes.'">📋 Full audit prompt</button>
+      </div>
+
+      <div id="ai-output" style="margin-top:16px"></div>
+
+      <div id="ai-proposal" class="hidden" style="margin-top:16px">
+        <div class="slbl">Proposed changes (preview)</div>
+        <div id="ai-diffs"></div>
+        <div style="display:flex;gap:10px;margin-top:12px">
+          <button class="btn btn-primary btn-sm" id="ai-approve-btn" onclick="approveAiProposal()">✅ Approve &amp; Apply</button>
+          <button class="btn btn-danger btn-sm" id="ai-deny-btn" onclick="denyAiProposal()">⛔ Deny</button>
+        </div>
+        <div style="font-size:11px;color:var(--t3);margin-top:8px">Approving writes these files on the server. Review every diff first.</div>
+      </div>
+    </div>
   </main>
 
   <script src="/static/js/admin.js"></script>
