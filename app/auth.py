@@ -7,13 +7,13 @@ from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from jose import jwt, JWTError
-from config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
+from app.config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
 
 logger = logging.getLogger("AlphaBot Trading")
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
-from database import User, get_db
+from app.database import User, get_db
 
 def get_current_user(request: Request, db: Session = Depends(get_db)):
     token = request.cookies.get("session_token")

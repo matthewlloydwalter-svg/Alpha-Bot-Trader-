@@ -36,13 +36,13 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from database import Bot, Trade, User, ActivityLog, SessionLocal
-from brokers import place_order, get_account_info, BrokerError
-from market_data import get_market_analysis
-from markets_universe import MARKET_UNIVERSE
-from credentials import resolve_credentials
-from news_analysis import get_asset_sentiment
-from pattern_analysis import Analysis
+from app.database import Bot, Trade, User, ActivityLog, SessionLocal
+from app.brokers import place_order, get_account_info, BrokerError
+from app.market_data import get_market_analysis
+from app.markets_universe import MARKET_UNIVERSE
+from app.credentials import resolve_credentials
+from app.news_analysis import get_asset_sentiment
+from app.pattern_analysis import Analysis
 
 logger = logging.getLogger("alphabot.engine")
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ PLATFORM_NAME }}</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
 
@@ -14,7 +14,7 @@
   <div class="auth-wrap">
     <div style="width:100%;max-width:520px">
       <div style="text-align:center;margin-bottom:2rem">
-        <img src="/static/alphabot-trading-logo.png" alt="{{ PLATFORM_NAME }} logo" class="auth-logo">
+        <img src="/static/images/alphabot-trading-logo.png" alt="{{ PLATFORM_NAME }} logo" class="auth-logo">
         <div class="brand-title" style="font-size:28px;font-weight:700;letter-spacing:-.5px">{{ PLATFORM_NAME }}</div>
         <div style="font-size:14px;color:var(--t2);margin-top:6px">AI-powered autonomous trading</div>
       </div>
@@ -29,7 +29,7 @@
               <label for="login-password">Password</label>
               <div class="input-icon-wrap">
                 <input type="password" id="login-password" required placeholder="••••••••">
-                <img src="/static/hide-password.png" id="robot-login" onclick="togglePassword('login-password', 'robot-login', event)">
+                <img src="/static/images/hide-password.png" id="robot-login" onclick="togglePassword('login-password', 'robot-login', event)">
               </div>
             </div>
             <button type="submit" class="btn btn-primary" style="width:100%;margin-top:6px">Sign In</button>
@@ -50,14 +50,14 @@
               <label for="reg-password">Password</label>
               <div class="input-icon-wrap">
                 <input type="password" id="reg-password" required placeholder="Minimum 6 characters">
-                <img src="/static/hide-password.png" id="robot-reg" onclick="togglePassword('reg-password', 'robot-reg', event)">
+                <img src="/static/images/hide-password.png" id="robot-reg" onclick="togglePassword('reg-password', 'robot-reg', event)">
               </div>
             </div>
             <div class="field">
               <label for="reg-confirm">Confirm Password</label>
               <div class="input-icon-wrap">
                 <input type="password" id="reg-confirm" required placeholder="Confirm password">
-                <img src="/static/hide-password.png" id="robot-reg-confirm" onclick="togglePassword('reg-confirm', 'robot-reg-confirm', event)">
+                <img src="/static/images/hide-password.png" id="robot-reg-confirm" onclick="togglePassword('reg-confirm', 'robot-reg-confirm', event)">
               </div>
             </div>
             <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--t2);cursor:pointer;line-height:1.6">
@@ -78,7 +78,7 @@
 <div id="main-app" class="hidden">
   <div class="topbar">
     <div class="topbar-left">
-      <img src="/static/alphabot-trading-logo.png" alt="{{ PLATFORM_NAME }} logo" class="brand-logo">
+      <img src="/static/images/alphabot-trading-logo.png" alt="{{ PLATFORM_NAME }} logo" class="brand-logo">
       <span class="logo-text">{{ PLATFORM_NAME }}</span>
       <span id="mode-badge" class="badge badge-green">● Paper</span>
       <span id="broker-badge" class="badge badge-blue">Alpaca</span>
@@ -422,6 +422,6 @@
 </div>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="/static/app.js"></script>
+<script src="/static/js/app.js"></script>
 </body>
 </html>
