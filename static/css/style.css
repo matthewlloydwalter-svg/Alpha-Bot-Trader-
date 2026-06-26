@@ -303,7 +303,8 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 
 /* ══ Brand logo + wordmark ══ */
 .brand-logo{height:34px;width:34px;border-radius:50%;object-fit:contain;display:block;flex-shrink:0}
-.auth-logo{height:96px;width:96px;border-radius:50%;object-fit:contain;display:block;margin:0 auto 14px}
+/* Sign-in page logo: larger for visibility; bottom margin separates it from the title */
+.auth-logo{height:148px;width:148px;border-radius:50%;object-fit:contain;display:block;margin:0 auto 20px}
 .brand-title{color:var(--brand)}
 
 /* ══ Sign-in page: match the dashboard background + grid overlay ══ */

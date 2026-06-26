@@ -113,7 +113,7 @@ def admin_pane(request: Request, db: Session = Depends(get_db)):
         if not u.is_admin:
             return RedirectResponse(url="/")
         return templates.TemplateResponse("admin.html", {"request": request, "PLATFORM_NAME": PLATFORM_NAME})
-    except:
+    except Exception:
         return templates.TemplateResponse("index.html", {"request": request, "PLATFORM_NAME": PLATFORM_NAME})
 
 @app.post("/auth/signup")

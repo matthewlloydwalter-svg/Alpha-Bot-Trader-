@@ -145,88 +145,147 @@ def okx_place_order(exchange: ccxt.okx, symbol: str, side: str, qty: float = Non
 #   {"ts": int(epoch_seconds), "open","high","low","close","volume"}
 # so the pattern layer never has to know which exchange it came from.
 
+def _clean_key(raw: str) -> str:
+    """
+    Strip leading/trailing ASCII whitespace PLUS any Unicode control/format
+    characters (zero-width spaces, invisible separators, etc.) that str.strip()
+    doesn't remove, then collapse any internal whitespace to nothing.
+    This catches keys that were copy-pasted from a browser that inserted an
+    invisible character.
+    """
+    import unicodedata
+    s = (raw or "").strip()
+    # Remove every character whose Unicode category starts with 'C'
+    # (control, format, surrogate, private-use, unassigned) and any whitespace.
+    cleaned = "".join(
+        c for c in s
+        if not unicodedata.category(c).startswith("C") and not c.isspace()
+    )
+    return cleaned
+
+
 def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
                     api_key: str, secret_key: str) -> list[dict]:
     """
-    Fetch historical stock bars via alpaca-py's market-data client.
-    Works with paper or live keys (data feed = IEX on free plans).
+    Fetch historical stock bars from data.alpaca.markets.
+
+    Uses the same API keys as the trading account — both paper AND live account
+    keys authenticate against the same data endpoint (the data API does not have
+    a separate paper/live mode).
+
+    Strategy: try without a feed restriction first so SIP subscribers get their
+    preferred feed automatically.  If Alpaca rejects that with a 403
+    (subscription required) we retry with DataFeed.IEX, which is free for every
+    Alpaca account.  A 401 always means the key/secret pair itself is wrong —
+    we surface the first 4 chars of the key so the user can quickly cross-check.
     """
-    api_key = (api_key or "").strip()
-    secret_key = (secret_key or "").strip()
+    api_key = _clean_key(api_key)
+    secret_key = _clean_key(secret_key)
     if not api_key or not secret_key:
-        raise BrokerError("Alpaca data requires API keys. Add them in Account → Alpaca API Keys "
-                          "for the mode you are in (Paper or Live).")
-    try:
-        from alpaca.data.historical import StockHistoricalDataClient
-        from alpaca.data.requests import StockBarsRequest
-        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-        from alpaca.data.enums import DataFeed
+        raise BrokerError(
+            "Alpaca data requires API keys. Add them under Account → Alpaca API Keys "
+            "for the mode you are using (Paper or Live)."
+        )
 
-        tf_map = {
-            "1m": TimeFrame(1, TimeFrameUnit.Minute),
-            "5m": TimeFrame(5, TimeFrameUnit.Minute),
-            "15m": TimeFrame(15, TimeFrameUnit.Minute),
-            "30m": TimeFrame(30, TimeFrameUnit.Minute),
-            "1h": TimeFrame(1, TimeFrameUnit.Hour),
-            "1d": TimeFrame(1, TimeFrameUnit.Day),
-        }
-        tf = tf_map.get(timeframe, TimeFrame(1, TimeFrameUnit.Day))
+    key_hint = api_key[:4] + "…"
+    logger.info("[BARS] Alpaca %s tf=%s limit=%d key=%s", symbol, timeframe, limit, key_hint)
 
-        # Choose a lookback window generous enough to satisfy `limit` bars.
-        per_bar = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "1d": 1440}.get(timeframe, 1440)
-        minutes_back = per_bar * limit * 3 + 1440
-        start = datetime.now(timezone.utc) - timedelta(minutes=minutes_back)
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+    from alpaca.data.enums import DataFeed
 
-        # IMPORTANT: market-data keys are the SAME account keys (paper or live) —
-        # the historical data API lives at data.alpaca.markets, NOT the paper
-        # trading host. We force the free IEX feed so paper / free-tier accounts
-        # are not rejected for lacking a paid SIP subscription.
-        client = StockHistoricalDataClient(api_key, secret_key)
-        req = StockBarsRequest(symbol_or_symbols=symbol.upper(), timeframe=tf,
-                               start=start, limit=limit, feed=DataFeed.IEX)
+    tf_map = {
+        "1m": TimeFrame(1, TimeFrameUnit.Minute),
+        "5m": TimeFrame(5, TimeFrameUnit.Minute),
+        "15m": TimeFrame(15, TimeFrameUnit.Minute),
+        "30m": TimeFrame(30, TimeFrameUnit.Minute),
+        "1h": TimeFrame(1, TimeFrameUnit.Hour),
+        "1d": TimeFrame(1, TimeFrameUnit.Day),
+    }
+    tf = tf_map.get(timeframe, TimeFrame(1, TimeFrameUnit.Day))
+
+    per_bar = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "1d": 1440}.get(timeframe, 1440)
+    minutes_back = per_bar * limit * 3 + 1440
+    start = datetime.now(timezone.utc) - timedelta(minutes=minutes_back)
+
+    client = StockHistoricalDataClient(api_key, secret_key)
+
+    def _fetch(feed=None) -> list[dict]:
+        kwargs = dict(symbol_or_symbols=symbol.upper(), timeframe=tf, start=start, limit=limit)
+        if feed is not None:
+            kwargs["feed"] = feed
+        req = StockBarsRequest(**kwargs)
         bars = client.get_stock_bars(req)
-
-        rows = []
         data = bars.data.get(symbol.upper(), []) if hasattr(bars, "data") else []
-        for b in data:
-            rows.append({
+        return [
+            {
                 "ts": int(b.timestamp.timestamp()),
                 "open": float(b.open), "high": float(b.high),
                 "low": float(b.low), "close": float(b.close),
                 "volume": float(b.volume or 0),
-            })
-        logger.info("[BARS] Alpaca %s tf=%s feed=IEX -> %d bars", symbol, timeframe, len(rows))
-        if not rows:
-            raise BrokerError(
-                f"Alpaca returned no IEX bars for {symbol.upper()} ({timeframe}). "
-                "This is normal outside US market hours for very short timeframes — try the 1D timeframe."
-            )
-        return rows[-limit:]
-    except BrokerError:
-        raise
-    except AlpacaAPIError as e:
-        raise BrokerError(_humanize_alpaca_error(e))
-    except Exception as e:
-        raise BrokerError(_humanize_alpaca_error(e))
+            }
+            for b in data
+        ]
+
+    try:
+        # First attempt — no explicit feed restriction (works for SIP + IEX).
+        rows = _fetch(feed=None)
+        logger.info("[BARS] Alpaca %s tf=%s -> %d bars (default feed)", symbol, timeframe, len(rows))
+    except AlpacaAPIError as first_err:
+        err_str = str(first_err)
+        # 403 / subscription error → retry with the free IEX feed.
+        if "403" in err_str or "forbidden" in err_str.lower() or "subscription" in err_str.lower():
+            logger.info("[BARS] SIP feed rejected (%s), retrying with IEX…", err_str[:60])
+            try:
+                rows = _fetch(feed=DataFeed.IEX)
+                logger.info("[BARS] Alpaca %s tf=%s -> %d bars (IEX feed)", symbol, timeframe, len(rows))
+            except AlpacaAPIError as iex_err:
+                raise BrokerError(_humanize_alpaca_error(iex_err, key_hint))
+            except Exception as iex_err:
+                raise BrokerError(_humanize_alpaca_error(iex_err, key_hint))
+        else:
+            raise BrokerError(_humanize_alpaca_error(first_err, key_hint))
+    except Exception as first_err:
+        raise BrokerError(_humanize_alpaca_error(first_err, key_hint))
+
+    if not rows:
+        raise BrokerError(
+            f"Alpaca returned no bars for {symbol.upper()} ({timeframe}). "
+            "Outside US market hours there may be no recent IEX data for short timeframes — "
+            "try switching to the 1D timeframe or check that the ticker symbol is correct."
+        )
+    return rows[-limit:]
 
 
-def _humanize_alpaca_error(e) -> str:
+def _humanize_alpaca_error(e, key_hint: str = "????") -> str:
     """
-    Turn raw Alpaca/transport errors (including nginx HTML 401 pages) into a
-    short, actionable message for the UI instead of dumping markup.
+    Turn raw Alpaca/transport errors into short, actionable UI messages.
+    ``key_hint`` is the first 4 chars of the key actually used, printed so the
+    user can cross-check exactly which saved key was sent.
     """
     msg = str(e)
     low = msg.lower()
-    if "401" in low or "authorization required" in low or "unauthorized" in low:
-        return ("Alpaca rejected the API keys (401 Unauthorized). Make sure you saved the keys "
-                "for the mode you're in: Paper mode needs your *paper* keys from "
-                "https://app.alpaca.markets/paper/dashboard/overview, Live mode needs live keys.")
-    if "403" in low or "forbidden" in low or "subscription" in low:
-        return ("Alpaca returned 403 (data subscription required). The dashboard uses the free IEX "
-                "feed — confirm your keys are valid and active.")
+    if "401" in msg or "authorization required" in low or "unauthorized" in low:
+        return (
+            f"Alpaca rejected the API key starting with '{key_hint}' (401 Unauthorized). "
+            "The key or secret is incorrect — double-check that you copied both the Key ID "
+            "AND the Secret Key exactly, with no extra spaces. "
+            "Paper keys come from https://app.alpaca.markets/paper/dashboard/overview; "
+            "live keys come from https://app.alpaca.markets/account/overview."
+        )
+    if "403" in msg or "forbidden" in low or "subscription" in low:
+        return (
+            "Alpaca returned 403 (data subscription issue) — the IEX fallback feed was also tried. "
+            "Confirm your keys are active and your Alpaca account is not restricted."
+        )
     if "<html" in low or "nginx" in low:
-        return ("Alpaca data endpoint returned an authorization error. Re-check that your API "
-                "key and secret are correct for the selected (Paper/Live) mode.")
+        return (
+            "Alpaca returned an HTML error page instead of data. "
+            "This usually means the API endpoint is temporarily unavailable — please try again."
+        )
+    if "timeout" in low or "connection" in low:
+        return "Could not reach Alpaca's data servers (connection timeout). Check your network and try again."
     return f"Alpaca data error: {msg[:300]}"
 
 
