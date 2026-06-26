@@ -56,6 +56,26 @@ ROTATION_STAGNANT_PCT = float(os.getenv("BOT_ROTATION_STAGNANT_PCT", "0.5"))  # 
 CANDLE_LIMIT = int(os.getenv("BOT_CANDLE_LIMIT", "200"))
 AUTO_SCAN_LIMIT = int(os.getenv("BOT_AUTO_SCAN_LIMIT", "12"))      # markets scanned per autonomous cycle
 NEWS_OVERLAY = os.getenv("BOT_NEWS_OVERLAY", "1") in ("1", "true", "True", "yes")
+# Cross-bot capital rotation lets a strong setup liquidate ANOTHER bot's open
+# position. This is the behaviour that made "Tester 3" appear to sell "Tester 1"
+# stock, so it is now OFF by default — a bot only ever touches its own position
+# unless an operator explicitly opts in.
+CAPITAL_ROTATION_ENABLED = os.getenv("BOT_CAPITAL_ROTATION", "0") in ("1", "true", "True", "yes")
+
+
+# ────────────────────────────────────────────────────────────────────
+# Realtime event emission (best-effort; never breaks the trading loop)
+# ────────────────────────────────────────────────────────────────────
+def _emit(event_type: str, data: dict, user_id: int | None = None) -> None:
+    try:
+        from app.realtime import bus
+        bus.publish(event_type, data, user_id=user_id)
+    except Exception as e:  # pragma: no cover - telemetry must never raise
+        logger.debug("realtime emit failed (%s): %s", event_type, e)
+
+
+def _emit_portfolio(user_id: int) -> None:
+    _emit("portfolio_update", {"user_id": user_id}, user_id=user_id)
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -210,15 +230,21 @@ def _attempt_capital_rotation(db: Session, owner: User, candidate_bot: Bot,
 # ────────────────────────────────────────────────────────────────────
 def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: str) -> dict:
     qty = bot.shares_held or 0
-    order = _execute(owner, bot.broker, "sell", bot.ticker, qty=qty)
+    ticker = bot.ticker
+    order = _execute(owner, bot.broker, "sell", ticker, qty=qty)
     gain = (price - (bot.avg_entry_price or price)) * qty
+    notional = round(qty * price, 6)
     bot.realized_pnl = (bot.realized_pnl or 0) + gain
     bot.trade_count = (bot.trade_count or 0) + 1
-    db.add(Trade(owner_id=owner.id, bot_id=bot.id, ticker=bot.ticker, side="sell",
-                 qty=qty, price=price, broker=bot.broker, mode=owner.trading_mode,
+    # ACID: the ledger row, attribution and bot state mutate inside one
+    # transaction committed atomically below — every sell records the exact
+    # quantity, price, timestamp and an immutable link to THIS bot.
+    db.add(Trade(owner_id=owner.id, bot_id=bot.id, bot_uuid=bot.uuid, ticker=ticker,
+                 side="sell", qty=qty, notional=notional, price=price,
+                 broker=bot.broker, mode=owner.trading_mode,
                  broker_order_id=order["order_id"], status=order["status"]))
     _log(db, owner.id,
-         f"[EXECUTE] SELL {qty:.6f} {bot.ticker} @ {price:.4f} ({reason}). "
+         f"[EXECUTE] SELL {qty:.6f} {ticker} @ {price:.4f} ({reason}). "
          f"Realized P&L: {gain:+.2f}.",
          "WARNING" if gain < 0 else "INFO")
     bot.in_position = False
@@ -230,9 +256,16 @@ def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: st
     # Fully autonomous bots release the ticker so the next cycle re-scans the
     # whole market for the freshest dip rather than re-buying the same asset.
     if bot.auto_select:
-        _log(db, owner.id, f"[AUTO] '{bot.name}' released {bot.ticker} — will re-scan all markets next cycle.")
+        _log(db, owner.id, f"[AUTO] '{bot.name}' released {ticker} — will re-scan all markets next cycle.")
         bot.ticker = None
     db.commit()
+    _emit("trade", {
+        "bot_id": bot.id, "bot_uuid": bot.uuid, "bot_name": bot.name,
+        "ticker": ticker, "side": "sell", "qty": round(qty, 8),
+        "notional": notional, "price": price, "realized_pnl": round(gain, 4),
+        "reason": reason,
+    }, user_id=owner.id)
+    _emit_portfolio(owner.id)
     return {"order": order, "realized_gain": round(gain, 4)}
 
 
@@ -346,6 +379,9 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         f"(conviction {sig.confidence}, strength {sig.strength:.2f})"
     )
 
+    # Keep the live market-of-record fresh and stream it to any open dashboards.
+    _record_quote(db, bot.broker or owner.active_broker or "alpaca", bot.ticker, analysis)
+
     _log(db, owner.id,
          f"[SCAN] {bot.ticker} @ {price:.4f} | signal={sig.action} "
          f"strength={sig.strength:.2f} bias={sig.bias} | "
@@ -437,9 +473,17 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         return result
     result["news"] = verdict
 
-    # Capital availability + rotation.
+    # Capital availability + (optional) rotation. By default a bot will NEVER
+    # liquidate another bot's position — it simply waits. Cross-bot rotation is
+    # opt-in via BOT_CAPITAL_ROTATION to prevent identity-confusing behaviour.
     buying_power = _get_buying_power(owner, bot.broker or "alpaca")
     if buying_power is not None and buying_power < notional:
+        if not CAPITAL_ROTATION_ENABLED:
+            db.commit()
+            result.update({"action": "WAIT",
+                           "reason": "Setup confirmed but capital fully deployed; "
+                                     "cross-bot rotation disabled (this bot only manages its own position)."})
+            return result
         _log(db, owner.id,
              f"[CAPITAL] Setup on {bot.ticker} needs ${notional:.2f} but only "
              f"${buying_power:.2f} free — evaluating capital rotation.", "WARNING")
@@ -455,23 +499,54 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
 
     # Execute the entry.
     order = _execute(owner, bot.broker, "buy", bot.ticker, notional=notional)
+    # Always derive and persist the exact share quantity — never leave a buy
+    # with a null qty (the bug that rendered '0' in the History ledger).
+    qty = round(notional / price, 8) if price else 0.0
     bot.in_position = True
     bot.avg_entry_price = price
-    bot.shares_held = notional / price if price else 0
+    bot.shares_held = qty
     bot.trade_count = (bot.trade_count or 0) + 1
     bot.first_buy_done = True
     _arm_risk(bot, price, atr, nearest_resistance)
-    db.add(Trade(owner_id=owner.id, bot_id=bot.id, ticker=bot.ticker, side="buy",
-                 notional=notional, price=price, broker=bot.broker, mode=owner.trading_mode,
+    db.add(Trade(owner_id=owner.id, bot_id=bot.id, bot_uuid=bot.uuid, ticker=bot.ticker,
+                 side="buy", qty=qty, notional=notional, price=price,
+                 broker=bot.broker, mode=owner.trading_mode,
                  broker_order_id=order["order_id"], status=order["status"]))
     _log(db, owner.id,
-         f"[EXECUTE] BUY ${notional:.2f} of {bot.ticker} @ {price:.4f} "
+         f"[EXECUTE] BUY ${notional:.2f} ({qty:.6f}) of {bot.ticker} @ {price:.4f} "
          f"({sig.headline}). Stop {bot.stop_price:.4f} | Target {bot.take_profit_price:.4f}.")
     db.commit()
+    _emit("trade", {
+        "bot_id": bot.id, "bot_uuid": bot.uuid, "bot_name": bot.name,
+        "ticker": bot.ticker, "side": "buy", "qty": qty,
+        "notional": notional, "price": price, "realized_pnl": None,
+        "reason": sig.headline,
+    }, user_id=owner.id)
+    _emit_portfolio(owner.id)
     result.update({"action": "BUY", "reason": sig.headline, "order": order,
-                   "notional": notional, "stop_price": bot.stop_price,
+                   "notional": notional, "qty": qty, "stop_price": bot.stop_price,
                    "take_profit_price": bot.take_profit_price})
     return result
+
+
+def _record_quote(db: Session, broker: str, symbol: str, analysis: Analysis) -> None:
+    """Persist + broadcast the freshest price/signal for a symbol."""
+    if not symbol or analysis is None:
+        return
+    try:
+        from app.market_store import upsert_quote
+        candle_ts = analysis.candles[-1]["time"] if analysis.candles else None
+        upsert_quote(db, broker, symbol, analysis.last_price,
+                     signal_action=analysis.signal.action,
+                     signal_strength=analysis.signal.strength,
+                     candle_ts=candle_ts)
+        _emit("market_quote", {
+            "broker": (broker or "alpaca").lower(), "symbol": symbol.upper(),
+            "price": analysis.last_price, "signal_action": analysis.signal.action,
+            "signal_strength": analysis.signal.strength,
+        })
+    except Exception as e:  # pragma: no cover
+        logger.debug("quote record failed for %s:%s — %s", broker, symbol, e)
 
 
 def _analysis_brief(a: Analysis) -> dict:
