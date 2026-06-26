@@ -4,6 +4,9 @@ let BOT_MODE = "auto";
 let PRICE_HISTORY = {};
 let ALL_NEWS = [];
 let NEWS_FILTER = "all";
+let LIVE_QUOTES = {};        // `${broker}:${symbol}` -> {price, signal_action,...}
+let EVT_SOURCE = null;       // EventSource for the live data stream
+let _perfReloadTimer = null; // debounce portfolio refreshes from the stream
 
 async function api(path, options = {}) {
   const resp = await fetch(path, {
@@ -95,6 +98,75 @@ async function enterApp() {
   await refreshUserData();
   loadBrokerKeys();
   loadPortfolioPerformance();  // Portfolio is the default visible tab
+  connectLiveStream();         // subscribe to the always-on backend feed
+}
+
+/* --- LIVE DATA STREAM (Server-Sent Events) --- */
+function setLiveIndicator(state) {
+  const el = document.getElementById("live-indicator");
+  if (!el) return;
+  if (state === "live") { el.className = "badge badge-green"; el.textContent = "● Live"; }
+  else if (state === "down") { el.className = "badge badge-red"; el.textContent = "● Offline"; }
+  else { el.className = "badge badge-amber"; el.textContent = "● Connecting…"; }
+}
+
+function schedulePerfReload() {
+  // Coalesce bursts of stream events into a single refresh.
+  if (_perfReloadTimer) clearTimeout(_perfReloadTimer);
+  _perfReloadTimer = setTimeout(() => {
+    const pv = document.getElementById("view-portfolio");
+    if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
+  }, 800);
+}
+
+function connectLiveStream() {
+  if (EVT_SOURCE) { try { EVT_SOURCE.close(); } catch (_) {} }
+  try {
+    EVT_SOURCE = new EventSource("/stream/updates", { withCredentials: true });
+  } catch (e) { setLiveIndicator("down"); return; }
+
+  EVT_SOURCE.addEventListener("hello", () => setLiveIndicator("live"));
+  EVT_SOURCE.addEventListener("ping", () => setLiveIndicator("live"));
+
+  EVT_SOURCE.addEventListener("market_quote", (ev) => {
+    setLiveIndicator("live");
+    try {
+      const q = JSON.parse(ev.data);
+      LIVE_QUOTES[`${q.broker}:${q.symbol}`] = q;
+      applyLiveQuote(q);
+    } catch (_) {}
+  });
+
+  EVT_SOURCE.addEventListener("trade", (ev) => {
+    try {
+      const t = JSON.parse(ev.data);
+      const verb = t.side === "buy" ? "Bought" : "Sold";
+      toast(`🤖 ${t.bot_name || "Bot"} ${verb} ${Number(t.qty || 0).toFixed(4)} ${t.ticker}`, "success");
+    } catch (_) {}
+    const hv = document.getElementById("view-history");
+    if (hv && !hv.classList.contains("hidden")) loadTradeHistory();
+    const bv = document.getElementById("view-bots");
+    if (bv && !bv.classList.contains("hidden")) loadBots();
+    schedulePerfReload();
+  });
+
+  EVT_SOURCE.addEventListener("portfolio_update", () => schedulePerfReload());
+
+  EVT_SOURCE.onerror = () => {
+    setLiveIndicator("down");
+    // EventSource auto-reconnects; just reflect the transient state.
+  };
+}
+
+function applyLiveQuote(q) {
+  // If the market dashboard is open on this asset, update its price live.
+  if (typeof DASH_STATE !== "undefined" && DASH_STATE &&
+      DASH_STATE.symbol && DASH_STATE.exchange &&
+      DASH_STATE.symbol.toUpperCase() === q.symbol &&
+      DASH_STATE.exchange.toLowerCase() === q.broker) {
+    const priceEl = document.getElementById("dash-price");
+    if (priceEl) priceEl.textContent = formatPrice(q.price);
+  }
 }
 
 function setupTabs() {
@@ -804,18 +876,22 @@ async function loadTradeHistory() {
   const tbody = document.getElementById("history-table-body");
   try {
     const trades = await api("/broker/trades-ledger");
-    if (!trades.length) { tbody.innerHTML = `<tr><td colspan="6" style="color:var(--t2)">No trades logged yet.</td></tr>`; return; }
-    tbody.innerHTML = trades.map(t => `
+    if (!trades.length) { tbody.innerHTML = `<tr><td colspan="7" style="color:var(--t2)">No trades logged yet.</td></tr>`; return; }
+    tbody.innerHTML = trades.map(t => {
+      const qty = Number(t.qty || 0);
+      const qtyStr = qty === 0 ? "0" : qty.toLocaleString(undefined, { maximumFractionDigits: 8 });
+      return `
       <tr>
         <td style="color:var(--t2)">${new Date(t.created_at).toLocaleString()}</td>
-        <td style="font-weight:600">${t.ticker}</td>
-        <td><span class="badge ${t.side === 'buy' ? 'badge-green' : 'badge-red'}">${t.side.toUpperCase()}</span></td>
-        <td>${t.qty || 0}</td>
+        <td style="font-weight:600">${esc(t.bot_name || "—")}</td>
+        <td style="font-weight:600">${esc(t.ticker)}</td>
+        <td><span class="badge ${t.side === 'buy' ? 'badge-green' : 'badge-red'}">${esc(t.side.toUpperCase())}</span></td>
+        <td>${qtyStr}</td>
         <td style="font-family:monospace">$${parseFloat(t.price || 0).toFixed(2)}</td>
-        <td><span class="badge badge-blue">${t.mode.toUpperCase()}</span></td>
-      </tr>
-    `).join("");
-  } catch (e) { tbody.innerHTML = `<tr><td colspan="6" style="color:var(--red)">Failed to fetch execution records.</td></tr>`; }
+        <td><span class="badge badge-blue">${esc((t.mode || "paper").toUpperCase())}</span></td>
+      </tr>`;
+    }).join("");
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="7" style="color:var(--red)">Failed to fetch execution records.</td></tr>`; }
 }
 
 async function loadNews() {
