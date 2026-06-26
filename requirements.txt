@@ -11,3 +11,5 @@ requests==2.32.3
 ccxt==4.4.15
 psycopg2-binary==2.9.10
 pytz==2024.2
+APScheduler==3.10.4
+sse-starlette==2.1.3
