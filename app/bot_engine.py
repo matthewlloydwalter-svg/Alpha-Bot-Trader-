@@ -396,7 +396,22 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
               "analysis": _analysis_brief(analysis), "order": None}
 
     # ── MANAGE OPEN POSITION ──────────────────────────────────────
-    if bot.in_position and bot.avg_entry_price:
+    # Critical: branch on in_position ALONE. The old guard also required a
+    # truthy avg_entry_price, so a corrupt position (entry price None/0) silently
+    # skipped ALL risk management AND fell through to the entry logic below —
+    # disabling the stop-loss and risking a double buy. Now an open position is
+    # always risk-managed and can never re-enter in the same cycle.
+    if bot.in_position:
+        if not bot.avg_entry_price or bot.avg_entry_price <= 0:
+            # We hold shares but have no valid cost basis: flatten immediately to
+            # protect capital instead of flying blind.
+            _log(db, owner.id,
+                 f"[RISK] {bot.ticker} is in position with no valid entry price — "
+                 f"flattening immediately to protect capital.", "WARNING")
+            closed = _close_position(db, owner, bot, price, reason="invalid entry price (safety flatten)")
+            result.update({"action": "SELL", "reason": "Invalid entry price — safety flatten", **closed})
+            return result
+
         _ratchet_risk(bot, price, atr, bullish=(sig.bias == "bullish"))
         profit_pct = (price - bot.avg_entry_price) / bot.avg_entry_price * 100
 
@@ -496,6 +511,13 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         buying_power = _get_buying_power(owner, bot.broker or "alpaca")
         if buying_power is not None:
             notional = min(notional, round(buying_power * DEPLOY_FRACTION, 2))
+
+    # Never enter on a missing/zero price: it would record an in-position state
+    # with 0 shares and a meaningless cost basis (and divide-by-zero math later).
+    if not price or price <= 0:
+        db.commit()
+        result["reason"] = "Market price unavailable — entry skipped to avoid an invalid (zero-price) fill."
+        return result
 
     # Execute the entry.
     order = _execute(owner, bot.broker, "buy", bot.ticker, notional=notional)

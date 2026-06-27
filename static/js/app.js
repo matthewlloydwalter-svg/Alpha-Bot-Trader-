@@ -354,7 +354,55 @@ async function loadPortfolioPerformance() {
     np.className = "stat-value " + (v >= 0 ? "pup" : "pdn");
   }
 
+  renderHighlights(data.highlights);
   renderPerfChart(data);
+}
+
+function fmtSignedMoney(v) {
+  const n = Number(v || 0);
+  return (n >= 0 ? "+" : "-") + "$" + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function highlightCard(h, kind) {
+  // kind: "best" (green) or "worst" (red, flagged as a deletion candidate)
+  const isLoss = Number(h.net_profit || 0) < 0;
+  const accent = kind === "best" ? "var(--green)" : "var(--red)";
+  const pnlClass = Number(h.net_profit || 0) >= 0 ? "pup" : "pdn";
+  const title = kind === "best" ? "🏆 Most profitable bot" : "⚠️ Least profitable bot";
+  const flag = (kind === "worst" && isLoss)
+    ? `<div style="font-size:11px;color:var(--red);margin-top:6px">Candidate for deletion — review or reduce its allocation.</div>`
+    : "";
+  return `
+    <div class="stat-card" style="border-left:3px solid ${accent}">
+      <div class="slbl" style="color:${accent}">${title}</div>
+      <div style="font-weight:700;font-size:15px;margin:2px 0 6px">${esc(h.name || "—")}</div>
+      <div style="display:flex;justify-content:space-between;font-size:13px">
+        <span style="color:var(--t2)">Net P/L</span>
+        <span class="${pnlClass}" style="font-weight:600">${fmtSignedMoney(h.net_profit)}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:3px">
+        <span style="color:var(--t2)">ROI</span>
+        <span class="${pnlClass}" style="font-weight:600">${(Number(h.roi||0) >= 0 ? "+" : "") + Number(h.roi||0).toFixed(2)}%</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-top:3px;color:var(--t3)">
+        <span>Allocated</span><span>$${Number(h.funds_allocated||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+      </div>
+      ${flag}
+    </div>`;
+}
+
+function renderHighlights(h) {
+  const card = document.getElementById("perf-highlights");
+  const grid = document.getElementById("highlights-grid");
+  if (!card || !grid) return;
+  if (!h || !h.most_profitable) { card.classList.add("hidden"); return; }
+  card.classList.remove("hidden");
+  // With a single bot, most == least; show just the one card to avoid confusion.
+  if (h.bot_count === 1 || h.most_profitable.bot_id === h.least_profitable.bot_id) {
+    grid.innerHTML = highlightCard(h.most_profitable, "best");
+  } else {
+    grid.innerHTML = highlightCard(h.most_profitable, "best") + highlightCard(h.least_profitable, "worst");
+  }
 }
 
 function renderPerfChart(data) {
@@ -573,6 +621,13 @@ function renderBots() {
         ${b.in_position && b.stop_price ? `<span class="ind-pill">Stop ${formatPrice(b.stop_price)}</span>` : ""}
         ${b.in_position && b.take_profit_price ? `<span class="ind-pill">Target ${formatPrice(b.take_profit_price)}</span>` : ""}
       </div>
+      <div class="funds-ctl">
+        <span class="funds-ctl-label">Allocated funds</span>
+        <button class="btn btn-sm" title="Reduce funds" onclick="adjustBotFunds(${b.id}, -50)">－</button>
+        <input type="number" id="funds-${b.id}" class="funds-input" value="${b.funds_allocated}" min="1" step="1">
+        <button class="btn btn-sm" title="Give more funds" onclick="adjustBotFunds(${b.id}, 50)">＋</button>
+        <button class="btn btn-sm btn-primary" onclick="updateBotFunds(${b.id})">Update</button>
+      </div>
       <div style="background:var(--bg2);padding:10px;border-radius:6px;border:1px solid var(--border)">
         <div style="font-size:11px;color:var(--t2);margin-bottom:8px">${esc(b.last_pattern_summary || "Awaiting first scan — run a scan to analyze the chart.")}</div>
         <button class="btn btn-sm btn-primary" onclick="runBotCycle(${b.id})">⚡ Run Pattern Scan</button>
@@ -580,6 +635,30 @@ function renderBots() {
       </div>
     </div>`;
   }).join("");
+}
+
+function adjustBotFunds(id, delta) {
+  // Quick "give more / reduce" stepper that nudges the input, then persists.
+  const el = document.getElementById(`funds-${id}`);
+  if (!el) return;
+  const next = Math.max(1, Math.round((parseFloat(el.value) || 0) + delta));
+  el.value = next;
+  updateBotFunds(id);
+}
+
+async function updateBotFunds(id) {
+  const el = document.getElementById(`funds-${id}`);
+  if (!el) return;
+  const funds_allocated = parseFloat(el.value);
+  if (!funds_allocated || funds_allocated <= 0) return toast("Enter a funds amount greater than zero", "error");
+  try {
+    const res = await api(`/bots/${id}/funds`, { method: "POST", body: JSON.stringify({ funds_allocated }) });
+    toast(`Allocation updated to $${Number(res.funds_allocated).toLocaleString()}`, "success");
+    await loadBots();
+    // Keep the portfolio highlights/metrics in sync if that tab is mounted.
+    const pv = document.getElementById("view-portfolio");
+    if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
+  } catch (e) { toast(e, "error"); }
 }
 
 async function toggleBot(id) {
