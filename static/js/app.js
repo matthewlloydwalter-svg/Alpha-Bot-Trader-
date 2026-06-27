@@ -180,7 +180,7 @@ function setupTabs() {
       document.getElementById(`view-${target}`).classList.remove("hidden");
       
       if (target === "portfolio") loadPortfolioPerformance();
-      if (target === "assets") renderAssets();
+      if (target === "assets") loadBrokerAccount();
       if (target === "bots") loadBots();
       if (target === "stocks") loadStocks();
       if (target === "history") loadTradeHistory();
@@ -193,7 +193,6 @@ function setupTabs() {
 async function refreshUserData() {
   try {
     USER = await api("/auth/me");
-    renderAssets();
 
     const vText = document.getElementById("verification-text");
     const vBtn = document.getElementById("verify-email-btn");
@@ -330,21 +329,6 @@ async function submitVerificationCode() {
   } catch (e) { toast(e, "error"); }
 }
 
-/* --- ASSETS TAB (manual cash tracking) --- */
-function renderAssets() {
-  const dep = USER ? (USER.total_deposited || 0) : 0;
-  const wit = USER ? (USER.total_withdrawn || 0) : 0;
-  const net = dep - wit;
-  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-  setTxt("as-deposited", "$" + dep.toFixed(2));
-  setTxt("as-withdrawn", "$" + wit.toFixed(2));
-  const netEl = document.getElementById("as-net");
-  if (netEl) {
-    netEl.textContent = (net >= 0 ? "+" : "") + "$" + Math.abs(net).toFixed(2);
-    netEl.className = "stat-value " + (net >= 0 ? "pup" : "pdn");
-  }
-}
-
 /* --- PORTFOLIO TAB (bot performance graph) --- */
 let PERF_CHART = null, PERF_SERIES = null, PERF_MARKERS_BY_TIME = {};
 
@@ -478,40 +462,29 @@ function hidePerfTooltip() {
   if (tip) tip.classList.add("hidden");
 }
 
-async function doDeposit() {
-  const amount = parseFloat(document.getElementById("dep-amt").value);
-  if (!amount) return toast("Enter valid amount", "error");
-  try {
-    await api("/cash/deposit", { method: "POST", body: JSON.stringify({ amount }) });
-    await refreshUserData();
-    document.getElementById("dep-amt").value = "";
-    toast("Deposit recorded", "success");
-  } catch (e) { toast(e, "error"); }
-}
-
-async function doWithdraw() {
-  const amount = parseFloat(document.getElementById("with-amt").value);
-  if (!amount) return toast("Enter valid amount", "error");
-  try {
-    await api("/cash/withdraw", { method: "POST", body: JSON.stringify({ amount }) });
-    await refreshUserData();
-    document.getElementById("with-amt").value = "";
-    toast("Withdrawal recorded", "success");
-  } catch (e) { toast(e, "error"); }
-}
-
 async function loadBrokerAccount() {
   const el = document.getElementById("broker-account-info");
-  el.innerHTML = '<span style="color:var(--t3)">Fetching from broker...</span>';
+  if (!el) return;
+  // Header reflects the *active* broker session so it's clear whose balance this is.
+  const broker = USER ? (USER.active_broker || "alpaca") : "alpaca";
+  const mode = USER ? (USER.trading_mode || "paper") : "paper";
+  const brokerLabel = broker === "okx" ? "OKX" : "Alpaca";
+  const modeLabel = mode === "live" ? "Live" : "Paper";
+  const header =
+    `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+       <span class="badge badge-blue">${brokerLabel}</span>
+       <span class="badge ${mode === "live" ? "badge-red" : "badge-green"}">${modeLabel}</span>
+     </div>`;
+  el.innerHTML = header + '<span style="color:var(--t3)">Fetching live balance from broker…</span>';
   try {
     const data = await api("/broker/account");
-    el.innerHTML = Object.entries(data).map(([k, v]) =>
+    el.innerHTML = header + Object.entries(data).map(([k, v]) =>
       `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px">
         <span style="color:var(--t2)">${k.replace(/_/g," ")}</span>
         <span style="font-weight:500">${typeof v === "number" ? "$" + Number(v).toLocaleString() : v}</span>
       </div>`
     ).join("");
-  } catch (e) { el.innerHTML = `<span style="color:var(--red)">⚠ ${e.message}</span>`; }
+  } catch (e) { el.innerHTML = header + `<span style="color:var(--red)">⚠ ${e.message}</span>`; }
 }
 
 /* --- BOTS --- */
