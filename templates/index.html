@@ -141,20 +141,16 @@
     </div>
 
     <div id="view-assets" class="tab-view hidden">
-      <div class="grid3" style="margin-bottom:16px">
-        <div class="stat-card"><div class="slbl">Total deposited</div><div class="stat-value pup" id="as-deposited">$0.00</div></div>
-        <div class="stat-card"><div class="slbl">Total withdrawn</div><div class="stat-value" id="as-withdrawn">$0.00</div></div>
-        <div class="stat-card"><div class="slbl">Net position</div><div class="stat-value" id="as-net">+$0.00</div></div>
+      <div class="card">
+        <div class="slbl">Broker funds</div>
+        <div class="info-banner">Funding is handled entirely through your connected broker. Make deposits and withdrawals directly with Alpaca or OKX — the live balance below is the single source of truth for what you can allocate to a Box.</div>
       </div>
       <div class="card">
-        <div class="slbl">Record cash movement</div>
-        <div class="info-banner">Actual funding happens directly through your broker. Record deposits/withdrawals here to sync your dashboard balance.</div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <input type="number" id="dep-amt" placeholder="Deposit amount ($)" min="0.01" step="0.01" style="flex:1;min-width:150px">
-          <button class="btn btn-primary btn-sm" onclick="doDeposit()">⬇ Record deposit</button>
-          <input type="number" id="with-amt" placeholder="Withdrawal amount ($)" min="0.01" step="0.01" style="flex:1;min-width:150px">
-          <button class="btn btn-sm" onclick="doWithdraw()">⬆ Record withdrawal</button>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div class="slbl" style="margin-bottom:0">Live broker account</div>
+          <button class="btn btn-sm" onclick="loadBrokerAccount()">🔄 Refresh</button>
         </div>
+        <div id="broker-account-info" style="font-size:13px;color:var(--t2)">Loading live balance from your connected broker…</div>
       </div>
     </div>
 
@@ -293,14 +289,6 @@
             <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="handleSaveOkxKeys('live')">💾 Save Live Keys</button>
           </div>
         </div>
-      </div>
-
-      <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <div class="slbl" style="margin-bottom:0">Live broker account</div>
-          <button class="btn btn-sm" onclick="loadBrokerAccount()">🔄 Refresh</button>
-        </div>
-        <div id="broker-account-info" style="font-size:13px;color:var(--t2)">Click Refresh to fetch live balance from your connected broker.</div>
       </div>
 
       <div class="card" id="onboarding-card">
