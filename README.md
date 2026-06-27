@@ -22,6 +22,34 @@ exact `qty`, `notional`, `price`, `created_at`, the linking `bot_id` AND the
 immutable `bot_uuid`. Cross-bot capital rotation is **off by default**
 (`BOT_CAPITAL_ROTATION=1` to enable) so a bot only ever manages its own position.
 
+### Multi-tenant API-key separation (strict)
+
+| Concern | Credentials used | Source |
+| --- | --- | --- |
+| Market data (prices, bars, charts, universal DB state) | **Global data keys** | `ALPACA_DATA_KEY` / `ALPACA_DATA_SECRET` (env). OKX data is public. |
+| Order placement & balance/portfolio checks | **The specific user's keys** | Postgres, pulled dynamically at execution time. |
+
+- `app/credentials.py::resolve_data_credentials()` returns the global keys and is
+  the ONLY thing the poller/chart endpoints use. The global keys are never
+  passed to an order or balance call.
+- `app/credentials.py::resolve_trading_credentials()` returns the user's own keys
+  and is the ONLY thing trade execution / balance lookups use.
+- User trading keys are stored in dedicated columns `users.alpaca_trading_key` /
+  `alpaca_trading_secret`, **encrypted at rest** (Fernet) when `APP_ENCRYPTION_KEY`
+  is set (`app/crypto.py`). Per-mode (paper/live) columns remain as a mode-correct
+  fallback for Alpaca's separate key pairs.
+
+### Micro-transaction trading strategy
+
+Bots no longer go all-in. Each entry deploys a small slice of the bot's allocated
+funds and exits are tight, so capital churns through many small, risk-controlled
+trades 24/7 (independent of any login):
+
+- Position size per trade: `BOT_TRADE_FRACTION` (default `0.15` = 15%, clamped 5–35%).
+- Take profit fast: sell at `+BOT_MICRO_TP_PCT`% (default `0.75`).
+- Cut losses fast: sell at `-BOT_MICRO_SL_PCT`% (default `0.50`).
+- ATR trailing stop / take-profit remain as additional backstops.
+
 **Admin AI assistant:** `templates/admin.html` exposes a secure, admin-only chat
 box. `POST /admin/ai/audit` lets an LLM (Anthropic/OpenAI) scan & read the repo
 and return a unified-diff preview of proposed edits; nothing is written until an
@@ -33,9 +61,13 @@ admin explicitly hits Approve (`/admin/ai/approve`) — Deny discards.
 | --- | --- | --- |
 | `ENGINE_ENABLED` | `1` | Master switch for the background engine. |
 | `MARKET_POLL_INTERVAL` | `30` | Seconds between market-data polls. |
-| `BOT_SCAN_INTERVAL` | `60` | Seconds between bot evaluation cycles. |
+| `BOT_SCAN_INTERVAL` | `30` | Seconds between bot evaluation cycles. |
 | `MARKET_WATCHLIST_LIMIT` | `20` | Symbols/broker polled even without a bot. |
-| `ALPACA_DATA_KEY` / `ALPACA_DATA_SECRET` | — | Server keys to poll the Alpaca watchlist. |
+| `ALPACA_DATA_KEY` / `ALPACA_DATA_SECRET` | — | **Global, data-only** Alpaca keys (prices/bars). Never used for trades. |
+| `APP_ENCRYPTION_KEY` | — | Passphrase enabling at-rest encryption of user trading keys. |
+| `BOT_TRADE_FRACTION` | `0.15` | Fraction of allocated funds deployed per trade (5–35%). |
+| `BOT_MICRO_TP_PCT` | `0.75` | Take-profit threshold (% gain). |
+| `BOT_MICRO_SL_PCT` | `0.50` | Stop-loss threshold (% loss). |
 | `BOT_CAPITAL_ROTATION` | `0` | Allow a bot to liquidate another bot's position. |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | — | LLM provider for the Admin AI assistant. |
 
