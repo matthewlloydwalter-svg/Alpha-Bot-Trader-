@@ -572,6 +572,36 @@ def scan_all_bots(u: User = Depends(get_current_user_from_cookie)):
     return {"scanned": len(results), "results": results}
 
 
+def _bot_performance_highlights(db: Session, bots: list) -> Optional[dict]:
+    """
+    Rank the user's bots by current net profit (realized P/L + live unrealized
+    mark-to-market) and return the most- and least-profitable ones with ROI.
+    Returns None when the user has no bots. Only ever considers the bots passed
+    in (which the caller has already scoped to the authenticated user).
+    """
+    stats = []
+    for b in bots:
+        realized = float(b.realized_pnl or 0.0)
+        unrealized = 0.0
+        if b.in_position and b.avg_entry_price and b.shares_held:
+            q = market_store.get_quote(db, b.broker or "alpaca", b.ticker or "")
+            mark = q.price if (q and q.price) else b.avg_entry_price
+            unrealized = (float(mark) - float(b.avg_entry_price)) * float(b.shares_held)
+        net = round(realized + unrealized, 2)
+        funds = float(b.funds_allocated or 0.0)
+        roi = round((net / funds * 100.0), 2) if funds > 0 else 0.0
+        stats.append({
+            "bot_id": b.id, "name": b.name, "net_profit": net, "roi": roi,
+            "funds_allocated": round(funds, 2), "in_position": bool(b.in_position),
+            "trade_count": int(b.trade_count or 0),
+        })
+    if not stats:
+        return None
+    best = max(stats, key=lambda s: s["net_profit"])
+    worst = min(stats, key=lambda s: s["net_profit"])
+    return {"most_profitable": best, "least_profitable": worst, "bot_count": len(stats)}
+
+
 @app.get("/api/portfolio/performance")
 def portfolio_performance(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     """
@@ -675,6 +705,7 @@ def portfolio_performance(u: User = Depends(get_current_user_from_cookie), db: S
         "trade_count": len(trades),
         "series": series,
         "markers": markers,
+        "highlights": _bot_performance_highlights(db, bots),
     }
 
 
@@ -821,6 +852,55 @@ async def delete_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
     db.delete(bot)
     db.commit()
     return {"status": f"bot {bot_id} deleted"}
+
+@app.post("/bots/{bot_id}/funds")
+async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    """
+    Dynamically adjust a bot's allocated capital. The new amount is validated
+    against the user's live broker balance (reserving capital already committed
+    to the user's *other* bots) so total allocations can never exceed the real
+    balance. ``funds_allocated`` is read live every trading cycle, so this takes
+    effect on the bot's next decision immediately (deployment = funds × fraction).
+    Strictly scoped to the authenticated user's own bot.
+    """
+    bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
+
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request body.")
+    try:
+        new_funds = round(float(data.get("funds_allocated")), 2)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Provide a valid funds amount.")
+    if new_funds <= 0:
+        raise HTTPException(status_code=400, detail="Allocated funds must be greater than zero.")
+
+    # Same live-broker guardrail as bot creation: the new allocation, plus what
+    # is already committed to the user's OTHER bots, cannot exceed verified cash.
+    available = _broker_available_funds(u)
+    if available is None:
+        raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
+    others_allocated = sum(
+        float(b.funds_allocated or 0.0)
+        for b in db.query(Bot).filter(Bot.owner_id == u.id, Bot.id != bot_id).all()
+    )
+    if new_funds > (available - others_allocated) + 1e-6:
+        raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
+
+    previous = float(bot.funds_allocated or 0.0)
+    bot.funds_allocated = new_funds
+    db.commit()
+    logger.info("[FUNDS] Bot %s funds_allocated %.2f -> %.2f (user %s)", bot_id, previous, new_funds, u.id)
+    # Nudge any open dashboards to refresh the portfolio view for this user only.
+    try:
+        bus.publish("portfolio_update", {"user_id": u.id}, user_id=u.id)
+    except Exception:
+        pass
+    return {"status": "funds updated", "bot_id": bot_id,
+            "funds_allocated": bot.funds_allocated, "previous": round(previous, 2)}
 
 @app.post("/bots/{bot_id}/run-cycle")
 async def run_bot_cycle_endpoint(bot_id: int, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
