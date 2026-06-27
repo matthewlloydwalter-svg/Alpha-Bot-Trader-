@@ -678,27 +678,59 @@ def portfolio_performance(u: User = Depends(get_current_user_from_cookie), db: S
     }
 
 
-@app.post("/cash/deposit")
-async def deposit_cash(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
-    data = await request.json()
-    amount = float(data.get("amount", 0.0))
-    if amount <= 0:
-        raise HTTPException(status_code=400, detail="Deposit amount must be greater than zero.")
-    
-    u.total_deposited = (u.total_deposited or 0.0) + amount
-    db.commit()
-    return {"status": "deposit received", "new_balance": u.total_deposited}
+# Funding is sourced strictly from the live broker account now — manual
+# deposit/withdrawal tracking has been removed. This is the single, exact
+# message shown when a Box allocation cannot be backed by verified broker cash.
+INSUFFICIENT_FUNDS_MSG = (
+    "Insufficient funds in broker's account. Please make a deposit via your "
+    "broker Alpaca or OKX before recording an allocation."
+)
 
-@app.post("/cash/withdraw")
-async def withdraw_cash(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
-    data = await request.json()
-    amount = float(data.get("amount", 0.0))
-    if amount <= 0:
-        raise HTTPException(status_code=400, detail="Withdrawal amount must be greater than zero.")
-        
-    u.total_withdrawn = (u.total_withdrawn or 0.0) + amount
-    db.commit()
-    return {"status": "withdrawal processed", "new_balance": u.total_withdrawn}
+
+def _broker_available_funds(user: User) -> Optional[float]:
+    """
+    Verified, allocatable cash from the user's *active* broker session (Alpaca
+    or OKX, paper or live per their current Trading Mode). This is the single
+    source of truth for what can be allocated to a Box.
+
+    Returns the available cash as a float, or ``None`` when it cannot be
+    verified (no/invalid keys, broker unreachable, no quote-currency balance) —
+    callers treat ``None`` as "no verified funds" and block the allocation.
+    """
+    broker = (user.active_broker or "alpaca").lower()
+    paper = (user.trading_mode or "paper") == "paper"
+    creds = resolve_credentials(user, broker, paper)
+    try:
+        info = get_account_info(broker=broker, paper=paper, **creds)
+    except Exception:
+        return None
+    if not isinstance(info, dict) or info.get("error"):
+        return None
+
+    if broker == "alpaca":
+        # "What is actually present" = real cash, not margin buying power.
+        raw = info.get("cash")
+        if raw is None:
+            raw = info.get("buying_power")
+        try:
+            return float(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    # OKX: sum the USD-equivalent stablecoin balances (the tradable quote).
+    balances = info.get("balances", {}) or {}
+    total, found = 0.0, False
+    for k in ("USDT", "USD", "USDC"):
+        v = balances.get(k)
+        if v is None:
+            continue
+        try:
+            total += float(v)
+            found = True
+        except (TypeError, ValueError):
+            continue
+    return total if found else None
+
 
 @app.post("/bots")
 async def create_bot(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
@@ -721,6 +753,22 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
         raise HTTPException(status_code=400, detail="Allocate a funds amount greater than zero.")
     if not auto_select and not ticker_raw:
         raise HTTPException(status_code=400, detail="Manual bots require a ticker symbol.")
+
+    # ── Strict allocation guardrail ──────────────────────────────────────
+    # A Box can only be funded with capital that is actually verified present in
+    # the user's live broker account (Alpaca/OKX). Capital already committed to
+    # the user's existing bots is reserved so total allocations can never exceed
+    # the real broker balance. Blocking the blind allocation of the full paper
+    # balance is the whole point of this check.
+    available = _broker_available_funds(u)
+    if available is None:
+        raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
+    already_allocated = sum(
+        float(b.funds_allocated or 0.0)
+        for b in db.query(Bot).filter(Bot.owner_id == u.id).all()
+    )
+    if funds > (available - already_allocated) + 1e-6:
+        raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
 
     new_bot = Bot(
         owner_id=u.id,
