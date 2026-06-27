@@ -103,7 +103,11 @@ def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)
     payload = decode_session_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Session signature validation expired.")
-    user = db.query(User).filter(User.id == int(payload["sub"])).first()
+    try:
+        user_id = int(payload["sub"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Session signature validation expired.")
+    user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=401, detail="User record context purged.")
     return user
@@ -758,7 +762,14 @@ async def delete_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
     bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
-        
+
+    # Preserve the trade ledger when a bot is removed: every Trade keeps its
+    # immutable bot_uuid for attribution, but the bot_id foreign key must be
+    # cleared first or deleting the bot row violates the trades_bot_id_fkey
+    # constraint (Postgres) and returns a 500.
+    db.query(Trade).filter(Trade.bot_id == bot.id).update(
+        {Trade.bot_id: None}, synchronize_session=False
+    )
     db.delete(bot)
     db.commit()
     return {"status": f"bot {bot_id} deleted"}
@@ -779,7 +790,7 @@ async def run_bot_cycle_endpoint(bot_id: int, u: User = Depends(get_current_user
 
 # ── Live data streaming (Server-Sent Events) ─────────────────────────
 @app.get("/stream/updates")
-async def stream_updates(request: Request, db: Session = Depends(get_db)):
+async def stream_updates(request: Request):
     """
     Server-Sent Events feed that streams market-quote, trade and portfolio
     events from the always-on background engine to the browser. Replaces manual
@@ -788,11 +799,17 @@ async def stream_updates(request: Request, db: Session = Depends(get_db)):
     Market quotes are broadcast to everyone; trade/portfolio events are scoped
     to the authenticated user.
     """
+    # Use a short-lived session only to authenticate. A Depends(get_db) session
+    # would stay open for the entire stream lifetime (minutes/hours), pinning a
+    # pooled DB connection per open tab and eventually exhausting the pool.
+    db = SessionLocal()
     try:
         user = get_current_user_from_cookie(request, db)
         user_id = user.id
     except HTTPException:
         user_id = None  # allow anonymous market-quote stream
+    finally:
+        db.close()
 
     queue = bus.subscribe(user_id=user_id)
 
