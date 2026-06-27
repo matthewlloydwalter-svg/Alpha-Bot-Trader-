@@ -24,8 +24,13 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid token")
     
-    # We use .get("sub") because that's the key we used in create_session_token
-    user_id = int(payload.get("sub"))
+    # We use .get("sub") because that's the key we used in create_session_token.
+    # A tampered/malformed token may carry a missing/non-numeric sub — treat that
+    # as unauthenticated (401) rather than letting int() raise an unhandled 500.
+    try:
+        user_id = int(payload.get("sub"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid token")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")

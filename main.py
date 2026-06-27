@@ -103,7 +103,11 @@ def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)
     payload = decode_session_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Session signature validation expired.")
-    user = db.query(User).filter(User.id == int(payload["sub"])).first()
+    try:
+        user_id = int(payload["sub"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Session signature validation expired.")
+    user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=401, detail="User record context purged.")
     return user
