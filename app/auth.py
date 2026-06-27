@@ -9,7 +9,7 @@ from email.mime.multipart import MIMEMultipart
 from jose import jwt, JWTError
 from app.config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
 
-logger = logging.getLogger("AlphaBot Trading")
+logger = logging.getLogger("AlphaBotix Trading")
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -36,7 +36,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="User not found")
     return user
 
-PLATFORM_NAME = os.getenv("PLATFORM_NAME", "AlphaBot Trading")
+PLATFORM_NAME = os.getenv("PLATFORM_NAME", "AlphaBotix Trading")
 ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
 
 JWT_SECRET = os.getenv("JWT_SECRET", "super-secure-fallback-secret-key-12345!")

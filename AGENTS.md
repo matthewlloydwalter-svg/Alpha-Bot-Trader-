@@ -2,7 +2,7 @@
 
 ## Cursor Cloud specific instructions
 
-AlphaBot Trading is a single **FastAPI** backend (entrypoint `main.py`, app package in `app/`)
+AlphaBotix Trading is a single **FastAPI** backend (entrypoint `main.py`, app package in `app/`)
 that also serves the dashboard UI from `templates/` + `static/`. There is no separate
 frontend service. Standard run instructions live in `README.md` ("Local setup"); the notes
 below cover only non-obvious caveats for this environment.
@@ -18,7 +18,7 @@ below cover only non-obvious caveats for this environment.
   DATABASE_URL=sqlite:///./alphabot.db
   JWT_SECRET=dev-local-secret-key-change-me
   ADMIN_EMAILS=admin@alphabot.dev
-  PLATFORM_NAME=AlphaBot Trading
+  PLATFORM_NAME=AlphaBotix Trading
   ENGINE_ENABLED=1
   ```
   Postgres is used in production; SQLite is fully supported for local dev (the code branches on

@@ -1,4 +1,4 @@
-# AlphaBot Backend — Full Stack
+# AlphaBotix Backend — Full Stack
 
 ## Always-on, event-driven architecture (new)
 
