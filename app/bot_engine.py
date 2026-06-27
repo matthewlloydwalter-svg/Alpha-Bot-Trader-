@@ -40,7 +40,7 @@ from app.database import Bot, Trade, User, ActivityLog, SessionLocal
 from app.brokers import place_order, get_account_info, BrokerError
 from app.market_data import get_market_analysis
 from app.markets_universe import MARKET_UNIVERSE
-from app.credentials import resolve_credentials
+from app.credentials import resolve_data_credentials, resolve_trading_credentials
 from app.news_analysis import get_asset_sentiment
 from app.pattern_analysis import Analysis
 
@@ -48,8 +48,18 @@ logger = logging.getLogger("alphabot.engine")
 
 # ── Tunable strategy parameters ──────────────────────────────────────
 ENTRY_MIN_STRENGTH = float(os.getenv("BOT_ENTRY_MIN_STRENGTH", "0.30"))
-DEPLOY_FRACTION = float(os.getenv("BOT_DEPLOY_FRACTION", "0.95"))   # aggressive deployment
-TRAIL_ATR_MULT = float(os.getenv("BOT_TRAIL_ATR_MULT", "1.5"))     # tight trailing stop
+
+# Micro-transaction position sizing: deploy only a SMALL slice of a bot's
+# allocated funds per trade (never 100% all-in). Clamped to a sane 5%–35% band.
+TRADE_FRACTION = min(max(float(os.getenv("BOT_TRADE_FRACTION", "0.15")), 0.05), 0.35)
+
+# Scalp exits — bank small wins quickly, cut any loss quickly. This is what
+# makes the bot churn many small, risk-controlled trades 24/7 instead of riding
+# one big position.
+MICRO_TP_PCT = float(os.getenv("BOT_MICRO_TP_PCT", "0.75"))  # take profit at +%
+MICRO_SL_PCT = float(os.getenv("BOT_MICRO_SL_PCT", "0.50"))  # cut loss at -%
+
+TRAIL_ATR_MULT = float(os.getenv("BOT_TRAIL_ATR_MULT", "1.5"))     # backstop trailing stop
 TP_ATR_MULT = float(os.getenv("BOT_TP_ATR_MULT", "3.0"))           # adaptive take-profit
 TRAIL_PCT_FLOOR = float(os.getenv("BOT_TRAIL_PCT_FLOOR", "0.02"))  # min 2% trailing buffer
 ROTATION_STAGNANT_PCT = float(os.getenv("BOT_ROTATION_STAGNANT_PCT", "0.5"))  # <0.5% = stagnating
@@ -95,9 +105,17 @@ def _paper(owner: User) -> bool:
     return (owner.trading_mode or "paper") == "paper"
 
 
-def _creds(owner: User, broker: str) -> dict:
-    """Mode-aware broker credentials (paper vs live, with legacy fallback)."""
-    return resolve_credentials(owner, broker, _paper(owner))
+def _trading_creds(owner: User, broker: str) -> dict:
+    """
+    The USER's own keys (from Postgres) — the ONLY credentials used to place
+    orders or read this user's balance. Never the global market-data keys.
+    """
+    return resolve_trading_credentials(owner, broker, _paper(owner))
+
+
+def _data_creds(broker: str) -> dict:
+    """GLOBAL market-data keys — used only to fetch prices/candles, never trades."""
+    return resolve_data_credentials(broker)
 
 
 def _asset_meta(broker: str, symbol: str) -> tuple[str, str]:
@@ -115,9 +133,14 @@ def _asset_meta(broker: str, symbol: str) -> tuple[str, str]:
 def _get_buying_power(owner: User, broker: str) -> float | None:
     """Return available cash/buying power, or None if it can't be determined."""
     try:
-        info = get_account_info(broker=broker, paper=_paper(owner), **_creds(owner, broker))
+        info = get_account_info(broker=broker, paper=_paper(owner), **_trading_creds(owner, broker))
+        # No keys / broker error → treat buying power as UNKNOWN (None), not zero,
+        # so paper simulation can still proceed instead of being blocked.
+        if not info or info.get("error"):
+            return None
         if broker == "alpaca":
-            return float(info.get("buying_power", 0.0))
+            bp = info.get("buying_power")
+            return float(bp) if bp is not None else None
         balances = info.get("balances", {})
         return float(balances.get("USDT", balances.get("USD", 0.0)))
     except Exception as e:
@@ -133,7 +156,7 @@ def _execute(owner: User, broker: str, side: str, symbol: str,
     try:
         order = place_order(
             broker=broker, side=side, symbol=symbol, qty=qty, notional=notional,
-            paper=_paper(owner), **_creds(owner, broker),
+            paper=_paper(owner), **_trading_creds(owner, broker),
         )
         order["simulated"] = False
         return order
@@ -278,9 +301,11 @@ def _safe_analysis(bot: Bot, owner: User, symbol: str = None) -> Analysis | None
     if not sym:
         return None
     try:
+        # Market data uses the GLOBAL data keys (or public access), never the
+        # user's trading keys.
         return get_market_analysis(
             broker=broker, symbol=sym, timeframe=bot.timeframe or "1h", limit=CANDLE_LIMIT,
-            paper=_paper(owner), **_creds(owner, broker),
+            paper=_paper(owner), **_data_creds(broker),
         )
     except BrokerError as e:
         logger.warning("Analysis fetch failed for bot %s (%s): %s", bot.id, sym, e)
@@ -400,6 +425,23 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         _ratchet_risk(bot, price, atr, bullish=(sig.bias == "bullish"))
         profit_pct = (price - bot.avg_entry_price) / bot.avg_entry_price * 100
 
+        # 0) MICRO-SCALP EXITS (fire first) — bank small gains, cut any loss
+        #    quickly so the bot keeps capital working in many small trades.
+        if profit_pct >= MICRO_TP_PCT:
+            _log(db, owner.id,
+                 f"[MICRO-TP] {bot.ticker} +{profit_pct:.2f}% >= {MICRO_TP_PCT:.2f}% — "
+                 f"collecting profit.")
+            closed = _close_position(db, owner, bot, price, reason=f"micro take-profit (+{profit_pct:.2f}%)")
+            result.update({"action": "SELL", "reason": "Micro take-profit", **closed})
+            return result
+        if profit_pct <= -MICRO_SL_PCT:
+            _log(db, owner.id,
+                 f"[MICRO-SL] {bot.ticker} {profit_pct:.2f}% <= -{MICRO_SL_PCT:.2f}% — "
+                 f"cutting the loss.", "WARNING")
+            closed = _close_position(db, owner, bot, price, reason=f"micro stop-loss ({profit_pct:.2f}%)")
+            result.update({"action": "SELL", "reason": "Micro stop-loss", **closed})
+            return result
+
         # 1) Trailing stop — hard capital protection, always fires.
         if bot.stop_price is not None and price <= bot.stop_price:
             _log(db, owner.id,
@@ -452,7 +494,10 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         result["reason"] = f"Waiting for first-buy trigger at {bot.first_buy_price}."
         return result
 
-    notional = round((bot.funds_allocated or 0) * DEPLOY_FRACTION, 2)
+    # Micro-transaction sizing: deploy only a slice (e.g. 15%) of allocated
+    # funds per trade so the bot churns many small, risk-controlled positions
+    # rather than going all-in on one trade.
+    notional = round((bot.funds_allocated or 0) * TRADE_FRACTION, 2)
     if notional <= 0:
         db.commit()
         result["reason"] = "No funds allocated to this bot."
@@ -495,7 +540,7 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
             return result
         buying_power = _get_buying_power(owner, bot.broker or "alpaca")
         if buying_power is not None:
-            notional = min(notional, round(buying_power * DEPLOY_FRACTION, 2))
+            notional = min(notional, round(buying_power * TRADE_FRACTION, 2))
 
     # Execute the entry.
     order = _execute(owner, bot.broker, "buy", bot.ticker, notional=notional)

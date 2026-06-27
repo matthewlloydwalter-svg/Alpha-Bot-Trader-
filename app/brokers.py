@@ -55,6 +55,9 @@ def alpaca_account_info(client: TradingClient) -> dict:
 def alpaca_place_order(client: TradingClient, symbol: str, side: str, qty: float = None,
                         notional: float = None, order_type: str = "market",
                         limit_price: float = None, time_in_force: str = "day") -> dict:
+    if client is None:
+        # No keys configured → signal the caller to record a simulated paper fill.
+        raise BrokerError("Alpaca trading client unavailable (no API keys configured).")
     if not qty and not notional:
         raise BrokerError("Provide qty or notional.")
 
@@ -114,6 +117,8 @@ def okx_account_info(exchange: ccxt.okx) -> dict:
 def okx_place_order(exchange: ccxt.okx, symbol: str, side: str, qty: float = None,
                      notional: float = None, order_type: str = "market",
                      limit_price: float = None) -> dict:
+    if exchange is None:
+        raise BrokerError("OKX trading client unavailable (no API keys configured).")
     # ccxt expects symbols like "BTC/USDT"
     market_symbol = symbol if "/" in symbol else f"{symbol.upper()}/USDT"
 
