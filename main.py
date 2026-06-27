@@ -758,7 +758,14 @@ async def delete_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
     bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
-        
+
+    # Preserve the trade ledger when a bot is removed: every Trade keeps its
+    # immutable bot_uuid for attribution, but the bot_id foreign key must be
+    # cleared first or deleting the bot row violates the trades_bot_id_fkey
+    # constraint (Postgres) and returns a 500.
+    db.query(Trade).filter(Trade.bot_id == bot.id).update(
+        {Trade.bot_id: None}, synchronize_session=False
+    )
     db.delete(bot)
     db.commit()
     return {"status": f"bot {bot_id} deleted"}
