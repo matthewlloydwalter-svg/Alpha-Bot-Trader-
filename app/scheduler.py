@@ -23,9 +23,9 @@ import logging
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from app.database import SessionLocal, Bot, User
+from app.database import SessionLocal, Bot
 from app.markets_universe import MARKET_UNIVERSE
-from app.credentials import resolve_credentials
+from app.credentials import resolve_data_credentials, has_data_credentials
 from app.market_data import get_market_analysis
 from app.market_store import upsert_quote
 from app.brokers import BrokerError
@@ -35,69 +35,54 @@ from app import bot_engine
 logger = logging.getLogger("alphabot.scheduler")
 
 MARKET_POLL_INTERVAL = int(os.getenv("MARKET_POLL_INTERVAL", "30"))   # seconds
-BOT_SCAN_INTERVAL = int(os.getenv("BOT_SCAN_INTERVAL", "60"))         # seconds
+BOT_SCAN_INTERVAL = int(os.getenv("BOT_SCAN_INTERVAL", "30"))         # seconds
 WATCHLIST_LIMIT = int(os.getenv("MARKET_WATCHLIST_LIMIT", "20"))      # symbols/broker
 POLL_TIMEFRAME = os.getenv("MARKET_POLL_TIMEFRAME", "1h")
-
-# Optional server-side data credentials so the watchlist (assets nobody has a
-# bot on yet) can still be polled for Alpaca, which requires keys for data.
-_ENV_ALPACA_KEY = os.getenv("ALPACA_DATA_KEY") or os.getenv("ALPACA_API_KEY")
-_ENV_ALPACA_SECRET = os.getenv("ALPACA_DATA_SECRET") or os.getenv("ALPACA_SECRET_KEY")
 
 _scheduler: BackgroundScheduler | None = None
 
 
-def _collect_targets() -> dict[tuple[str, str], dict]:
+def _collect_symbols() -> set[tuple[str, str]]:
     """
-    Build the set of (broker, symbol) to poll plus the credentials to use.
-
-    Bot-owned symbols use their owner's stored keys; the remaining watchlist
-    falls back to server env keys (Alpaca) / public access (OKX).
+    Build the set of (broker, symbol) to poll: every running bot's ticker plus a
+    per-broker watchlist so the universal charts stay fresh even for assets
+    nobody has a bot on yet. Credentials are NOT decided here — market data
+    always uses the GLOBAL data keys (see resolve_data_credentials).
     """
-    targets: dict[tuple[str, str], dict] = {}
+    symbols: set[tuple[str, str]] = set()
     db = SessionLocal()
     try:
         bots = db.query(Bot).filter(Bot.running == True, Bot.ticker.isnot(None)).all()  # noqa: E712
-        owners: dict[int, User] = {}
         for b in bots:
-            broker = (b.broker or "alpaca").lower()
-            owner = owners.get(b.owner_id) or db.query(User).filter(User.id == b.owner_id).first()
-            if owner is None:
-                continue
-            owners[b.owner_id] = owner
-            paper = (owner.trading_mode or "paper") == "paper"
-            creds = resolve_credentials(owner, broker, paper)
-            targets[(broker, b.ticker.upper())] = {"creds": creds, "paper": paper}
-
-        # Watchlist fallback for assets without a bot.
-        for broker, cfg in MARKET_UNIVERSE.items():
-            base_creds = {}
-            if broker == "alpaca":
-                if not (_ENV_ALPACA_KEY and _ENV_ALPACA_SECRET):
-                    continue  # cannot fetch Alpaca data without keys
-                base_creds = {"alpaca_key": _ENV_ALPACA_KEY, "alpaca_secret": _ENV_ALPACA_SECRET}
-            for item in cfg.get("items", [])[:WATCHLIST_LIMIT]:
-                key = (broker, item["symbol"].upper())
-                targets.setdefault(key, {"creds": base_creds, "paper": True})
+            symbols.add(((b.broker or "alpaca").lower(), b.ticker.upper()))
     finally:
         db.close()
-    return targets
+
+    for broker, cfg in MARKET_UNIVERSE.items():
+        if not has_data_credentials(broker):
+            continue  # e.g. Alpaca with no global ALPACA_DATA_KEY configured
+        for item in cfg.get("items", [])[:WATCHLIST_LIMIT]:
+            symbols.add((broker, item["symbol"].upper()))
+    return symbols
 
 
 def poll_market_data() -> None:
-    targets = _collect_targets()
-    if not targets:
+    symbols = _collect_symbols()
+    if not symbols:
         logger.debug("[POLL] No symbols to poll this cycle.")
         return
     updated = 0
     db = SessionLocal()
     try:
-        for (broker, symbol), meta in targets.items():
+        for (broker, symbol) in symbols:
+            if not has_data_credentials(broker):
+                continue
             try:
+                # GLOBAL market-data credentials only — never a user's keys.
                 analysis = get_market_analysis(
                     broker=broker, symbol=symbol, timeframe=POLL_TIMEFRAME,
-                    limit=120, paper=meta.get("paper", True), use_cache=False,
-                    **(meta.get("creds") or {}),
+                    limit=120, paper=True, use_cache=False,
+                    **resolve_data_credentials(broker),
                 )
             except BrokerError as e:
                 logger.debug("[POLL] %s:%s skipped — %s", broker, symbol, e)
@@ -119,7 +104,7 @@ def poll_market_data() -> None:
             updated += 1
     finally:
         db.close()
-    logger.info("[POLL] Refreshed %d/%d market quotes.", updated, len(targets))
+    logger.info("[POLL] Refreshed %d/%d market quotes.", updated, len(symbols))
 
 
 def evaluate_bots() -> None:

@@ -27,7 +27,10 @@ from app.auth import (
 from app.brokers import get_account_info, get_spot_price, BrokerError
 from app.market_data import get_market_analysis
 from app.markets_universe import MARKET_UNIVERSE
-from app.credentials import resolve_credentials, has_credentials, keys_payload
+from app.credentials import (
+    resolve_trading_credentials, resolve_data_credentials, has_credentials,
+    has_data_credentials, store_alpaca_trading_credentials, keys_payload,
+)
 from app import bot_engine  # Imported bot engine to wire up the run-cycle logic
 from app import market_store, ai_assistant
 from app.realtime import bus
@@ -237,8 +240,11 @@ def save_alpaca_keys(body: AlpacaKeysModel, u: User = Depends(get_current_user_f
         u.alpaca_key, u.alpaca_secret = key, secret
     else:
         u.alpaca_key_live, u.alpaca_secret_live = key, secret
+    # Mirror into the dedicated, encrypted-at-rest trading-key columns. These
+    # are the canonical per-user TRADING credentials (never used for data).
+    store_alpaca_trading_credentials(u, key, secret)
     db.commit()
-    logger.info("[KEYS] Saved Alpaca %s keys for user %s", mode, u.id)
+    logger.info("[KEYS] Saved Alpaca %s keys for user %s (encrypted trading store updated)", mode, u.id)
     return {"success": True, "mode": mode}
 
 @app.post("/broker/okx/keys")
@@ -289,7 +295,8 @@ def get_broker_account(u: User = Depends(get_current_user_from_cookie)):
     broker = u.active_broker or "alpaca"
     paper  = (u.trading_mode or "paper") == "paper"
     mode_label = "Paper" if paper else "Live"
-    creds = resolve_credentials(u, broker, paper)
+    # Balance / portfolio = the USER's own trading keys, pulled from Postgres.
+    creds = resolve_trading_credentials(u, broker, paper)
     try:
         if broker == "alpaca":
             if not creds.get("alpaca_key"):
@@ -475,8 +482,15 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
     display = meta["display"] if meta else symbol.upper()
 
     limit = max(50, min(int(limit), 500))
-    paper = (u.trading_mode or "paper") == "paper"
-    creds = resolve_credentials(u, ex, paper)
+    # Chart/dashboard market data uses the GLOBAL data keys (or public access),
+    # never the user's trading keys.
+    if ex == "alpaca" and not has_data_credentials("alpaca"):
+        raise HTTPException(
+            status_code=503,
+            detail="Market data is temporarily unavailable: the platform's global "
+                   "ALPACA_DATA_KEY/ALPACA_DATA_SECRET are not configured.",
+        )
+    creds = resolve_data_credentials(ex)
 
     try:
         analysis = get_market_analysis(
@@ -484,7 +498,7 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
             alpaca_key=creds.get("alpaca_key"), alpaca_secret=creds.get("alpaca_secret"),
             okx_key=creds.get("okx_key"), okx_secret=creds.get("okx_secret"),
             okx_passphrase=creds.get("okx_passphrase"),
-            paper=paper,
+            paper=True,
         )
     except BrokerError as e:
         logger.warning("Dashboard data unavailable for %s:%s — %s", ex, symbol, e)
