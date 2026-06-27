@@ -790,7 +790,7 @@ async def run_bot_cycle_endpoint(bot_id: int, u: User = Depends(get_current_user
 
 # ── Live data streaming (Server-Sent Events) ─────────────────────────
 @app.get("/stream/updates")
-async def stream_updates(request: Request, db: Session = Depends(get_db)):
+async def stream_updates(request: Request):
     """
     Server-Sent Events feed that streams market-quote, trade and portfolio
     events from the always-on background engine to the browser. Replaces manual
@@ -799,11 +799,17 @@ async def stream_updates(request: Request, db: Session = Depends(get_db)):
     Market quotes are broadcast to everyone; trade/portfolio events are scoped
     to the authenticated user.
     """
+    # Use a short-lived session only to authenticate. A Depends(get_db) session
+    # would stay open for the entire stream lifetime (minutes/hours), pinning a
+    # pooled DB connection per open tab and eventually exhausting the pool.
+    db = SessionLocal()
     try:
         user = get_current_user_from_cookie(request, db)
         user_id = user.id
     except HTTPException:
         user_id = None  # allow anonymous market-quote stream
+    finally:
+        db.close()
 
     queue = bus.subscribe(user_id=user_id)
 
