@@ -76,6 +76,13 @@ class User(Base):
     okx_secret = Column(String, nullable=True)
     okx_pass = Column(String, nullable=True)
 
+    # ── Dedicated per-user TRADING credentials (encrypted at rest) ──
+    # These are the ONLY keys used to place orders / read this user's balance.
+    # They are stored separately from any global market-data keys and are
+    # encrypted via app.crypto when APP_ENCRYPTION_KEY is configured.
+    alpaca_trading_key = Column(String, nullable=True)
+    alpaca_trading_secret = Column(String, nullable=True)
+
     # ── Per-mode credentials (paper vs live) ──
     alpaca_key_paper = Column(String, nullable=True)
     alpaca_secret_paper = Column(String, nullable=True)
@@ -208,6 +215,8 @@ _MIGRATIONS = {
         "bot_uuid": "VARCHAR(32)",
     },
     "users": {
+        "alpaca_trading_key": "VARCHAR",
+        "alpaca_trading_secret": "VARCHAR",
         "alpaca_key_paper": "VARCHAR",
         "alpaca_secret_paper": "VARCHAR",
         "alpaca_key_live": "VARCHAR",
