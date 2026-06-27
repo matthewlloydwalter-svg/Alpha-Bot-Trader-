@@ -132,6 +132,10 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 .badge-red{background:var(--rdim);color:var(--red)}
 .badge-purple{background:rgba(155,89,255,.15);color:var(--purple)}
 .ind-pill{display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:3px 8px;border-radius:20px;background:var(--bg3);color:var(--t2);margin-right:4px}
+.funds-ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.funds-ctl-label{font-size:11px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.5px}
+.funds-ctl .btn{padding:6px 10px}
+.funds-input{width:110px;flex:0 0 auto;text-align:right}
 
 .info-banner{background:rgba(77,159,255,.07);border:1px solid rgba(77,159,255,.2);border-radius:8px;padding:11px 14px;font-size:12px;color:var(--blue);line-height:1.6;margin-bottom:14px}
 .warn-banner{background:rgba(255,77,106,.07);border:1px solid rgba(255,77,106,.2);border-radius:8px;padding:11px 14px;font-size:12px;color:var(--red);line-height:1.6;margin-bottom:14px}
