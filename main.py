@@ -842,16 +842,53 @@ async def delete_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
 
-    # Preserve the trade ledger when a bot is removed: every Trade keeps its
-    # immutable bot_uuid for attribution, but the bot_id foreign key must be
-    # cleared first or deleting the bot row violates the trades_bot_id_fkey
-    # constraint (Postgres) and returns a 500.
-    db.query(Trade).filter(Trade.bot_id == bot.id).update(
+    # Sell out FIRST, then delete. The robust path cancels the symbol's open
+    # orders (which reserve shares), waits for them to clear, then liquidates the
+    # whole real position — so we never orphan live shares at the broker when the
+    # bot is removed. With real keys, a liquidation failure aborts the delete
+    # (fail safe) rather than silently dropping the bot while shares remain.
+    liquidation = None
+    if bot.in_position and (bot.shares_held or 0) > 0:
+        try:
+            liquidation = bot_engine.liquidate_bot(bot.id, reason="bot deleted")
+        except Exception as e:
+            logger.error("Liquidation before delete failed for bot %s: %s", bot_id, e)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Could not sell this bot's holdings before deletion: {e}. "
+                       f"The bot was NOT deleted so its shares are not orphaned — please retry.")
+        db.expire_all()  # liquidate_bot committed the close in its own session
+
+    # Preserve the trade ledger when a bot is removed: every Trade (including the
+    # liquidation sell just recorded) keeps its immutable bot_uuid for
+    # attribution, but the bot_id foreign key must be cleared first or deleting
+    # the bot row violates the trades_bot_id_fkey constraint (Postgres) -> 500.
+    db.query(Trade).filter(Trade.bot_id == bot_id).update(
         {Trade.bot_id: None}, synchronize_session=False
     )
-    db.delete(bot)
+    db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).delete(synchronize_session=False)
     db.commit()
-    return {"status": f"bot {bot_id} deleted"}
+    return {"status": f"bot {bot_id} deleted", "liquidation": liquidation}
+
+@app.post("/bots/{bot_id}/liquidate")
+async def liquidate_bot_endpoint(bot_id: int, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    """
+    Manual Sell: liquidate everything a single bot is holding right now, without
+    deleting the bot. Cancels the symbol's open orders, waits for them to clear,
+    then closes the full position. Strictly scoped to the authenticated user's
+    own bot. The bot's running/paused state is left unchanged.
+    """
+    bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
+    if not bot.in_position or (bot.shares_held or 0) <= 0:
+        return {"status": "flat", "detail": "This bot is not holding any position to sell."}
+    try:
+        result = bot_engine.liquidate_bot(bot.id, reason="manual sell")
+    except Exception as e:
+        logger.error("Manual sell failed for bot %s: %s", bot_id, e)
+        raise HTTPException(status_code=502, detail=f"Could not sell this bot's holdings: {e}")
+    return {"status": "liquidated", "bot_id": bot_id, "details": result}
 
 @app.post("/bots/{bot_id}/funds")
 async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
