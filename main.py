@@ -651,7 +651,8 @@ def portfolio_performance(u: User = Depends(get_current_user_from_cookie), db: S
             pos["qty"] += qty
             pos["cost"] += amount
             markers.append({
-                "time": ts, "datetime_utc": dt_iso, "type": "buy", "bot_name": name,
+                "time": ts, "datetime_utc": dt_iso, "type": "buy",
+                "bot_id": t.bot_id, "bot_name": name,
                 "ticker": t.ticker, "side": "buy", "amount": round(amount, 2),
                 "price": price, "qty": round(qty, 8), "pnl": None,
             })
@@ -665,7 +666,7 @@ def portfolio_performance(u: User = Depends(get_current_user_from_cookie), db: S
             markers.append({
                 "time": ts, "datetime_utc": dt_iso,
                 "type": "sell_profit" if realized >= 0 else "sell_loss",
-                "bot_name": name, "ticker": t.ticker, "side": "sell",
+                "bot_id": t.bot_id, "bot_name": name, "ticker": t.ticker, "side": "sell",
                 "amount": round(qty * price, 2), "cost_basis": round(avg * qty, 2),
                 "price": price, "qty": round(qty, 8), "pnl": round(realized, 2),
             })
