@@ -598,6 +598,10 @@ function renderBots() {
     const chartBtn = b.ticker
       ? `<button class="btn btn-sm" onclick="openMarketDashboard('${esc(b.broker||'alpaca')}','${esc(b.ticker)}')">📈 Chart</button>`
       : "";
+    // Manual Sell — only meaningful while the bot is actually holding a position.
+    const sellAllBtn = b.in_position
+      ? `<button class="btn btn-sm btn-warning" title="Sell all of this bot's holdings now" onclick="sellBot(${b.id})">💵 Sell All</button>`
+      : "";
     return `
     <div class="bot-card ${b.running ? "running" : "paused"}">
       <div style="display:flex;justify-content:space-between;margin-bottom:10px">
@@ -608,6 +612,7 @@ function renderBots() {
         </div>
         <div style="display:flex;gap:6px">
           ${chartBtn}
+          ${sellAllBtn}
           <button class="btn btn-sm" onclick="toggleBot(${b.id})">${b.running?"⏸":"▶"}</button>
           <button class="btn btn-sm btn-danger" onclick="deleteBot(${b.id})">🗑</button>
         </div>
@@ -665,8 +670,27 @@ async function toggleBot(id) {
   try { await api(`/bots/${id}/toggle`, { method: "POST" }); await loadBots(); } catch (e) { toast(e, "error"); }
 }
 async function deleteBot(id) {
-  if (!confirm("Delete bot?")) return;
-  try { await api(`/bots/${id}`, { method: "DELETE" }); await loadBots(); } catch (e) { toast(e, "error"); }
+  if (!confirm("Delete this bot? Any open position will be sold first (open orders are cancelled, then the position is liquidated), then the bot is removed.")) return;
+  try {
+    const res = await api(`/bots/${id}`, { method: "DELETE" });
+    const sold = res && res.liquidation && res.liquidation.action === "SELL";
+    toast(sold ? "Position sold and bot deleted" : "Bot deleted", "success");
+    await loadBots();
+    const pv = document.getElementById("view-portfolio");
+    if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
+  } catch (e) { toast(e, "error"); }
+}
+
+async function sellBot(id) {
+  if (!confirm("Sell ALL of this bot's holdings now? This cancels its open orders and liquidates the position at market. The bot itself is kept.")) return;
+  try {
+    const res = await api(`/bots/${id}/liquidate`, { method: "POST" });
+    if (res && res.status === "flat") toast(res.detail || "Nothing to sell — bot is flat", "");
+    else toast("Holdings sold — bot is now flat", "success");
+    await loadBots();
+    const pv = document.getElementById("view-portfolio");
+    if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
+  } catch (e) { toast(e, "error"); }
 }
 
 async function runBotCycle(id) {

@@ -117,6 +117,8 @@ body{
 .btn-sm{padding:5px 11px;font-size:12px}
 .btn-danger{background:var(--rdim);color:var(--red);border-color:rgba(255,77,106,.4)}
 .btn-danger:hover:not(:disabled){background:rgba(255,77,106,.22)}
+.btn-warning{background:rgba(255,179,71,.13);color:var(--amber);border-color:rgba(255,179,71,.4)}
+.btn-warning:hover:not(:disabled){background:rgba(255,179,71,.22)}
 .btn-ghost{border-color:transparent;color:var(--t2)}
 
 input,select,textarea{font-family:inherit;font-size:13px;color:var(--t1);background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:8px 11px;width:100%;transition:border .15s}
@@ -205,6 +207,8 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 .btn-sm{padding:5px 11px;font-size:12px}
 .btn-danger{background:var(--rdim);color:var(--red);border-color:rgba(255,77,106,.4)}
 .btn-danger:hover:not(:disabled){background:rgba(255,77,106,.22)}
+.btn-warning{background:rgba(255,179,71,.13);color:var(--amber);border-color:rgba(255,179,71,.4)}
+.btn-warning:hover:not(:disabled){background:rgba(255,179,71,.22)}
 .btn-ghost{border-color:transparent;color:var(--t2)}
 
 input,select,textarea{font-family:inherit;font-size:13px;color:var(--t1);background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:8px 11px;width:100%;transition:border .15s}

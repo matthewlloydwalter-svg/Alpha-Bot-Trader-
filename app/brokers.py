@@ -8,11 +8,12 @@ to add more crypto exchanges later without rewriting this file.
 """
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest, GetOrdersRequest
+from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 from alpaca.common.exceptions import APIError as AlpacaAPIError
 import ccxt
 
@@ -89,6 +90,79 @@ def alpaca_place_order(client: TradingClient, symbol: str, side: str, qty: float
         raise BrokerError(f"Alpaca rejected order: {e}")
 
 
+def alpaca_liquidate_position(client: TradingClient, symbol: str,
+                             cancel_timeout: float = 6.0, poll_interval: float = 0.4) -> dict:
+    """
+    Cleanly exit an Alpaca position WITHOUT the "insufficient qty" race:
+
+      1. Cancel every OPEN order on this symbol (those orders reserve shares, so
+         a naive sell of the held qty fails while they are live).
+      2. Wait for the cancellations to actually clear (poll until no open orders
+         remain for the symbol, bounded by ``cancel_timeout``).
+      3. Close the whole position with a single market order via
+         ``close_position`` (liquidates 100% of the real broker quantity, so we
+         never over- or under-sell relative to what the account actually holds).
+
+    Returns a normalized order dict. Raises BrokerError when keys are missing so
+    the caller can fall back to a simulated fill.
+    """
+    if client is None:
+        raise BrokerError("Alpaca API keys not configured.")
+    sym = symbol.upper()
+    try:
+        # 1) Cancel open orders that are reserving shares for this symbol.
+        try:
+            open_orders = client.get_orders(
+                filter=GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[sym])
+            )
+        except AlpacaAPIError as e:
+            raise BrokerError(f"Alpaca order lookup failed for {sym}: {e}")
+        cancelled = 0
+        for o in (open_orders or []):
+            try:
+                client.cancel_order_by_id(o.id)
+                cancelled += 1
+            except AlpacaAPIError as e:
+                logger.warning("[LIQUIDATE] cancel failed for order %s (%s): %s", getattr(o, "id", "?"), sym, e)
+
+        # 2) Wait for confirmation that the cancellations have cleared.
+        if cancelled:
+            deadline = time.monotonic() + cancel_timeout
+            while time.monotonic() < deadline:
+                try:
+                    still_open = client.get_orders(
+                        filter=GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[sym])
+                    )
+                except AlpacaAPIError:
+                    still_open = []
+                if not still_open:
+                    break
+                time.sleep(poll_interval)
+
+        # 3) Is there anything to close?
+        try:
+            pos = client.get_open_position(sym)
+        except AlpacaAPIError:
+            pos = None
+        if pos is None:
+            return {"order_id": None, "status": "no_position", "symbol": sym,
+                    "side": "sell", "qty": 0.0, "cancelled_orders": cancelled}
+
+        # 4) Liquidate the entire real position with a market order.
+        order = client.close_position(sym)
+        return {
+            "order_id": str(getattr(order, "id", "")),
+            "status": str(getattr(order, "status", "submitted")),
+            "symbol": sym, "side": "sell",
+            "qty": float(getattr(order, "qty", 0) or getattr(pos, "qty", 0) or 0),
+            "cancelled_orders": cancelled,
+        }
+    except BrokerError:
+        raise
+    except AlpacaAPIError as e:
+        raise BrokerError(f"Alpaca liquidation failed for {sym}: {e}")
+
+
 # ── OKX (via ccxt) ───────────────────────────────────────────────
 def get_okx_client(api_key: str, secret_key: str, passphrase: str, paper: bool) -> ccxt.okx:
     if not api_key or not secret_key or not passphrase:
@@ -146,6 +220,51 @@ def okx_place_order(exchange: ccxt.okx, symbol: str, side: str, qty: float = Non
         }
     except Exception as e:
         raise BrokerError(f"OKX rejected order: {e}")
+
+
+def okx_liquidate_position(exchange: ccxt.okx, symbol: str) -> dict:
+    """
+    Cancel all open orders for the pair (they reserve the base balance), then
+    market-sell the entire free base balance. Mirrors the Alpaca cancel-then-
+    close flow so a held crypto position can always be exited cleanly.
+    """
+    if exchange is None:
+        raise BrokerError("OKX API keys not configured.")
+    market_symbol = symbol if "/" in symbol else f"{symbol.upper()}/USDT"
+    base = market_symbol.split("/")[0]
+    try:
+        # 1) Cancel open orders for this pair (frees the reserved base balance).
+        cancelled = 0
+        try:
+            for o in (exchange.fetch_open_orders(market_symbol) or []):
+                try:
+                    exchange.cancel_order(o["id"], market_symbol)
+                    cancelled += 1
+                except Exception as e:
+                    logger.warning("[LIQUIDATE] OKX cancel failed (%s): %s", market_symbol, e)
+        except Exception as e:
+            logger.warning("[LIQUIDATE] OKX open-order lookup failed (%s): %s", market_symbol, e)
+
+        # 2) Determine the free base balance to sell.
+        balance = exchange.fetch_balance()
+        free = (balance.get("free", {}) or {}).get(base, 0) or 0
+        amount = float(free)
+        if amount <= 0:
+            return {"order_id": None, "status": "no_position", "symbol": market_symbol,
+                    "side": "sell", "qty": 0.0, "cancelled_orders": cancelled}
+
+        # 3) Market-sell the whole balance.
+        result = exchange.create_order(market_symbol, "market", "sell", amount)
+        return {
+            "order_id": str(result.get("id")),
+            "status": result.get("status", "submitted"),
+            "symbol": market_symbol, "side": "sell",
+            "qty": amount, "cancelled_orders": cancelled,
+        }
+    except BrokerError:
+        raise
+    except Exception as e:
+        raise BrokerError(f"OKX liquidation failed for {market_symbol}: {e}")
 
 
 # ── HISTORICAL CANDLE DATA ───────────────────────────────────────
@@ -373,6 +492,26 @@ def place_order(broker: str, side: str, symbol: str, qty: float = None, notional
     elif broker == "okx":
         exchange = get_okx_client(okx_key, okx_secret, okx_passphrase, paper)
         return okx_place_order(exchange, symbol, side, qty, notional, order_type, limit_price)
+    else:
+        raise BrokerError(f"Unknown broker: {broker}")
+
+
+def liquidate_position(broker: str, symbol: str,
+                       alpaca_key: str = None, alpaca_secret: str = None,
+                       okx_key: str = None, okx_secret: str = None, okx_passphrase: str = None,
+                       paper: bool = True) -> dict:
+    """
+    Robustly exit a position: cancel the symbol's open orders, wait for the
+    cancellations to clear, then liquidate the full real broker quantity. Use
+    this instead of a fixed-qty sell whenever closing a position so reserved
+    shares / qty drift can never cause "insufficient quantity" errors.
+    """
+    if broker == "alpaca":
+        client = get_alpaca_client(alpaca_key, alpaca_secret, paper)
+        return alpaca_liquidate_position(client, symbol)
+    elif broker == "okx":
+        exchange = get_okx_client(okx_key, okx_secret, okx_passphrase, paper)
+        return okx_liquidate_position(exchange, symbol)
     else:
         raise BrokerError(f"Unknown broker: {broker}")
 
