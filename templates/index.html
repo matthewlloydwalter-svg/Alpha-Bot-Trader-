@@ -103,43 +103,57 @@
   </nav>
 
   <main class="page">
-    <div id="view-portfolio" class="tab-view">
-      <div class="grid2" style="margin-bottom:16px">
-        <div class="stat-card">
-          <div class="slbl">Funds allocated to bots</div>
-          <div class="stat-value" id="pf-funds-allocated">$0.00</div>
-          <div style="font-size:11px;color:var(--t3);margin-top:4px">Capital currently deployed in open bot positions</div>
-        </div>
-        <div class="stat-card">
-          <div class="slbl">Net position (bot P/L)</div>
-          <div class="stat-value pup" id="pf-net-position">+$0.00</div>
-          <div style="font-size:11px;color:var(--t3);margin-top:4px">Cumulative realized gains / losses from bot trading</div>
-        </div>
-      </div>
-      <div class="card hidden" id="perf-highlights" style="margin-bottom:16px">
-        <div class="slbl">Performance highlights</div>
-        <div class="grid2" id="highlights-grid"></div>
-      </div>
-      <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
-          <div>
-            <div class="slbl" style="margin-bottom:2px">Bot performance</div>
-            <div style="font-size:11px;color:var(--t3)">
-              <span class="legend-dot" style="background:#ffb347"></span> Buy
-              <span class="legend-dot" style="background:#00d68f;margin-left:10px"></span> Profitable sell
-              <span class="legend-dot" style="background:#ff4d6a;margin-left:10px"></span> Losing sell
-              <span style="margin-left:10px">· times shown in UTC · click a dot for details</span>
+    <div id="view-portfolio" class="tab-view portfolio-stage">
+      <!-- ── Main Portfolio holo card ─────────────────────────────── -->
+      <div class="holo-card portfolio-main">
+        <div class="holo-head">
+          <div class="holo-total">
+            <div class="holo-lbl">Total Alpha Bot valuation</div>
+            <div class="holo-total-value" id="pf-total-value">$0.00</div>
+            <div class="holo-total-sub">
+              <span id="pf-total-delta" class="pf-delta">+$0.00</span>
+              <span id="live-indicator" class="badge badge-amber" title="Live data stream">● Connecting…</span>
             </div>
           </div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <span id="live-indicator" class="badge badge-amber" title="Live data stream">● Connecting…</span>
-            <button class="btn btn-sm" onclick="loadPortfolioPerformance()">🔄 Refresh</button>
+          <div class="holo-tf">
+            <label class="holo-tf-lbl" for="pf-timeframe">Timeframe</label>
+            <select id="pf-timeframe" class="holo-select" onchange="setPortfolioTimeframe(this.value)">
+              <option value="1D" selected>1 Day</option>
+              <option value="1W">1 Week</option>
+              <option value="1M">1 Month</option>
+              <option value="1Y">1 Year</option>
+              <option value="5Y">5 Years</option>
+            </select>
           </div>
         </div>
-        <div id="perf-chart-wrap" class="perf-chart-wrap">
-          <div id="perf-chart"></div>
-          <div id="perf-chart-msg" class="dash-chart-msg">Loading performance…</div>
-          <div id="perf-tooltip" class="perf-tooltip hidden"></div>
+        <div class="holo-chart-wrap">
+          <div id="pf-main-chart" class="holo-chart"></div>
+          <div id="pf-main-chart-msg" class="dash-chart-msg hidden"></div>
+        </div>
+      </div>
+
+      <!-- ── Performance & Active Bots holo card ──────────────────── -->
+      <div class="holo-card portfolio-perf">
+        <div class="holo-lbl">24h performance</div>
+        <div class="perf-wl-grid">
+          <div class="perf-wl perf-wl-win" id="pf-winner">
+            <div class="perf-wl-tag">🏆 Biggest winner (24h)</div>
+            <div class="perf-wl-name">—</div>
+            <div class="perf-wl-val pup">—</div>
+          </div>
+          <div class="perf-wl perf-wl-lose" id="pf-loser">
+            <div class="perf-wl-tag">📉 Biggest loser (24h)</div>
+            <div class="perf-wl-name">—</div>
+            <div class="perf-wl-val pdn">—</div>
+          </div>
+        </div>
+
+        <div class="active-bots">
+          <button class="active-bots-head" id="active-bots-toggle" onclick="toggleActiveBots()" aria-expanded="true">
+            <span>🤖 Active Bots <span class="active-bots-count" id="active-bots-count">0</span></span>
+            <span class="active-bots-caret" id="active-bots-caret">▾</span>
+          </button>
+          <div class="active-bots-list" id="active-bots-list"><!-- rendered by JS --></div>
         </div>
       </div>
     </div>

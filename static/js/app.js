@@ -329,185 +329,266 @@ async function submitVerificationCode() {
   } catch (e) { toast(e, "error"); }
 }
 
-/* --- PORTFOLIO TAB (bot performance graph) --- */
-let PERF_CHART = null, PERF_SERIES = null, PERF_MARKERS_BY_TIME = {};
+/* ════════════════════════════════════════════════════════════════════
+   PORTFOLIO TAB — holographic glassmorphism component (LIVE DATA)
+   Charts are driven by the real backend:
+     • GET /api/portfolio/performance  -> total valuation, cumulative P/L
+       series (sliced per timeframe), buy/sell markers, 24h winner/loser.
+     • GET /bots                       -> active-bot list + allocations.
+   It refreshes on tab open, on the Refresh hooks, and live via the SSE
+   stream (schedulePerfReload on trade/portfolio events).
+   ════════════════════════════════════════════════════════════════════ */
+let PF_STATE = { timeframe: "1D" };   // default timeframe = 1 Day
+let PF_DATA = null;                   // { perf: <performance json>, bots: [...] }
+let PF_MAIN_CHART = null;             // lightweight-charts instance for the main chart
+let BOT_MINI_CHARTS = {};             // botId -> chart instance for expanded panels
+let ACTIVE_BOTS_OPEN = true;          // "Active Bots" accordion open/closed
 
+const PF_GREEN = "#00d68f", PF_RED = "#ff4d6a";
+const TF_SECONDS = { "1D": 86400, "1W": 604800, "1M": 2592000, "1Y": 31536000, "5Y": 157680000 };
+
+function money(v) { return "$" + Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtSignedMoney(v) { const n = Number(v || 0); return (n >= 0 ? "+" : "-") + "$" + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtSignedPct(v) { const n = Number(v || 0); return (n >= 0 ? "+" : "") + n.toFixed(2) + "%"; }
+
+// Shared transparent (holographic) chart options so the glass + globe show through.
+function _holoChartOpts() {
+  return {
+    layout: { background: { color: "rgba(0,0,0,0)" }, textColor: "#a9c7e0", fontSize: 11 },
+    grid: { vertLines: { color: "rgba(57,217,255,0.07)" }, horzLines: { color: "rgba(57,217,255,0.07)" } },
+    rightPriceScale: { borderColor: "rgba(57,217,255,0.18)" },
+    timeScale: { borderColor: "rgba(57,217,255,0.18)", timeVisible: true, secondsVisible: false },
+    crosshair: { mode: 0, vertLine: { color: "rgba(57,217,255,0.4)" }, horzLine: { color: "rgba(57,217,255,0.4)" } },
+    autoSize: true,
+  };
+}
+
+// Slice the real cumulative-P/L series to the selected timeframe and rebase to
+// 0 at the window start, so the line shows the actual gain/loss WITHIN it.
+function _tfWindow(series, tf) {
+  if (!Array.isArray(series) || !series.length) return [];
+  const now = Math.floor(Date.now() / 1000), cutoff = now - (TF_SECONDS[tf] || 86400);
+  let baseline = series[0].value;
+  const inWin = [];
+  for (const p of series) {
+    if (p.time < cutoff) baseline = p.value;   // last known value before the window
+    else inWin.push(p);
+  }
+  if (!inWin.length) return [];
+  const pts = [];
+  if (inWin[0].time > cutoff) pts.push({ time: cutoff, value: 0 });   // anchor window start at 0
+  for (const p of inWin) pts.push({ time: p.time, value: +(p.value - baseline).toFixed(2) });
+  return pts;
+}
+
+// Real 24h winner/loser from the trade ledger (sum of realized P/L per bot on
+// SELL fills in the last 24h).
+function _winnerLoser24h(perf) {
+  const cutoff = Math.floor(Date.now() / 1000) - 86400, byBot = {};
+  for (const m of (perf.markers || [])) {
+    if (m.type && m.type.indexOf("sell") === 0 && m.time >= cutoff && m.pnl != null) {
+      const k = m.bot_name || ("Bot " + m.bot_id);
+      byBot[k] = (byBot[k] || 0) + Number(m.pnl);
+    }
+  }
+  const e = Object.entries(byBot);
+  if (!e.length) return null;
+  e.sort((a, b) => b[1] - a[1]);
+  return { winner: { name: e[0][0], pnl: e[0][1] }, loser: { name: e[e.length - 1][0], pnl: e[e.length - 1][1] } };
+}
+
+// Per-bot execution chart data straight from the real trade ledger markers.
+function _botExecData(botId) {
+  const ms = (PF_DATA.perf.markers || []).filter(m => m.bot_id === botId).sort((a, b) => a.time - b.time);
+  const seen = {}, series = [], markers = [];
+  for (const m of ms) {
+    if (seen[m.time]) continue;   // lightweight-charts requires unique, ascending times
+    seen[m.time] = 1;
+    series.push({ time: m.time, value: Number(m.price || 0) });
+    markers.push({ time: m.time, type: m.type === "buy" ? "buy" : "sell" });
+  }
+  return { series, markers };
+}
+
+// Public entry — called on boot, tab switch and SSE refresh. Pulls LIVE data.
 async function loadPortfolioPerformance() {
-  const msg = document.getElementById("perf-chart-msg");
-  hidePerfTooltip();
-  if (msg) { msg.classList.remove("hidden"); msg.textContent = "Loading performance…"; }
-  let data;
+  const msg = document.getElementById("pf-main-chart-msg");
+  let perf, bots;
   try {
-    data = await api("/api/portfolio/performance");
+    [perf, bots] = await Promise.all([api("/api/portfolio/performance"), api("/bots")]);
   } catch (e) {
     if (msg) { msg.classList.remove("hidden"); msg.textContent = `⚠ ${e.message}`; }
     return;
   }
+  PF_DATA = { perf: perf || {}, bots: Array.isArray(bots) ? bots : (bots && bots.bots) || [] };
 
-  // Metrics
-  const fa = document.getElementById("pf-funds-allocated");
-  if (fa) fa.textContent = "$" + Number(data.funds_allocated || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const np = document.getElementById("pf-net-position");
-  if (np) {
-    const v = Number(data.net_position || 0);
-    np.textContent = (v >= 0 ? "+" : "-") + "$" + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    np.className = "stat-value " + (v >= 0 ? "pup" : "pdn");
+  // Total current asset valuation held by active bots = open-position cost
+  // basis + live unrealized mark-to-market.
+  const total = Number(perf.funds_allocated || 0) + Number(perf.unrealized || 0);
+  const tEl = document.getElementById("pf-total-value");
+  if (tEl) tEl.textContent = money(total);
+
+  const sel = document.getElementById("pf-timeframe");
+  if (sel) sel.value = PF_STATE.timeframe;
+
+  renderPortfolioMainChart();
+  renderWinnerLoser();
+  renderActiveBots();
+}
+
+function setPortfolioTimeframe(tf) {
+  PF_STATE.timeframe = tf;
+  renderPortfolioMainChart();   // re-slice cached live series, no refetch needed
+}
+
+function renderPortfolioMainChart() {
+  if (!PF_DATA) return;
+  const wrap = document.getElementById("pf-main-chart");
+  const msg = document.getElementById("pf-main-chart-msg");
+  if (!wrap) return;
+  const series = _tfWindow(PF_DATA.perf.series || [], PF_STATE.timeframe);
+  const net = series.length ? series[series.length - 1].value : 0;
+
+  const dEl = document.getElementById("pf-total-delta");
+  if (dEl) {
+    // Only show a percentage when there is a meaningful capital base to divide
+    // by (open allocation); otherwise the % degenerates (flat account).
+    const base = Number(PF_DATA.perf.funds_allocated || 0);
+    const pctStr = base > 0 ? ` (${fmtSignedPct(net / base * 100)})` : "";
+    dEl.textContent = `${fmtSignedMoney(net)}${pctStr} · ${PF_STATE.timeframe}`;
+    dEl.className = "pf-delta " + (net >= 0 ? "pup" : "pdn");
   }
 
-  renderHighlights(data.highlights);
-  renderPerfChart(data);
-}
-
-function fmtSignedMoney(v) {
-  const n = Number(v || 0);
-  return (n >= 0 ? "+" : "-") + "$" + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function highlightCard(h, kind) {
-  // kind: "best" (green) or "worst" (red, flagged as a deletion candidate)
-  const isLoss = Number(h.net_profit || 0) < 0;
-  const accent = kind === "best" ? "var(--green)" : "var(--red)";
-  const pnlClass = Number(h.net_profit || 0) >= 0 ? "pup" : "pdn";
-  const title = kind === "best" ? "🏆 Most profitable bot" : "⚠️ Least profitable bot";
-  const flag = (kind === "worst" && isLoss)
-    ? `<div style="font-size:11px;color:var(--red);margin-top:6px">Candidate for deletion — review or reduce its allocation.</div>`
-    : "";
-  return `
-    <div class="stat-card" style="border-left:3px solid ${accent}">
-      <div class="slbl" style="color:${accent}">${title}</div>
-      <div style="font-weight:700;font-size:15px;margin:2px 0 6px">${esc(h.name || "—")}</div>
-      <div style="display:flex;justify-content:space-between;font-size:13px">
-        <span style="color:var(--t2)">Net P/L</span>
-        <span class="${pnlClass}" style="font-weight:600">${fmtSignedMoney(h.net_profit)}</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:3px">
-        <span style="color:var(--t2)">ROI</span>
-        <span class="${pnlClass}" style="font-weight:600">${(Number(h.roi||0) >= 0 ? "+" : "") + Number(h.roi||0).toFixed(2)}%</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:12px;margin-top:3px;color:var(--t3)">
-        <span>Allocated</span><span>$${Number(h.funds_allocated||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-      </div>
-      ${flag}
-    </div>`;
-}
-
-function renderHighlights(h) {
-  const card = document.getElementById("perf-highlights");
-  const grid = document.getElementById("highlights-grid");
-  if (!card || !grid) return;
-  if (!h || !h.most_profitable) { card.classList.add("hidden"); return; }
-  card.classList.remove("hidden");
-  // With a single bot, most == least; show just the one card to avoid confusion.
-  if (h.bot_count === 1 || h.most_profitable.bot_id === h.least_profitable.bot_id) {
-    grid.innerHTML = highlightCard(h.most_profitable, "best");
-  } else {
-    grid.innerHTML = highlightCard(h.most_profitable, "best") + highlightCard(h.least_profitable, "worst");
-  }
-}
-
-function renderPerfChart(data) {
-  const msg = document.getElementById("perf-chart-msg");
-  const wrap = document.getElementById("perf-chart");
+  if (PF_MAIN_CHART) { try { PF_MAIN_CHART.remove(); } catch (_) {} PF_MAIN_CHART = null; }
   if (typeof LightweightCharts === "undefined") {
     if (msg) { msg.classList.remove("hidden"); msg.textContent = "Chart library unavailable (offline)."; }
     return;
   }
-  const series = data.series || [];
   if (!series.length) {
-    if (msg) { msg.classList.remove("hidden"); msg.textContent = "No bot trades yet — the performance line will appear once your bots start trading."; }
-    if (PERF_CHART) { try { PERF_CHART.remove(); } catch (_) {} PERF_CHART = null; }
+    if (msg) { msg.classList.remove("hidden"); msg.textContent = "No portfolio history in this timeframe yet — it fills in as your bots trade."; }
     return;
   }
   if (msg) msg.classList.add("hidden");
 
-  if (PERF_CHART) { try { PERF_CHART.remove(); } catch (_) {} PERF_CHART = null; }
-  PERF_CHART = LightweightCharts.createChart(wrap, {
-    layout: { background: { color: "#0d0f14" }, textColor: "#8b91a8" },
-    grid: { vertLines: { color: "#1a1e28" }, horzLines: { color: "#1a1e28" } },
-    rightPriceScale: { borderColor: "#2a2f3d" },
-    timeScale: { borderColor: "#2a2f3d", timeVisible: true, secondsVisible: false },
-    crosshair: { mode: 0 },
-    localization: {
-      // Force UTC rendering on the time axis + crosshair label.
-      timeFormatter: (t) => new Date(t * 1000).toUTCString().replace(" GMT", " UTC"),
-    },
-    autoSize: true,
+  PF_MAIN_CHART = LightweightCharts.createChart(wrap, _holoChartOpts());
+  // Line color logic: GREEN for an overall net gain, RED for a net loss.
+  const line = PF_MAIN_CHART.addLineSeries({
+    color: net >= 0 ? PF_GREEN : PF_RED,
+    lineWidth: 2, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: true,
   });
-
-  PERF_SERIES = PERF_CHART.addAreaSeries({
-    lineColor: "#4d9fff", topColor: "rgba(77,159,255,0.25)", bottomColor: "rgba(77,159,255,0.02)",
-    lineWidth: 2, priceLineVisible: false,
-  });
-  PERF_SERIES.setData(series.map(p => ({ time: p.time, value: p.value })));
-
-  // Build markers and a time->markers lookup for click tooltips.
-  PERF_MARKERS_BY_TIME = {};
-  const colorFor = { buy: "#ffb347", sell_profit: "#00d68f", sell_loss: "#ff4d6a" };
-  const lwcMarkers = (data.markers || []).map(m => {
-    (PERF_MARKERS_BY_TIME[m.time] = PERF_MARKERS_BY_TIME[m.time] || []).push(m);
-    return {
-      time: m.time,
-      position: m.type === "buy" ? "belowBar" : "aboveBar",
-      color: colorFor[m.type] || "#8b91a8",
-      shape: "circle",
-      size: 1.4,
-    };
-  });
-  PERF_SERIES.setMarkers(lwcMarkers);
-
-  PERF_CHART.timeScale().fitContent();
-
-  PERF_CHART.subscribeClick((param) => {
-    if (!param || !param.time) { hidePerfTooltip(); return; }
-    const list = PERF_MARKERS_BY_TIME[param.time];
-    if (!list || !list.length) { hidePerfTooltip(); return; }
-    showPerfTooltip(list, param.point);
-  });
+  line.setData(series);
+  // The main historical chart intentionally has NO buy/sell markers.
+  PF_MAIN_CHART.timeScale().fitContent();
 }
 
-function fmtUTC(iso) {
-  if (!iso) return "—";
-  // Render explicitly in UTC.
-  const d = new Date(iso);
-  return d.toUTCString().replace(" GMT", " UTC");
+function renderWinnerLoser() {
+  if (!PF_DATA) return;
+  const wl = _winnerLoser24h(PF_DATA.perf);
+  const setCard = (id, name, pnl, cls) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.querySelector(".perf-wl-name").textContent = name;
+    const v = el.querySelector(".perf-wl-val");
+    v.textContent = (pnl == null) ? "—" : fmtSignedMoney(pnl);
+    v.className = "perf-wl-val " + (cls || "");
+  };
+  if (!wl) {
+    setCard("pf-winner", "No closed trades in last 24h", null, "");
+    setCard("pf-loser", "No closed trades in last 24h", null, "");
+    return;
+  }
+  setCard("pf-winner", wl.winner.name, wl.winner.pnl, "pup");
+  setCard("pf-loser", wl.loser.name, wl.loser.pnl, "pdn");
 }
 
-function showPerfTooltip(markers, point) {
-  const tip = document.getElementById("perf-tooltip");
-  if (!tip) return;
-  const labelFor = { buy: "🟠 Bought", sell_profit: "🟢 Sold (profit)", sell_loss: "🔴 Sold (loss)" };
-  tip.innerHTML = markers.map(m => {
-    const rows = [
-      `<div class="pt-row"><span>Bot</span><span>${esc(m.bot_name || "—")}</span></div>`,
-      `<div class="pt-row"><span>Asset</span><span>${esc(m.ticker || "—")}</span></div>`,
-      `<div class="pt-row"><span>Amount</span><span>$${Number(m.amount || 0).toLocaleString()}</span></div>`,
-      `<div class="pt-row"><span>Price</span><span>$${Number(m.price || 0).toLocaleString()}</span></div>`,
-    ];
-    if (m.pnl !== null && m.pnl !== undefined) {
-      const c = m.pnl >= 0 ? "var(--green)" : "var(--red)";
-      rows.push(`<div class="pt-row"><span>P/L</span><span style="color:${c}">${m.pnl >= 0 ? "+" : ""}$${Number(m.pnl).toLocaleString()}</span></div>`);
-    }
-    rows.push(`<div class="pt-row"><span>Time</span><span>${esc(fmtUTC(m.datetime_utc))}</span></div>`);
-    return `<div style="margin-bottom:${markers.length > 1 ? "10px" : "0"}">
-        <div class="pt-title">${labelFor[m.type] || ""}</div>${rows.join("")}
-      </div>`;
+function toggleActiveBots() {
+  ACTIVE_BOTS_OPEN = !ACTIVE_BOTS_OPEN;
+  const c = document.querySelector(".active-bots");
+  if (c) c.classList.toggle("collapsed", !ACTIVE_BOTS_OPEN);
+  const t = document.getElementById("active-bots-toggle");
+  if (t) t.setAttribute("aria-expanded", String(ACTIVE_BOTS_OPEN));
+}
+
+function renderActiveBots() {
+  if (!PF_DATA) return;
+  const list = document.getElementById("active-bots-list");
+  const cnt = document.getElementById("active-bots-count");
+  if (!list) return;
+  const bots = PF_DATA.bots || [];
+  if (cnt) cnt.textContent = bots.length;
+  if (!bots.length) {
+    list.innerHTML = `<div style="color:rgba(234,246,255,0.6);font-size:13px;padding:6px 2px">No active bots yet — create one in the Bots tab.</div>`;
+    return;
+  }
+  list.innerHTML = bots.map(b => {
+    const realized = Number(b.realized_pnl || 0);
+    const alloc = Number(b.funds_allocated || 0);
+    const plPct = alloc > 0 ? (realized / alloc * 100) : 0;
+    const plCls = plPct >= 0 ? "pup" : "pdn";
+    const tks = b.ticker ? [b.ticker] : (b.auto_select ? ["AUTO"] : ["—"]);
+    const tickers = tks.map(t => `<span class="tk">${esc(t)}</span>`).join("");
+    const posBadge = b.in_position ? `<span class="badge badge-blue" style="font-size:9px;margin-left:6px">In position</span>` : "";
+    return `
+    <div class="mini-bot" id="mini-bot-${b.id}">
+      <div class="mini-bot-row" onclick="toggleBotPanel(${b.id})">
+        <span class="mini-bot-caret">▸</span>
+        <div class="mini-bot-main">
+          <div class="mini-bot-name">${esc(b.name)}${posBadge}</div>
+          <div class="mini-bot-tickers">${tickers}</div>
+        </div>
+        <div class="mini-bot-alloc">
+          <div class="amt">${money(alloc)}</div>
+          <div class="pl ${plCls}">${fmtSignedPct(plPct)}</div>
+        </div>
+      </div>
+      <div class="mini-bot-panel">
+        <div class="mini-bot-legend">
+          <span class="legend-dot" style="background:${PF_GREEN}"></span> Buy
+          <span class="legend-dot" style="background:${PF_RED};margin-left:10px"></span> Sell
+          · live execution history
+        </div>
+        <div class="mini-bot-chart" id="mini-bot-chart-${b.id}"></div>
+        <div class="mini-bot-empty hidden" id="mini-bot-empty-${b.id}" style="color:rgba(234,246,255,0.55);font-size:12px;padding:8px 2px">No executions recorded yet for this bot.</div>
+      </div>
+    </div>`;
   }).join("");
-  tip.innerHTML = `<span class="pt-close" onclick="hidePerfTooltip()">✕</span>` + tip.innerHTML;
-
-  // Position the tooltip near the click, kept inside the chart wrapper.
-  const wrap = document.getElementById("perf-chart-wrap");
-  tip.classList.remove("hidden");
-  const maxX = wrap.clientWidth - tip.offsetWidth - 8;
-  const maxY = wrap.clientHeight - tip.offsetHeight - 8;
-  let x = (point && point.x ? point.x + 12 : 12);
-  let y = (point && point.y ? point.y + 12 : 12);
-  tip.style.left = Math.max(8, Math.min(x, maxX)) + "px";
-  tip.style.top = Math.max(8, Math.min(y, maxY)) + "px";
 }
 
-function hidePerfTooltip() {
-  const tip = document.getElementById("perf-tooltip");
-  if (tip) tip.classList.add("hidden");
+function toggleBotPanel(id) {
+  const card = document.getElementById(`mini-bot-${id}`);
+  if (!card) return;
+  const opening = !card.classList.contains("open");
+  card.classList.toggle("open", opening);
+  if (opening) {
+    renderBotMiniChart(id);
+  } else if (BOT_MINI_CHARTS[id]) {
+    try { BOT_MINI_CHARTS[id].remove(); } catch (_) {}
+    delete BOT_MINI_CHARTS[id];
+  }
+}
+
+function renderBotMiniChart(id) {
+  if (!PF_DATA) return;
+  const wrap = document.getElementById(`mini-bot-chart-${id}`);
+  const empty = document.getElementById(`mini-bot-empty-${id}`);
+  if (!wrap || typeof LightweightCharts === "undefined") return;
+  if (BOT_MINI_CHARTS[id]) { try { BOT_MINI_CHARTS[id].remove(); } catch (_) {} delete BOT_MINI_CHARTS[id]; }
+  const { series, markers } = _botExecData(id);
+  if (!series.length) { wrap.style.display = "none"; if (empty) empty.classList.remove("hidden"); return; }
+  wrap.style.display = ""; if (empty) empty.classList.add("hidden");
+  const chart = LightweightCharts.createChart(wrap, _holoChartOpts());
+  const net = series.length ? (series[series.length - 1].value - series[0].value) : 0;
+  const line = chart.addLineSeries({ color: net >= 0 ? PF_GREEN : PF_RED, lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+  line.setData(series);
+  // Buy/Sell execution dots — present ONLY on these per-bot mini charts.
+  line.setMarkers(markers.map(m => ({
+    time: m.time,
+    position: m.type === "buy" ? "belowBar" : "aboveBar",
+    color: m.type === "buy" ? PF_GREEN : PF_RED,
+    shape: "circle", size: 1.6, text: m.type === "buy" ? "B" : "S",
+  })));
+  chart.timeScale().fitContent();
+  BOT_MINI_CHARTS[id] = chart;
 }
 
 async function loadBrokerAccount() {
