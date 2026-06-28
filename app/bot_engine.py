@@ -37,10 +37,10 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.database import Bot, Trade, User, ActivityLog, SessionLocal
-from app.brokers import place_order, get_account_info, BrokerError
+from app.brokers import place_order, get_account_info, liquidate_position, BrokerError
 from app.market_data import get_market_analysis
 from app.markets_universe import MARKET_UNIVERSE
-from app.credentials import resolve_credentials
+from app.credentials import resolve_credentials, has_credentials
 from app.news_analysis import get_asset_sentiment
 from app.pattern_analysis import Analysis
 
@@ -145,6 +145,33 @@ def _execute(owner: User, broker: str, side: str, symbol: str,
                 "status": "simulated", "symbol": symbol, "side": side, "simulated": True}
 
 
+def _liquidate(owner: User, broker: str, symbol: str) -> dict:
+    """
+    Robustly exit a position via the broker: cancel the symbol's open orders,
+    wait for them to clear, then liquidate the full real quantity. Used for ALL
+    position exits (stops, take-profit, structural sells, rotation, manual sell,
+    delete) so reserved shares can never trigger an "insufficient qty" error.
+    Falls back to a simulated fill when keys are missing.
+    """
+    has_keys = has_credentials(owner, (broker or "alpaca"), _paper(owner))
+    try:
+        order = liquidate_position(broker=broker, symbol=symbol,
+                                   paper=_paper(owner), **_creds(owner, broker))
+        order["simulated"] = False
+        return order
+    except BrokerError as e:
+        if has_keys:
+            # Real account with real keys: never fake a successful exit — a
+            # silent "simulated" fill would mark the position closed in our DB
+            # while the shares are still sitting at the broker. Surface it so
+            # the caller (stop-loss, manual sell, delete) fails safe instead.
+            logger.error("[LIQUIDATE] %s %s FAILED with live keys: %s", symbol, broker, e)
+            raise
+        logger.warning("[SIM] liquidate %s %s simulated (broker said: %s)", symbol, broker, e)
+        return {"order_id": f"SIM-{datetime.utcnow().timestamp():.0f}",
+                "status": "simulated", "symbol": symbol, "side": "sell", "simulated": True}
+
+
 # ────────────────────────────────────────────────────────────────────
 # Risk-management arming / ratcheting
 # ────────────────────────────────────────────────────────────────────
@@ -231,7 +258,9 @@ def _attempt_capital_rotation(db: Session, owner: User, candidate_bot: Bot,
 def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: str) -> dict:
     qty = bot.shares_held or 0
     ticker = bot.ticker
-    order = _execute(owner, bot.broker, "sell", ticker, qty=qty)
+    # Cancel-then-close: never a naive fixed-qty sell, so open orders reserving
+    # shares can't cause an "insufficient quantity" rejection.
+    order = _liquidate(owner, bot.broker, ticker)
     gain = (price - (bot.avg_entry_price or price)) * qty
     notional = round(qty * price, 6)
     bot.realized_pnl = (bot.realized_pnl or 0) + gain
@@ -583,6 +612,45 @@ def _analysis_brief(a: Analysis) -> dict:
 # ────────────────────────────────────────────────────────────────────
 # Public entry points
 # ────────────────────────────────────────────────────────────────────
+def _resolve_exit_price(db: Session, bot: Bot, owner: User) -> float:
+    """Best available price to value a manual/forced exit in the ledger:
+    freshest stored quote → live analysis → last entry price."""
+    broker = bot.broker or owner.active_broker or "alpaca"
+    try:
+        from app.market_store import get_quote
+        q = get_quote(db, broker, bot.ticker or "")
+        if q and q.price:
+            return float(q.price)
+    except Exception:
+        pass
+    a = _safe_analysis(bot, owner)
+    if a and a.last_price:
+        return float(a.last_price)
+    return float(bot.avg_entry_price or 0.0)
+
+
+def liquidate_bot(bot_id: int, reason: str = "manual sell") -> dict:
+    """
+    Sell EVERYTHING a single bot is holding, right now, via the robust cancel-
+    then-close path — without touching the bot row itself. Safe to call from the
+    Manual Sell endpoint and from delete_bot (which liquidates before removing).
+    Opens its own session so it is self-contained.
+    """
+    db = SessionLocal()
+    try:
+        bot = db.query(Bot).filter(Bot.id == bot_id).first()
+        if not bot:
+            return {"action": "ERROR", "reason": "Bot not found."}
+        owner = bot.owner
+        if not bot.in_position or (bot.shares_held or 0) <= 0:
+            return {"action": "FLAT", "reason": "Bot holds no open position to sell."}
+        price = _resolve_exit_price(db, bot, owner)
+        closed = _close_position(db, owner, bot, price, reason=reason)
+        return {"action": "SELL", "reason": reason, "price": price, **closed}
+    finally:
+        db.close()
+
+
 def run_cycle(bot_id: int) -> dict:
     """
     Run one full decision cycle for a single bot by id. Opens its own DB
