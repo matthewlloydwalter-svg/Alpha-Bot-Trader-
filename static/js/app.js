@@ -451,8 +451,11 @@ function renderPortfolioMainChart() {
 
   const dEl = document.getElementById("pf-total-delta");
   if (dEl) {
-    const base = Number(PF_DATA.perf.funds_allocated || 0) || 1;
-    dEl.textContent = `${fmtSignedMoney(net)} (${fmtSignedPct(net / base * 100)}) · ${PF_STATE.timeframe}`;
+    // Only show a percentage when there is a meaningful capital base to divide
+    // by (open allocation); otherwise the % degenerates (flat account).
+    const base = Number(PF_DATA.perf.funds_allocated || 0);
+    const pctStr = base > 0 ? ` (${fmtSignedPct(net / base * 100)})` : "";
+    dEl.textContent = `${fmtSignedMoney(net)}${pctStr} · ${PF_STATE.timeframe}`;
     dEl.className = "pf-delta " + (net >= 0 ? "pup" : "pdn");
   }
 
