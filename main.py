@@ -815,7 +815,7 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
         sell_limit=_num("sell_limit"),
         min_profit_pct=_num("min_profit_pct"),
         first_buy_price=_num("first_buy_price"),
-        running=False,
+        running=True,   # start scanning immediately — user can pause any time
         trade_count=0
     )
 
