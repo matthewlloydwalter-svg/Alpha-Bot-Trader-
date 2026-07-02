@@ -139,22 +139,39 @@ def start_scheduler() -> BackgroundScheduler | None:
     if _scheduler is not None:
         return _scheduler
 
+    from datetime import datetime as _dt
+
     sched = BackgroundScheduler(timezone="UTC")
+
+    # NOTE: do NOT pass next_run_time=None — that pauses the job in APScheduler
+    # and it will NEVER fire automatically. Omitting the kwarg lets APScheduler
+    # calculate the first run time from the trigger (i.e. "now + interval"),
+    # and the two immediate one-shot jobs below warm the system right away.
     sched.add_job(poll_market_data, "interval", seconds=MARKET_POLL_INTERVAL,
-                  id="market_poll", max_instances=1, coalesce=True,
-                  next_run_time=None)
+                  id="market_poll", max_instances=1, coalesce=True)
     sched.add_job(evaluate_bots, "interval", seconds=BOT_SCAN_INTERVAL,
-                  id="bot_eval", max_instances=1, coalesce=True,
-                  next_run_time=None)
+                  id="bot_eval", max_instances=1, coalesce=True)
     sched.start()
     _scheduler = sched
-    logger.info("[ENGINE] Background engine started (market=%ss, bots=%ss).",
-                MARKET_POLL_INTERVAL, BOT_SCAN_INTERVAL)
-    # Kick an immediate first market poll so the DB is warm without waiting a full interval.
+    logger.info(
+        "[ENGINE] Background engine started — market poll every %ss, bot eval every %ss.",
+        MARKET_POLL_INTERVAL, BOT_SCAN_INTERVAL,
+    )
+
+    # Kick both jobs immediately so the system is live on startup without
+    # waiting for a full interval to pass.
+    now = _dt.utcnow()
     try:
-        sched.add_job(poll_market_data, id="market_poll_initial", max_instances=1)
+        sched.add_job(poll_market_data, id="market_poll_boot",
+                      next_run_time=now, max_instances=1)
     except Exception:
         pass
+    try:
+        sched.add_job(evaluate_bots, id="bot_eval_boot",
+                      next_run_time=now, max_instances=1)
+    except Exception:
+        pass
+
     return sched
 
 
