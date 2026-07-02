@@ -715,9 +715,8 @@ function renderBots() {
         <button class="btn btn-sm btn-primary" onclick="updateBotFunds(${b.id})">Update</button>
       </div>
       <div style="background:var(--bg2);padding:10px;border-radius:6px;border:1px solid var(--border)">
-        <div style="font-size:11px;color:var(--t2);margin-bottom:8px">${esc(b.last_pattern_summary || "Awaiting first scan — run a scan to analyze the chart.")}</div>
-        <button class="btn btn-sm btn-primary" onclick="runBotCycle(${b.id})">⚡ Run Pattern Scan</button>
-        <div class="log-box" id="blog-${b.id}" style="display:none;margin-top:8px"></div>
+        <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Last scan ${b.last_analysis_at ? `· ${new Date(b.last_analysis_at+"Z").toLocaleTimeString()}` : "· not yet scanned"}</div>
+        <div style="font-size:11px;color:var(--t2)">${esc(b.last_pattern_summary || (b.running ? "Engine is warming up — first scan runs within 60 seconds." : "Bot is paused. Toggle it on to start autonomous scanning."))}</div>
       </div>
     </div>`;
   }).join("");
@@ -774,21 +773,8 @@ async function sellBot(id) {
   } catch (e) { toast(e, "error"); }
 }
 
-async function runBotCycle(id) {
-  const logEl = document.getElementById(`blog-${id}`);
-  logEl.style.display = "block";
-  logEl.innerHTML = `Fetching live chart and analyzing structure…`;
-  try {
-    const res = await api(`/bots/${id}/run-cycle`, { method: "POST" });
-    const d = res.details || {};
-    const sig = (d.analysis && d.analysis.signal) || {};
-    logEl.innerHTML =
-      `<span style="color:var(--blue)">Action: ${esc(d.action || "—")}</span><br>` +
-      `${esc(d.reason || sig.headline || "")}` +
-      (sig.action ? `<br><span style="color:var(--t3)">Signal ${esc(sig.action)} · strength ${sig.strength ?? "—"} · ${esc(sig.confidence || "")}</span>` : "");
-    await loadBots();
-  } catch (e) { logEl.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`; }
-}
+// runBotCycle removed — bots scan autonomously via the background scheduler.
+// The /bots/{id}/run-cycle endpoint still exists for admin/debug use.
 
 /* --- STOCKS / MARKETS --- */
 let MARKETS = [];          // current exchange universe from backend
