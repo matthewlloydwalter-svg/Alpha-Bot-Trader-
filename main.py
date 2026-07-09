@@ -380,6 +380,7 @@ def get_system_logs(u: User = Depends(get_current_user), db: Session = Depends(g
 
 @app.get("/bots")
 def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    from app.database import BotPosition
     bots = db.query(Bot).filter(Bot.owner_id == u.id).all()
     return [
         {
@@ -390,18 +391,28 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "broker": b.broker,
             "timeframe": b.timeframe,
             "funds_allocated": b.funds_allocated,
-            "is_auto": b.is_auto, # Added to expose the column to the frontend
+            "is_auto": b.is_auto,
             "running": b.running,
             "trade_count": b.trade_count,
             "in_position": b.in_position,
-            "avg_entry_price": b.avg_entry_price,
-            "shares_held": b.shares_held,
             "realized_pnl": b.realized_pnl,
-            "stop_price": b.stop_price,
-            "take_profit_price": b.take_profit_price,
             "last_signal": b.last_signal,
             "last_pattern_summary": b.last_pattern_summary,
             "last_analysis_at": b.last_analysis_at.isoformat() if b.last_analysis_at else None,
+            # Live open positions from the multi-position table
+            "open_positions": [
+                {
+                    "id": p.id,
+                    "ticker": p.ticker,
+                    "qty": p.qty,
+                    "notional": p.notional,
+                    "entry_price": p.entry_price,
+                    "stop_price": p.stop_price,
+                    "take_profit_price": p.take_profit_price,
+                    "opened_at": p.opened_at.isoformat() if p.opened_at else None,
+                }
+                for p in db.query(BotPosition).filter(BotPosition.bot_id == b.id).all()
+            ],
         }
         for b in bots
     ]
@@ -618,9 +629,13 @@ def portfolio_performance(u: User = Depends(get_current_user_from_cookie), db: S
     bot_names = {b.id: b.name for b in bots}
 
     funds_allocated = 0.0
-    for b in bots:
-        if b.in_position and b.avg_entry_price and b.shares_held:
-            funds_allocated += float(b.avg_entry_price) * float(b.shares_held)
+    # Multi-position: sum all open BotPosition rows, not the single-position Bot fields.
+    bot_ids = [b.id for b in bots]
+    from app.database import BotPosition
+    all_positions = (db.query(BotPosition).filter(BotPosition.bot_id.in_(bot_ids)).all()
+                     if bot_ids else [])
+    for bp in all_positions:
+        funds_allocated += float(bp.notional or 0)
 
     trades = (db.query(Trade)
                 .filter(Trade.owner_id == u.id)
@@ -679,14 +694,12 @@ def portfolio_performance(u: User = Depends(get_current_user_from_cookie), db: S
     for m in markers:
         m["value"] = series_map.get(m["time"], round(cumulative, 2))
 
-    # ── Live tail: extend the line to "now" with unrealized mark-to-market so
-    # the curve tracks the real-time feed instead of freezing at the last sell.
+    # Multi-position unrealized: mark each BotPosition against live quote.
     unrealized = 0.0
-    for b in bots:
-        if b.in_position and b.avg_entry_price and b.shares_held:
-            q = market_store.get_quote(db, b.broker or "alpaca", b.ticker or "")
-            mark = q.price if (q and q.price) else b.avg_entry_price
-            unrealized += (float(mark) - float(b.avg_entry_price)) * float(b.shares_held)
+    for bp in all_positions:
+        q    = market_store.get_quote(db, bp.broker or "alpaca", bp.ticker or "")
+        mark = float(q.price) if (q and q.price) else float(bp.entry_price)
+        unrealized += (mark - float(bp.entry_price)) * float(bp.qty)
 
     live_value = round(cumulative + unrealized, 2)
     series = [{"time": ts, "value": v} for ts, v in sorted(series_map.items())]
