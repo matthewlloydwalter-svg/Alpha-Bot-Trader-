@@ -191,12 +191,24 @@ class ActivityLog(Base):
 # so we add any newly-introduced columns here in an idempotent way.
 _MIGRATIONS = {
     "bots": {
+        # Identity / config columns added after initial schema
         "uuid": "VARCHAR(32)",
         "timeframe": "VARCHAR DEFAULT '1h'",
         "auto_select": "BOOLEAN DEFAULT FALSE",
+        "is_auto": "BOOLEAN DEFAULT TRUE",
         "min_profit_pct": "FLOAT",
+        "buy_limit": "FLOAT",
+        "sell_limit": "FLOAT",
+        # Position-state columns
+        "shares_held": "FLOAT DEFAULT 0",
+        "avg_entry_price": "FLOAT",
+        "trade_count": "INTEGER DEFAULT 0",
+        "realized_pnl": "FLOAT DEFAULT 0",
+        "running": "BOOLEAN DEFAULT FALSE",
+        # Entry price gate
         "first_buy_price": "FLOAT",
         "first_buy_done": "BOOLEAN DEFAULT FALSE",
+        # Risk-management state
         "peak_price": "FLOAT",
         "stop_price": "FLOAT",
         "take_profit_price": "FLOAT",
@@ -206,8 +218,26 @@ _MIGRATIONS = {
     },
     "trades": {
         "bot_uuid": "VARCHAR(32)",
+        "broker": "VARCHAR DEFAULT 'alpaca'",
+        "mode": "VARCHAR DEFAULT 'paper'",
+        "broker_order_id": "VARCHAR",
+        "status": "VARCHAR DEFAULT 'submitted'",
+        "notional": "FLOAT",
+        "qty": "FLOAT",
     },
     "users": {
+        "name": "VARCHAR",
+        "trading_mode": "VARCHAR DEFAULT 'paper'",
+        "active_broker": "VARCHAR DEFAULT 'alpaca'",
+        "total_deposited": "FLOAT DEFAULT 0",
+        "total_withdrawn": "FLOAT DEFAULT 0",
+        "email_verified": "BOOLEAN DEFAULT FALSE",
+        "verification_code": "VARCHAR",
+        "alpaca_key": "VARCHAR",
+        "alpaca_secret": "VARCHAR",
+        "okx_key": "VARCHAR",
+        "okx_secret": "VARCHAR",
+        "okx_pass": "VARCHAR",
         "alpaca_key_paper": "VARCHAR",
         "alpaca_secret_paper": "VARCHAR",
         "alpaca_key_live": "VARCHAR",

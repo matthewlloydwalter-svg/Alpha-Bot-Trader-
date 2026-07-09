@@ -162,7 +162,8 @@ def register_endpoint(body: AuthModel, response: Response, db: Session = Depends
     db.refresh(new_user)
     
     token = create_session_token(new_user.id, new_user.email)
-    response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400)
+    response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400,
+                        samesite="lax", secure=True)
     return {"id": new_user.id, "email": new_user.email, "is_admin": new_user.is_admin, "email_verified": new_user.email_verified}
 
 @app.post("/auth/login")
@@ -173,8 +174,9 @@ def login_endpoint(body: AuthModel, response: Response, db: Session = Depends(ge
         raise HTTPException(status_code=400, detail="Invalid credential combination supplied.")
         
     token = create_session_token(user.id, user.email)
-    response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400)
-    
+    response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400,
+                        samesite="lax", secure=True)
+
     return {
         "id": user.id,
         "email": user.email,
@@ -201,7 +203,7 @@ def current_user_endpoint(u: User = Depends(get_current_user_from_cookie)):
 
 @app.post("/auth/logout")
 def logout_endpoint(response: Response):
-    response.delete_cookie("session_token")
+    response.delete_cookie("session_token", samesite="lax", secure=True)
     return {"success": True}
 
 @app.post("/auth/trigger-verification")
@@ -212,9 +214,10 @@ def trigger_verification(u: User = Depends(get_current_user_from_cookie), db: Se
     try:
         send_verification_email(u.email, code)
     except EmailError as e:
-        # Surface the ACTUAL reason (SMTP not configured / bad app password / etc.)
-        logger.error("Verification email failed for %s: %s", u.email, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning("Verification email failed for %s: %s", u.email, e)
+        # Return 200 with smtp_not_configured so the frontend can show a
+        # helpful inline message rather than a red error toast.
+        return {"success": False, "smtp_not_configured": True, "detail": str(e)}
     except Exception as e:
         logger.error("Unexpected email error for %s: %s", u.email, e)
         raise HTTPException(status_code=500, detail=f"Unexpected mail error: {e}")
@@ -346,7 +349,7 @@ def admin_stats(request: Request, db: Session = Depends(get_db)):
     return {
         "total_users": db.query(User).count(),
         "verified_users": db.query(User).filter(User.email_verified == True).count(),
-        "total_deposited": 500000,
+        "total_deposited": sum(float(x.total_deposited or 0) for x in db.query(User).all()),
         "total_bots": db.query(Bot).count(),
         "total_trades": db.query(Trade).count()
     }

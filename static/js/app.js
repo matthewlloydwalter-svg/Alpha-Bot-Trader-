@@ -309,23 +309,20 @@ async function triggerEmailVerification() {
   const btn = document.getElementById("verify-email-btn");
   btn.disabled = true; btn.textContent = "Sending...";
   try {
-    await api("/auth/trigger-verification", { method: "POST" });
-    toast("Verification code sent to your inbox!", "success");
-    document.getElementById("verify-modal").classList.remove("hidden");
-  } catch (e) {
-    const msg = e.message || "";
-    // SMTP not configured is a server-side setup issue, not a user error.
-    // Show it inline rather than a red error toast so it's readable.
-    if (msg.toLowerCase().includes("smtp") || msg.toLowerCase().includes("email") || msg.toLowerCase().includes("not configured")) {
+    const res = await api("/auth/trigger-verification", { method: "POST" });
+    if (res && res.smtp_not_configured) {
       const vText = document.getElementById("verification-text");
       if (vText) {
-        vText.textContent = "Email sending is not configured on the server. Verification is optional — you can still use the platform.";
-        vText.style.color = "var(--amber)";
+        vText.textContent = "Email sending is not configured on this server yet. Verification is optional — you can still use the platform.";
+        vText.style.color = "var(--amber, #f59e0b)";
       }
       toast("Email not configured on this server — verification is optional.", "");
     } else {
-      toast(msg || "Failed to send verification email.", "error");
+      toast("Verification code sent to your inbox!", "success");
+      document.getElementById("verify-modal").classList.remove("hidden");
     }
+  } catch (e) {
+    toast((e && e.message) || "Failed to send verification email.", "error");
   }
   finally { btn.disabled = false; btn.textContent = "📧 Send Verification Code"; }
 }
