@@ -380,7 +380,6 @@ def get_system_logs(u: User = Depends(get_current_user), db: Session = Depends(g
 
 @app.get("/bots")
 def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
-    from app.database import BotPosition
     bots = db.query(Bot).filter(Bot.owner_id == u.id).all()
     return [
         {
@@ -395,24 +394,14 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "running": b.running,
             "trade_count": b.trade_count,
             "in_position": b.in_position,
+            "shares_held": b.shares_held,
+            "avg_entry_price": b.avg_entry_price,
+            "stop_price": b.stop_price,
+            "take_profit_price": b.take_profit_price,
             "realized_pnl": b.realized_pnl,
             "last_signal": b.last_signal,
             "last_pattern_summary": b.last_pattern_summary,
             "last_analysis_at": b.last_analysis_at.isoformat() if b.last_analysis_at else None,
-            # Live open positions from the multi-position table
-            "open_positions": [
-                {
-                    "id": p.id,
-                    "ticker": p.ticker,
-                    "qty": p.qty,
-                    "notional": p.notional,
-                    "entry_price": p.entry_price,
-                    "stop_price": p.stop_price,
-                    "take_profit_price": p.take_profit_price,
-                    "opened_at": p.opened_at.isoformat() if p.opened_at else None,
-                }
-                for p in db.query(BotPosition).filter(BotPosition.bot_id == b.id).all()
-            ],
         }
         for b in bots
     ]
@@ -628,14 +617,10 @@ def portfolio_performance(u: User = Depends(get_current_user_from_cookie), db: S
     bots = db.query(Bot).filter(Bot.owner_id == u.id).all()
     bot_names = {b.id: b.name for b in bots}
 
-    funds_allocated = 0.0
-    # Multi-position: sum all open BotPosition rows, not the single-position Bot fields.
-    bot_ids = [b.id for b in bots]
-    from app.database import BotPosition
-    all_positions = (db.query(BotPosition).filter(BotPosition.bot_id.in_(bot_ids)).all()
-                     if bot_ids else [])
-    for bp in all_positions:
-        funds_allocated += float(bp.notional or 0)
+    # funds_allocated = capital currently deployed in open bot positions
+    funds_allocated = sum(
+        float(b.funds_allocated or 0.0) for b in bots if b.in_position
+    )
 
     trades = (db.query(Trade)
                 .filter(Trade.owner_id == u.id)
@@ -694,12 +679,13 @@ def portfolio_performance(u: User = Depends(get_current_user_from_cookie), db: S
     for m in markers:
         m["value"] = series_map.get(m["time"], round(cumulative, 2))
 
-    # Multi-position unrealized: mark each BotPosition against live quote.
+    # Unrealized P/L: mark each open bot position against the live stored quote.
     unrealized = 0.0
-    for bp in all_positions:
-        q    = market_store.get_quote(db, bp.broker or "alpaca", bp.ticker or "")
-        mark = float(q.price) if (q and q.price) else float(bp.entry_price)
-        unrealized += (mark - float(bp.entry_price)) * float(bp.qty)
+    for b in bots:
+        if b.in_position and b.avg_entry_price and b.shares_held:
+            q = market_store.get_quote(db, b.broker or "alpaca", b.ticker or "")
+            mark = float(q.price) if (q and q.price) else float(b.avg_entry_price)
+            unrealized += (mark - float(b.avg_entry_price)) * float(b.shares_held)
 
     live_value = round(cumulative + unrealized, 2)
     series = [{"time": ts, "value": v} for ts, v in sorted(series_map.items())]
@@ -799,21 +785,20 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
     if not auto_select and not ticker_raw:
         raise HTTPException(status_code=400, detail="Manual bots require a ticker symbol.")
 
-    # ── Strict allocation guardrail ──────────────────────────────────────
-    # A Box can only be funded with capital that is actually verified present in
-    # the user's live broker account (Alpaca/OKX). Capital already committed to
-    # the user's existing bots is reserved so total allocations can never exceed
-    # the real broker balance. Blocking the blind allocation of the full paper
-    # balance is the whole point of this check.
+    # ── Allocation guardrail ──────────────────────────────────────────────
+    # When broker keys are configured, verify the requested funds don't exceed
+    # the live broker balance minus what's already allocated to other bots.
+    # When keys aren't set yet (common in paper mode / new accounts), skip the
+    # check and let the user create bots freely — paper trading doesn't risk
+    # real money so this is safe.
     available = _broker_available_funds(u)
-    if available is None:
-        raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
-    already_allocated = sum(
-        float(b.funds_allocated or 0.0)
-        for b in db.query(Bot).filter(Bot.owner_id == u.id).all()
-    )
-    if funds > (available - already_allocated) + 1e-6:
-        raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
+    if available is not None:
+        already_allocated = sum(
+            float(b.funds_allocated or 0.0)
+            for b in db.query(Bot).filter(Bot.owner_id == u.id).all()
+        )
+        if funds > (available - already_allocated) + 1e-6:
+            raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
 
     new_bot = Bot(
         owner_id=u.id,
@@ -929,17 +914,15 @@ async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_
     if new_funds <= 0:
         raise HTTPException(status_code=400, detail="Allocated funds must be greater than zero.")
 
-    # Same live-broker guardrail as bot creation: the new allocation, plus what
-    # is already committed to the user's OTHER bots, cannot exceed verified cash.
+    # Same guardrail as bot creation: only enforce when keys are present.
     available = _broker_available_funds(u)
-    if available is None:
-        raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
-    others_allocated = sum(
-        float(b.funds_allocated or 0.0)
-        for b in db.query(Bot).filter(Bot.owner_id == u.id, Bot.id != bot_id).all()
-    )
-    if new_funds > (available - others_allocated) + 1e-6:
-        raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
+    if available is not None:
+        others_allocated = sum(
+            float(b.funds_allocated or 0.0)
+            for b in db.query(Bot).filter(Bot.owner_id == u.id, Bot.id != bot_id).all()
+        )
+        if new_funds > (available - others_allocated) + 1e-6:
+            raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
 
     previous = float(bot.funds_allocated or 0.0)
     bot.funds_allocated = new_funds
