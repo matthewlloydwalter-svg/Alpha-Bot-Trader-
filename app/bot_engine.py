@@ -50,9 +50,19 @@ logger = logging.getLogger("alphabot.engine")
 # ── Tunable strategy parameters ──────────────────────────────────────
 ENTRY_MIN_STRENGTH = float(os.getenv("BOT_ENTRY_MIN_STRENGTH", "0.38"))
 DEPLOY_FRACTION = float(os.getenv("BOT_DEPLOY_FRACTION", "0.90"))   # slightly more conservative sizing
+STOP_LOSS_PCT = float(os.getenv("BOT_STOP_LOSS_PCT", "0.005"))      # default 0.5% hard stop
+TAKE_PROFIT_PCT = float(os.getenv("BOT_TAKE_PROFIT_PCT", "0.03"))    # default 3% target
+EXIT_MODE = os.getenv("BOT_EXIT_MODE", "fixed_pct").strip().lower()  # fixed_pct or atr
 TRAIL_ATR_MULT = float(os.getenv("BOT_TRAIL_ATR_MULT", "1.6"))     # slightly wider stop to avoid noise
 TP_ATR_MULT = float(os.getenv("BOT_TP_ATR_MULT", "3.2"))           # slightly more patient profit target
 TRAIL_PCT_FLOOR = float(os.getenv("BOT_TRAIL_PCT_FLOOR", "0.02"))  # min 2% trailing buffer
+CONSERVATIVE_ENTRY_FILTER = os.getenv("BOT_CONSERVATIVE_ENTRY_FILTER", "1").strip().lower() in ("1", "true", "yes", "on")
+TREND_CONFIRMATION_FILTER = os.getenv("BOT_TREND_CONFIRMATION_FILTER", "1").strip().lower() in ("1", "true", "yes", "on")
+VOLATILITY_SIZING = os.getenv("BOT_VOLATILITY_SIZING", "1").strip().lower() in ("1", "true", "yes", "on")
+QUALITY_SETUP_SCORING = os.getenv("BOT_QUALITY_SETUP_SCORING", "1").strip().lower() in ("1", "true", "yes", "on")
+MIN_SETUP_QUALITY_SCORE = float(os.getenv("BOT_MIN_SETUP_QUALITY_SCORE", "0.60"))
+RISK_PER_TRADE_PCT = float(os.getenv("BOT_RISK_PER_TRADE_PCT", "0.01"))
+MAX_POSITION_PCT = float(os.getenv("BOT_MAX_POSITION_PCT", "0.10"))
 ROTATION_STAGNANT_PCT = float(os.getenv("BOT_ROTATION_STAGNANT_PCT", "0.5"))  # <0.5% = stagnating
 CANDLE_LIMIT = int(os.getenv("BOT_CANDLE_LIMIT", "200"))
 AUTO_SCAN_LIMIT = int(os.getenv("BOT_AUTO_SCAN_LIMIT", "12"))      # markets scanned per autonomous cycle
@@ -178,24 +188,34 @@ def _liquidate(owner: User, broker: str, symbol: str) -> dict:
 # ────────────────────────────────────────────────────────────────────
 def _arm_risk(bot: Bot, entry_price: float, atr: float | None,
               nearest_resistance: float | None):
-    """Set the initial trailing stop and adaptive take-profit on entry."""
+    """Set the initial stop-loss and take-profit on entry."""
     bot.peak_price = entry_price
-    atr = atr or (entry_price * TRAIL_PCT_FLOOR)
-    trail_dist = max(atr * TRAIL_ATR_MULT, entry_price * TRAIL_PCT_FLOOR)
-    bot.stop_price = round(entry_price - trail_dist, 6)
 
-    tp_atr = entry_price + atr * TP_ATR_MULT
-    # If resistance is overhead, aim just under it; otherwise use the ATR target.
-    if nearest_resistance and nearest_resistance > entry_price:
-        bot.take_profit_price = round(min(tp_atr, nearest_resistance * 0.998), 6)
-    else:
-        bot.take_profit_price = round(tp_atr, 6)
+    if EXIT_MODE == "atr":
+        atr = atr or (entry_price * TRAIL_PCT_FLOOR)
+        trail_dist = max(atr * TRAIL_ATR_MULT, entry_price * TRAIL_PCT_FLOOR)
+        bot.stop_price = round(entry_price - trail_dist, 6)
+
+        tp_atr = entry_price + atr * TP_ATR_MULT
+        # If resistance is overhead, aim just under it; otherwise use the ATR target.
+        if nearest_resistance and nearest_resistance > entry_price:
+            bot.take_profit_price = round(min(tp_atr, nearest_resistance * 0.998), 6)
+        else:
+            bot.take_profit_price = round(tp_atr, 6)
+        return
+
+    stop_dist = max(entry_price * STOP_LOSS_PCT, 0.01)
+    target_dist = max(entry_price * TAKE_PROFIT_PCT, 0.01)
+    bot.stop_price = round(entry_price - stop_dist, 6)
+    bot.take_profit_price = round(entry_price + target_dist, 6)
 
 
 def _ratchet_risk(bot: Bot, price: float, atr: float | None, bullish: bool):
-    """Tighten the trailing stop on new highs; let take-profit run if bullish."""
+    """Manage exits for ATR mode or fixed-percentage mode."""
     if bot.peak_price is None or price > bot.peak_price:
         bot.peak_price = price
+
+    if EXIT_MODE == "atr" and (bot.peak_price is None or price > bot.peak_price):
         atr = atr or (price * TRAIL_PCT_FLOOR)
         trail_dist = max(atr * TRAIL_ATR_MULT, price * TRAIL_PCT_FLOOR)
         new_stop = round(price - trail_dist, 6)
@@ -334,6 +354,113 @@ def _news_sanity(broker: str, symbol: str) -> dict:
                 "note": f"News check skipped ({e}).", "headlines": []}
 
 
+def _passes_conservative_entry_filter(analysis: Analysis) -> bool:
+    """Require a stronger bullish setup before opening a new position."""
+    if not CONSERVATIVE_ENTRY_FILTER:
+        return True
+
+    sig = analysis.signal
+    if sig.action != "BUY" or sig.strength < ENTRY_MIN_STRENGTH:
+        return False
+
+    bullish_patterns = [p for p in (analysis.patterns or []) if p.get("bias") == "bullish"]
+    if not bullish_patterns:
+        return False
+
+    trend = (analysis.indicators or {}).get("trend") or "neutral"
+    if trend == "down":
+        return False
+    if trend == "up":
+        return True
+
+    # Neutral trend needs more confirmation; require at least two bullish patterns.
+    return len(bullish_patterns) >= 2
+
+
+def _passes_trend_confirmation_filter(analysis: Analysis) -> bool:
+    """Require a bullish trend backdrop before entry."""
+    if not TREND_CONFIRMATION_FILTER:
+        return True
+
+    indicators = analysis.indicators or {}
+    trend = indicators.get("trend") or "neutral"
+    if trend != "up":
+        return False
+
+    price = analysis.last_price or 0.0
+    sma20 = indicators.get("sma20")
+    sma50 = indicators.get("sma50")
+    ema12 = indicators.get("ema12")
+    ema26 = indicators.get("ema26")
+    macd = indicators.get("macd")
+    macd_signal = indicators.get("macd_signal")
+
+    if price and sma20 is not None and sma50 is not None and sma20 > sma50:
+        return True
+    if ema12 is not None and ema26 is not None and ema12 > ema26:
+        return True
+    if macd is not None and macd_signal is not None and macd > macd_signal:
+        return True
+    return False
+
+
+def _setup_quality_score(analysis: Analysis) -> float:
+    """Score a setup from 0.0 to 1.0 so only high-quality setups get entered."""
+    sig = analysis.signal
+    score = max(0.0, min(1.0, float(sig.strength or 0.0)))
+
+    bullish_patterns = [p for p in (analysis.patterns or []) if p.get("bias") == "bullish"]
+    score += min(0.30, 0.10 * len(bullish_patterns))
+
+    trend = (analysis.indicators or {}).get("trend") or "neutral"
+    if trend == "up":
+        score += 0.10
+    elif trend == "down":
+        score -= 0.20
+
+    rsi = (analysis.indicators or {}).get("rsi")
+    if rsi is not None:
+        if rsi <= 35:
+            score += 0.08
+        elif rsi >= 70:
+            score -= 0.12
+
+    price = analysis.last_price or 0.0
+    nearest_resistance = (analysis.levels or {}).get("nearest_resistance")
+    if price and nearest_resistance and nearest_resistance > 0:
+        dist_pct = (nearest_resistance - price) / price * 100 if price else 0.0
+        if 0 <= dist_pct <= 1.5:
+            score -= 0.08
+
+    return max(0.0, min(1.0, score))
+
+
+def _passes_quality_setup_filter(analysis: Analysis) -> bool:
+    """Use a blended quality score to gate entry quality."""
+    if not QUALITY_SETUP_SCORING:
+        return True
+    return _setup_quality_score(analysis) >= MIN_SETUP_QUALITY_SCORE
+
+
+def _volatility_adjusted_notional(bot: Bot, price: float, base_notional: float, atr: float | None) -> float:
+    """Reduce position size when volatility is high so the bot doesn't overexpose itself."""
+    if not VOLATILITY_SIZING or not price or price <= 0:
+        return base_notional
+
+    atr = atr or 0.0
+    risk_distance = max(atr * TRAIL_ATR_MULT, price * TRAIL_PCT_FLOOR)
+    if risk_distance <= 0:
+        return base_notional
+
+    risk_budget = max(price * RISK_PER_TRADE_PCT, 0.01)
+    size_factor = min(1.0, max(0.0, risk_budget / risk_distance))
+    adjusted = round(base_notional * size_factor, 2)
+    max_notional = round((bot.funds_allocated or 0) * MAX_POSITION_PCT, 2)
+    if max_notional > 0:
+        adjusted = min(adjusted, max_notional)
+    return max(0.0, adjusted)
+
+
 # ────────────────────────────────────────────────────────────────────
 # Fully autonomous market selection
 # ────────────────────────────────────────────────────────────────────
@@ -353,7 +480,7 @@ def _pick_best_setup(db: Session, owner: User, bot: Bot) -> Analysis | None:
     _log(db, owner.id,
          f"[AUTO-SCAN] Bot '{bot.name}' scanning {scan_n}/{len(items)} {broker} markets for the best dip…")
 
-    candidates = []  # (strength, analysis)
+    candidates = []  # (quality_score, strength, analysis)
     scanned = 0
     for item in items[:scan_n]:
         sym = item["symbol"]
@@ -364,7 +491,7 @@ def _pick_best_setup(db: Session, owner: User, bot: Bot) -> Analysis | None:
         sig = analysis.signal
         logger.info("[AUTO-SCAN] %s -> %s strength=%.2f", sym, sig.action, sig.strength)
         if sig.action == "BUY" and sig.strength >= ENTRY_MIN_STRENGTH:
-            candidates.append((sig.strength, analysis))
+            candidates.append((_setup_quality_score(analysis), sig.strength, analysis))
 
     if not candidates:
         _log(db, owner.id,
@@ -372,10 +499,10 @@ def _pick_best_setup(db: Session, owner: User, bot: Bot) -> Analysis | None:
              f"entry bar (strength >= {ENTRY_MIN_STRENGTH}). Standing by.")
         return None
 
-    candidates.sort(key=lambda x: x[0], reverse=True)
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
 
     # Walk best-first; news overlay can veto a candidate (sanity check only).
-    for strength, analysis in candidates:
+    for quality_score, strength, analysis in candidates:
         verdict = _news_sanity(broker, analysis.symbol)
         if verdict.get("veto"):
             _log(db, owner.id,
@@ -383,7 +510,7 @@ def _pick_best_setup(db: Session, owner: User, bot: Bot) -> Analysis | None:
                  f"news sanity VETO: {verdict.get('note')}", "WARNING")
             continue
         _log(db, owner.id,
-             f"[AUTO-SCAN] Selected {analysis.symbol} (strength {strength:.2f}, "
+             f"[AUTO-SCAN] Selected {analysis.symbol} (quality {quality_score:.2f}, strength {strength:.2f}, "
              f"news {verdict.get('label')}): {analysis.signal.headline}")
         return analysis
 
@@ -488,6 +615,38 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         return result
 
     # Manual gates layered on top of the structural signal.
+    if not _passes_conservative_entry_filter(analysis):
+        names = ", ".join(p.get("name", "pattern") for p in (analysis.patterns or []) if p.get("bias") == "bullish") or ["none"]
+        _log(db, owner.id,
+             f"[ENTRY-FILTER] {bot.ticker} rejected — needs stronger bullish confirmation (trend={(analysis.indicators or {}).get('trend') or 'neutral'}, bullish_patterns={names}).",
+             "INFO")
+        bot.last_pattern_summary = "Entry skipped by conservative quality filter."
+        db.commit()
+        result.update({"action": "WAIT",
+                       "reason": "Conservative quality filter blocked this setup; waiting for a stronger bullish confirmation."})
+        return result
+
+    if not _passes_trend_confirmation_filter(analysis):
+        _log(db, owner.id,
+             f"[TREND-FILTER] {bot.ticker} rejected — trend confirmation missing.",
+             "INFO")
+        bot.last_pattern_summary = "Entry skipped by trend confirmation filter."
+        db.commit()
+        result.update({"action": "WAIT",
+                       "reason": "Trend confirmation filter blocked this setup; waiting for a stronger bullish trend."})
+        return result
+
+    if not _passes_quality_setup_filter(analysis):
+        score = _setup_quality_score(analysis)
+        _log(db, owner.id,
+             f"[QUALITY-FILTER] {bot.ticker} rejected — setup quality {score:.2f} below threshold {MIN_SETUP_QUALITY_SCORE:.2f}.",
+             "INFO")
+        bot.last_pattern_summary = "Entry skipped by quality-of-setup filter."
+        db.commit()
+        result.update({"action": "WAIT",
+                       "reason": "Quality-of-setup filter blocked this setup; waiting for a cleaner signal."})
+        return result
+
     if bot.buy_limit and price > bot.buy_limit:
         db.commit()
         result["reason"] = f"Setup confirmed but price {price:.4f} above buy limit {bot.buy_limit}."
@@ -498,6 +657,7 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         return result
 
     notional = round((bot.funds_allocated or 0) * DEPLOY_FRACTION, 2)
+    notional = _volatility_adjusted_notional(bot, price, notional, atr)
     if notional <= 0:
         db.commit()
         result["reason"] = "No funds allocated to this bot."
