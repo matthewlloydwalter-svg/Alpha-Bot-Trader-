@@ -97,7 +97,7 @@ body{
 /* ════════════════════════════════════════
    RESTORED MISSING COMPONENTS (Centered Auth, Cards, etc.)
 ════════════════════════════════════════ */
-.auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem;background:radial-gradient(ellipse at 60% 20%,rgba(77,159,255,.06) 0%,transparent 60%)}
+/* .auth-wrap legacy centering removed — auth uses .dash-shell / .dash-main parity */
 
 .hidden{display:none!important}
 .card{background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:16px}
@@ -320,27 +320,7 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 .auth-logo{height:148px;width:148px;border-radius:50%;object-fit:contain;display:block;margin:0 auto 20px}
 .brand-title{color:var(--brand)}
 
-/* ══ Sign-in page: match the dashboard background + grid overlay ══ */
-#auth-screen{
-  background:
-    radial-gradient(ellipse at 15% 50%,rgba(0,214,143,.04) 0%,transparent 55%),
-    radial-gradient(ellipse at 85% 20%,rgba(77,159,255,.07) 0%,transparent 50%),
-    radial-gradient(ellipse at 50% 80%,rgba(155,89,255,.04) 0%,transparent 50%),
-    linear-gradient(160deg,#0a0d13 0%,#0d0f18 40%,#0a1018 100%);
-  min-height:100vh;
-  position:relative;
-}
-#auth-screen::before{
-  content:'';position:fixed;inset:0;
-  background-image:
-    linear-gradient(rgba(77,159,255,.025) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(77,159,255,.025) 1px,transparent 1px);
-  background-size:44px 44px;
-  pointer-events:none;z-index:0;
-}
-#auth-screen>*{position:relative;z-index:1}
-/* let the dashboard-style grid show through the centering wrapper */
-.auth-wrap{background:transparent}
+/* Auth background + shell live with the unified layout rules near .dash-shell */
 
 /* ══ Portfolio performance graph ══ */
 .perf-chart-wrap { position:relative; height:360px; background:var(--bg0); border:1px solid var(--border); border-radius:10px; overflow:hidden; margin-top:8px; }
@@ -750,40 +730,45 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   height:auto;
 }
 @media(max-width:1199px){
-  .ad-sidebar{ display:none !important; }
-  .page.dash-shell{
+  /* Dashboard tabs: hide ad sidebars and center the main card */
+  .page.dash-shell:not(.auth-shell) .ad-sidebar{ display:none !important; }
+  .page.dash-shell:not(.auth-shell){
     grid-template-columns:minmax(0,960px);
     justify-items:center;
     max-width:960px;
   }
 }
 
-/* ── Shared tab stages (same canvas rules as Portfolio) ───────────── */
-.tab-stage{
+/* ── Shared stage canvas (Portfolio is source of truth) ───────────────
+   .portfolio-stage keeps its own background-image; other tabs + auth-stage
+   copy the same box model so every view shares the Main Card width. */
+.tab-stage,
+.auth-stage{
   position:relative;
   margin:0;
   width:100%;
   max-width:100%;
   background-size:cover;
-  background-position:center top;
+  background-position:center;
   background-repeat:no-repeat;
   background-color:#070b14;
   border-radius:0;
   padding:0;
   min-height:calc(100vh - var(--topbar-h) - var(--nav-h));
-  /* Must stay visible so accordion content isn't clipped under the header */
   overflow:visible;
 }
+/* Portfolio stage already defines the same box model — do not alter it.
+   Other tabs only set their background-image. */
 #view-stocks.tab-stage  { background-image:url("/static/images/markets-background1.png"); }
 #view-bots.tab-stage    { background-image:url("/static/images/bots-background1.png"); }
 #view-news.tab-stage    { background-image:url("/static/images/news-background1.png"); }
 #view-history.tab-stage { background-image:url("/static/images/history-background1.png"); }
-/* Filename spelling matches the asset the user provided */
 #view-assets.tab-stage  { background-image:url("/static/images/assests-background1.png"); }
 #view-account.tab-stage { background-image:url("/static/images/account-background1.png"); }
 
-/* Glass cards over tab backgrounds stay readable */
-.tab-stage .card{
+/* Glass cards over tab backgrounds stay readable (same treatment as Portfolio holo cards) */
+.tab-stage .card,
+.auth-stage .card{
   background:linear-gradient(160deg, rgba(14,30,56,0.82), rgba(8,16,34,0.74));
   backdrop-filter:blur(8px) saturate(125%);
   -webkit-backdrop-filter:blur(8px) saturate(125%);
@@ -796,18 +781,62 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   -webkit-backdrop-filter:blur(8px) saturate(125%);
 }
 
-/* Sign in / Sign up — full-viewport background matching Portfolio cover rules */
+/* ── Sign-Up / Login: same dash-shell + dash-main as Portfolio, no ads ─ */
 #auth-screen{
+  min-height:100vh;
+  margin:0;
+  padding:0;
+  background:transparent; /* image lives on .auth-stage like tab backgrounds */
+}
+.page.dash-shell.auth-shell{
+  min-height:100vh;
+  padding:0 12px 24px;
+  align-items:stretch;
+}
+.auth-stage{
   min-height:100vh;
   background-image:url("/static/images/signup-background1.png");
   background-size:cover;
   background-position:center;
   background-repeat:no-repeat;
-  background-color:#070b14;
 }
-#auth-screen .auth-wrap{
-  background:transparent;
+/* Side columns keep the same gutters as the dashboard, but never show ads */
+.auth-shell .ad-sidebar.auth-no-ads{
+  visibility:hidden !important;
+  pointer-events:none !important;
+  background:transparent !important;
+  border:none !important;
+  box-shadow:none !important;
+  backdrop-filter:none !important;
+  -webkit-backdrop-filter:none !important;
+  min-height:0 !important;
+  max-height:none !important;
+  padding:0 !important;
+  overflow:hidden !important;
 }
+/* Keep three-column gutters on auth (spacers only — never show ads) */
+@media(max-width:1199px){
+  .page.dash-shell.auth-shell{
+    grid-template-columns:minmax(40px,120px) minmax(0,960px) minmax(40px,120px);
+    max-width:1360px;
+    justify-items:stretch;
+  }
+}
+.auth-overlay{
+  min-height:100vh;
+  justify-content:center;
+  padding:24px 16px 32px;
+  pointer-events:none;
+}
+.auth-overlay > *{ pointer-events:auto; }
+.auth-panel{
+  width:100%;
+  max-width:520px;
+  margin:0 auto;
+}
+.auth-brand{ text-align:center; margin-bottom:1.75rem; }
+.auth-brand-title{ font-size:28px; font-weight:700; letter-spacing:-.5px; line-height:1.15; }
+.auth-brand-sub{ font-size:14px; color:var(--t2); margin-top:8px; }
 #auth-screen .card{
   background:linear-gradient(160deg, rgba(14,30,56,0.88), rgba(8,16,34,0.80));
   backdrop-filter:blur(10px) saturate(130%);
