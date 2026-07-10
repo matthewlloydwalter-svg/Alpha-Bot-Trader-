@@ -625,6 +625,8 @@ def _bot_performance_highlights(db: Session, bots: list) -> Optional[dict]:
     """
     stats = []
     for b in bots:
+        if not b.running:
+            continue
         realized = float(b.realized_pnl or 0.0)
         unrealized = 0.0
         if b.in_position and b.avg_entry_price and b.shares_held:
@@ -681,7 +683,7 @@ def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_curr
 
     # funds_allocated = capital currently deployed in open bot positions (this mode)
     funds_allocated = sum(
-        float(b.funds_allocated or 0.0) for b in bots if b.in_position
+        float(b.funds_allocated or 0.0) for b in bots if b.running and b.in_position
     ) if include_open else 0.0
 
     trades = (db.query(Trade)
@@ -746,7 +748,7 @@ def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_curr
     unrealized = 0.0
     if include_open:
         for b in bots:
-            if b.in_position and b.avg_entry_price and b.shares_held:
+            if b.running and b.in_position and b.avg_entry_price and b.shares_held:
                 q = market_store.get_quote(db, b.broker or "alpaca", b.ticker or "")
                 mark = float(q.price) if (q and q.price) else float(b.avg_entry_price)
                 unrealized += (mark - float(b.avg_entry_price)) * float(b.shares_held)

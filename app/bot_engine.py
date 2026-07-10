@@ -81,6 +81,30 @@ def _get_display_risk_targets(entry_price: float | None) -> tuple[float | None, 
     stop_dist = max(float(entry_price) * stop_pct, 0.01)
     target_dist = max(float(entry_price) * take_pct, 0.01)
     return round(float(entry_price) - stop_dist, 6), round(float(entry_price) + target_dist, 6)
+
+
+def _market_collision_blocked(db: Session, owner: User, bot: Bot, ticker: str | None, quality_score: float) -> tuple[bool, str | None]:
+    """Prevent multiple bots from entering the same ticker simultaneously unless the setup is exceptional."""
+    if not ticker:
+        return False, None
+    ticker = ticker.upper()
+    conflicts = (
+        db.query(Bot)
+        .filter(
+            Bot.owner_id == owner.id,
+            Bot.id != bot.id,
+            Bot.in_position == True,  # noqa: E712
+            Bot.ticker.isnot(None),
+        )
+        .all()
+    )
+    for other in conflicts:
+        other_ticker = (other.ticker or "").upper()
+        if other_ticker == ticker:
+            if quality_score >= 1.0:
+                return False, None
+            return True, f"{ticker} is already occupied by another active bot ({other.name})"
+    return False, None
 CONSERVATIVE_ENTRY_FILTER = os.getenv("BOT_CONSERVATIVE_ENTRY_FILTER", "1").strip().lower() in ("1", "true", "yes", "on")
 TREND_CONFIRMATION_FILTER = os.getenv("BOT_TREND_CONFIRMATION_FILTER", "1").strip().lower() in ("1", "true", "yes", "on")
 VOLATILITY_SIZING = os.getenv("BOT_VOLATILITY_SIZING", "1").strip().lower() in ("1", "true", "yes", "on")
@@ -517,7 +541,12 @@ def _pick_best_setup(db: Session, owner: User, bot: Bot) -> Analysis | None:
         sig = analysis.signal
         logger.info("[AUTO-SCAN] %s -> %s strength=%.2f", sym, sig.action, sig.strength)
         if sig.action == "BUY" and sig.strength >= ENTRY_MIN_STRENGTH:
-            candidates.append((_setup_quality_score(analysis), sig.strength, analysis))
+            quality_score = _setup_quality_score(analysis)
+            blocked, reason = _market_collision_blocked(db, owner, bot, sym, quality_score)
+            if blocked:
+                _log(db, owner.id, f"[AUTO-SCAN] Skipping {sym} — market occupied by another active bot ({reason}).")
+                continue
+            candidates.append((quality_score, sig.strength, analysis))
 
     if not candidates:
         _log(db, owner.id,
@@ -680,6 +709,15 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
     if bot.first_buy_price and not bot.first_buy_done and price > bot.first_buy_price:
         db.commit()
         result["reason"] = f"Waiting for first-buy trigger at {bot.first_buy_price}."
+        return result
+
+    quality_score = _setup_quality_score(analysis)
+    blocked, reason = _market_collision_blocked(db, owner, bot, bot.ticker, quality_score)
+    if blocked:
+        _log(db, owner.id, f"[ENTRY-BLOCK] {bot.ticker} blocked — {reason}")
+        bot.last_pattern_summary = f"Entry skipped — another bot already holds {bot.ticker.upper()}."
+        db.commit()
+        result.update({"action": "WAIT", "reason": reason})
         return result
 
     notional = round((bot.funds_allocated or 0) * DEPLOY_FRACTION, 2)

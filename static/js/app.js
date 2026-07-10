@@ -129,6 +129,14 @@ async function enterApp() {
   loadBrokerKeys();
   await loadMarketStatus();     // market open/closed drives halt UI + overlay
   if (!window._marketStatusTimer) window._marketStatusTimer = setInterval(loadMarketStatus, 60000);
+  if (!window._botsRefreshTimer) window._botsRefreshTimer = setInterval(() => {
+    const bv = document.getElementById("view-bots");
+    if (bv && !bv.classList.contains("hidden")) loadBots();
+  }, 15000);
+  if (!window._portfolioRefreshTimer) window._portfolioRefreshTimer = setInterval(() => {
+    const pv = document.getElementById("view-portfolio");
+    if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
+  }, 15000);
   loadPortfolioPerformance();  // Portfolio is the default visible tab
   connectLiveStream();         // subscribe to the always-on backend feed
 }
@@ -166,6 +174,10 @@ function connectLiveStream() {
       const q = JSON.parse(ev.data);
       LIVE_QUOTES[`${q.broker}:${q.symbol}`] = q;
       applyLiveQuote(q);
+      const bv = document.getElementById("view-bots");
+      if (bv && !bv.classList.contains("hidden")) loadBots();
+      const pv = document.getElementById("view-portfolio");
+      if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
     } catch (_) {}
   });
 
