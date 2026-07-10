@@ -104,72 +104,97 @@
 
   <main class="page">
     <div id="view-portfolio" class="tab-view portfolio-stage">
-      <!-- ── Main Portfolio holo card ─────────────────────────────── -->
-      <div class="holo-card portfolio-main">
-        <div class="pf-mode-bar">
-          <div class="pf-mode-title">
-            <span id="pf-mode-label">Paper Trading Portfolio</span>
-            <span id="pf-mode-badge" class="badge badge-green">● Paper</span>
+      <!-- Sticky summary — always visible, keeps the background unobstructed -->
+      <header class="pf-sticky-header holo-card" id="pf-sticky-header">
+        <div class="pf-sticky-top">
+          <div class="pf-mode-bar pf-sticky-mode">
+            <div class="pf-mode-title">
+              <span id="pf-mode-label">Paper Trading Portfolio</span>
+              <span id="pf-mode-badge" class="badge badge-green">● Paper</span>
+            </div>
+            <div class="mode-toggle pf-mode-toggle">
+              <button class="mode-btn active" id="pf-mode-paper" onclick="setPortfolioMode('paper')">📄 Paper</button>
+              <button class="mode-btn" id="pf-mode-live" onclick="setPortfolioMode('live')">⚡ Live</button>
+            </div>
           </div>
-          <div class="mode-toggle pf-mode-toggle">
-            <button class="mode-btn active" id="pf-mode-paper" onclick="setPortfolioMode('paper')">📄 Paper</button>
-            <button class="mode-btn" id="pf-mode-live" onclick="setPortfolioMode('live')">⚡ Live</button>
-          </div>
+          <button type="button" class="pf-details-toggle" id="pf-details-toggle"
+                  onclick="togglePortfolioDetails()" aria-expanded="false" aria-controls="pf-details">
+            <span id="pf-details-toggle-label">Show details</span>
+            <span class="pf-details-caret" id="pf-details-caret">▾</span>
+          </button>
         </div>
-        <div class="holo-head">
-          <div class="holo-total">
-            <div class="holo-lbl">Total Alpha Bot valuation</div>
+        <div class="pf-summary-grid">
+          <div class="pf-summary-metric">
+            <div class="holo-lbl">Total AlphaBotix Valuation</div>
             <div class="holo-total-value" id="pf-total-value">$0.00</div>
+          </div>
+          <div class="pf-summary-metric pf-summary-pnl">
+            <div class="holo-lbl">Total Profit / Loss</div>
+            <div class="pf-total-pnl" id="pf-total-pnl">+$0.00</div>
             <div class="holo-total-sub">
-              <span id="pf-total-delta" class="pf-delta">+$0.00</span>
               <span id="live-indicator" class="badge badge-amber" title="Live data stream">● Connecting…</span>
             </div>
           </div>
-          <div class="holo-tf">
-            <label class="holo-tf-lbl" for="pf-timeframe">Timeframe</label>
-            <select id="pf-timeframe" class="holo-select" onchange="setPortfolioTimeframe(this.value)">
-              <option value="1D" selected>1 Day</option>
-              <option value="1W">1 Week</option>
-              <option value="1M">1 Month</option>
-              <option value="1Y">1 Year</option>
-              <option value="5Y">5 Years</option>
-            </select>
-          </div>
         </div>
-        <div class="holo-chart-wrap">
-          <div id="pf-main-chart" class="holo-chart"></div>
-          <div id="pf-main-chart-msg" class="dash-chart-msg hidden"></div>
-          <div id="pf-market-overlay" class="market-overlay hidden">
-            <div class="market-overlay-box">
-              <div class="market-overlay-title">MARKET STATUS: OFFLINE</div>
-              <div class="market-overlay-sub" id="pf-market-overlay-sub">No active trades. Trading algorithms in standby mode.</div>
+      </header>
+
+      <!-- Collapsible details: chart, 24h performance, per-bot boxes -->
+      <div class="pf-details collapsed" id="pf-details">
+        <div class="pf-details-inner">
+          <div class="holo-card portfolio-main">
+            <div class="holo-head">
+              <div class="holo-total">
+                <div class="holo-lbl">Performance</div>
+                <div class="holo-total-sub" style="margin-top:0">
+                  <span id="pf-total-delta" class="pf-delta">+$0.00</span>
+                </div>
+              </div>
+              <div class="holo-tf">
+                <label class="holo-tf-lbl" for="pf-timeframe">Timeframe</label>
+                <select id="pf-timeframe" class="holo-select" onchange="setPortfolioTimeframe(this.value)">
+                  <option value="1D" selected>1 Day</option>
+                  <option value="1W">1 Week</option>
+                  <option value="1M">1 Month</option>
+                  <option value="1Y">1 Year</option>
+                  <option value="5Y">5 Years</option>
+                </select>
+              </div>
+            </div>
+            <div class="holo-chart-wrap">
+              <div id="pf-main-chart" class="holo-chart"></div>
+              <div id="pf-main-chart-msg" class="dash-chart-msg hidden"></div>
+              <div id="pf-market-overlay" class="market-overlay hidden">
+                <div class="market-overlay-box">
+                  <div class="market-overlay-title">MARKET STATUS: OFFLINE</div>
+                  <div class="market-overlay-sub" id="pf-market-overlay-sub">No active trades. Trading algorithms in standby mode.</div>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
 
-      <!-- ── Performance & Active Bots holo card ──────────────────── -->
-      <div class="holo-card portfolio-perf">
-        <div class="holo-lbl">24h performance</div>
-        <div class="perf-wl-grid">
-          <div class="perf-wl perf-wl-win" id="pf-winner">
-            <div class="perf-wl-tag">🏆 Biggest winner (24h)</div>
-            <div class="perf-wl-name">—</div>
-            <div class="perf-wl-val pup">—</div>
-          </div>
-          <div class="perf-wl perf-wl-lose" id="pf-loser">
-            <div class="perf-wl-tag">📉 Biggest loser (24h)</div>
-            <div class="perf-wl-name">—</div>
-            <div class="perf-wl-val pdn">—</div>
-          </div>
-        </div>
+          <div class="holo-card portfolio-perf">
+            <div class="holo-lbl">24h performance</div>
+            <div class="perf-wl-grid">
+              <div class="perf-wl perf-wl-win" id="pf-winner">
+                <div class="perf-wl-tag">🏆 Biggest winner (24h)</div>
+                <div class="perf-wl-name">—</div>
+                <div class="perf-wl-val pup">—</div>
+              </div>
+              <div class="perf-wl perf-wl-lose" id="pf-loser">
+                <div class="perf-wl-tag">📉 Biggest loser (24h)</div>
+                <div class="perf-wl-name">—</div>
+                <div class="perf-wl-val pdn">—</div>
+              </div>
+            </div>
 
-        <div class="active-bots">
-          <button class="active-bots-head" id="active-bots-toggle" onclick="toggleActiveBots()" aria-expanded="true">
-            <span>🤖 Active Bots <span class="active-bots-count" id="active-bots-count">0</span></span>
-            <span class="active-bots-caret" id="active-bots-caret">▾</span>
-          </button>
-          <div class="active-bots-list" id="active-bots-list"><!-- rendered by JS --></div>
+            <div class="active-bots">
+              <button class="active-bots-head" id="active-bots-toggle" onclick="toggleActiveBots()" aria-expanded="true">
+                <span>🤖 Active Bots <span class="active-bots-count" id="active-bots-count">0</span></span>
+                <span class="active-bots-caret" id="active-bots-caret">▾</span>
+              </button>
+              <div class="active-bots-list" id="active-bots-list"><!-- rendered by JS --></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

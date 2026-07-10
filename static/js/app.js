@@ -443,6 +443,7 @@ let PF_DATA = null;                   // { perf: <performance json>, bots: [...]
 let PF_MAIN_CHART = null;             // lightweight-charts instance for the main chart
 let BOT_MINI_CHARTS = {};             // botId -> chart instance for expanded panels
 let ACTIVE_BOTS_OPEN = true;          // "Active Bots" accordion open/closed
+let PF_DETAILS_OPEN = false;          // Portfolio details collapsed by default (show background)
 
 const PF_GREEN = "#00d68f", PF_RED = "#ff4d6a";
 const TF_SECONDS = { "1D": 86400, "1W": 604800, "1M": 2592000, "1Y": 31536000, "5Y": 157680000 };
@@ -542,14 +543,55 @@ async function loadPortfolioForMode(mode) {
   const tEl = document.getElementById("pf-total-value");
   if (tEl) tEl.textContent = money(total);
 
+  // Overall P/L (realized + unrealized) — sticky header figure.
+  const totalPnl = (perf.live_value != null)
+    ? Number(perf.live_value)
+    : (Number(perf.net_position || 0) + Number(perf.unrealized || 0));
+  const pnlEl = document.getElementById("pf-total-pnl");
+  if (pnlEl) {
+    pnlEl.textContent = fmtSignedMoney(totalPnl);
+    pnlEl.className = "pf-total-pnl " + (totalPnl >= 0 ? "pup" : "pdn");
+  }
+
   const sel = document.getElementById("pf-timeframe");
   if (sel) sel.value = PF_STATE.timeframe;
 
+  syncPortfolioDetailsUI();
   renderPortfolioMainChart();
   renderWinnerLoser();
   renderActiveBots();
   renderMarketOverlay();
 }
+
+function syncPortfolioDetailsUI() {
+  const details = document.getElementById("pf-details");
+  const toggle = document.getElementById("pf-details-toggle");
+  const label = document.getElementById("pf-details-toggle-label");
+  if (details) {
+    details.classList.toggle("is-open", PF_DETAILS_OPEN);
+    details.classList.toggle("collapsed", !PF_DETAILS_OPEN);
+  }
+  if (toggle) toggle.setAttribute("aria-expanded", String(PF_DETAILS_OPEN));
+  if (label) label.textContent = PF_DETAILS_OPEN ? "Hide details" : "Show details";
+}
+
+function togglePortfolioDetails() {
+  PF_DETAILS_OPEN = !PF_DETAILS_OPEN;
+  syncPortfolioDetailsUI();
+  // Chart needs a layout pass after the accordion opens.
+  if (PF_DETAILS_OPEN) {
+    setTimeout(() => {
+      try { renderPortfolioMainChart(); } catch (_) {}
+      try {
+        (PF_DATA && PF_DATA.bots || []).forEach(b => {
+          const el = document.getElementById(`mini-chart-${b.id}`);
+          if (el && el.childNodes.length) { /* already drawn */ }
+        });
+      } catch (_) {}
+    }, 360);
+  }
+}
+window.togglePortfolioDetails = togglePortfolioDetails;
 
 function setPortfolioTimeframe(tf) {
   PF_STATE.timeframe = tf;
@@ -570,6 +612,8 @@ function renderMarketOverlay() {
 
 function renderPortfolioMainChart() {
   if (!PF_DATA) return;
+  // Don't build the chart while details are collapsed (zero-size container).
+  if (!PF_DETAILS_OPEN) return;
   const wrap = document.getElementById("pf-main-chart");
   const msg = document.getElementById("pf-main-chart-msg");
   if (!wrap) return;
