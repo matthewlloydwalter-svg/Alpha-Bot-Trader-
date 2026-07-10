@@ -104,6 +104,9 @@ class Bot(Base):
     name = Column(String, nullable=False)
     ticker = Column(String, nullable=True)          # null = fully autonomous (engine picks the asset)
     broker = Column(String, default="alpaca")
+    # Account the bot is assigned to: "paper" or "live". Set at creation from the
+    # user's trading mode. Used for the Bots-tab view filter + LIVE/PAPER badge.
+    mode = Column(String, default="paper")
     timeframe = Column(String, default="1h")        # candle interval the bot analyzes
     buy_limit = Column(Float, nullable=True)
     sell_limit = Column(Float, nullable=True)
@@ -193,6 +196,7 @@ _MIGRATIONS = {
     "bots": {
         # Identity / config columns added after initial schema
         "uuid": "VARCHAR(32)",
+        "mode": "VARCHAR DEFAULT 'paper'",
         "timeframe": "VARCHAR DEFAULT '1h'",
         "auto_select": "BOOLEAN DEFAULT FALSE",
         "is_auto": "BOOLEAN DEFAULT TRUE",
