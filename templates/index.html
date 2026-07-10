@@ -119,11 +119,6 @@
                 <button class="mode-btn" id="pf-mode-live" onclick="setPortfolioMode('live')">⚡ Live</button>
               </div>
             </div>
-            <button type="button" class="pf-details-toggle" id="pf-details-toggle"
-                    onclick="togglePortfolioDetails()" aria-expanded="false" aria-controls="pf-details">
-              <span id="pf-details-toggle-label">Show details</span>
-              <span class="pf-details-caret" id="pf-details-caret">▾</span>
-            </button>
           </div>
           <div class="pf-summary-grid">
             <div class="pf-summary-metric">
@@ -137,6 +132,13 @@
                 <span id="live-indicator" class="badge badge-amber" title="Live data stream">● Connecting…</span>
               </div>
             </div>
+          </div>
+          <div class="pf-sticky-footer">
+            <button type="button" class="pf-details-toggle" id="pf-details-toggle"
+                    onclick="togglePortfolioDetails()" aria-expanded="false" aria-controls="pf-details">
+              <span id="pf-details-toggle-label">Show details</span>
+              <span class="pf-details-caret" id="pf-details-caret">▾</span>
+            </button>
           </div>
         </header>
 

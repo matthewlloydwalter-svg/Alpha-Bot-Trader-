@@ -494,6 +494,14 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   font-variant-numeric:tabular-nums;
   text-shadow:0 0 14px rgba(57,217,255,0.25);
 }
+/* Details toggle sits at the bottom-right of the valuation block */
+.pf-sticky-footer{
+  display:flex;
+  justify-content:flex-end;
+  align-items:center;
+  margin-top:6px;
+  padding-top:4px;
+}
 .pf-details-toggle{
   display:inline-flex; align-items:center; gap:6px;
   background:rgba(10,24,45,0.45); border:1px solid rgba(57,217,255,0.35);
