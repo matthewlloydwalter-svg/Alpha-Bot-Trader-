@@ -340,6 +340,12 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
     per_bar = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "1d": 1440, "1w": 10080}.get(timeframe, 1440)
     minutes_back = per_bar * limit * 3 + 1440
     start = datetime.now(timezone.utc) - timedelta(minutes=minutes_back)
+    # Debug: log the computed start window so we can trace timeframe bugs
+    try:
+        logger.info("[BARS] Alpaca request: symbol=%s timeframe=%s limit=%d minutes_back=%d start=%s",
+                    symbol, timeframe, limit, minutes_back, start.isoformat())
+    except Exception:
+        pass
 
     client = StockHistoricalDataClient(api_key, secret_key)
 
@@ -364,6 +370,14 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
         # First attempt — no explicit feed restriction (works for SIP + IEX).
         rows = _fetch(feed=None)
         logger.info("[BARS] Alpaca %s tf=%s -> %d bars (default feed)", symbol, timeframe, len(rows))
+        # Log first/last timestamps returned for easier debugging of stale ranges
+        if rows:
+            try:
+                first_ts = datetime.fromtimestamp(rows[0]["ts"], timezone.utc).isoformat()
+                last_ts = datetime.fromtimestamp(rows[-1]["ts"], timezone.utc).isoformat()
+                logger.info("[BARS] Alpaca %s tf=%s returned range %s -> %s", symbol, timeframe, first_ts, last_ts)
+            except Exception:
+                pass
     except AlpacaAPIError as first_err:
         err_str = str(first_err)
         # 403 / subscription error → retry with the free IEX feed.
@@ -443,6 +457,14 @@ def get_okx_candles(symbol: str, timeframe: str, limit: int,
             "low": float(r[3]), "close": float(r[4]), "volume": float(r[5] or 0),
         } for r in raw]
         logger.info("[BARS] OKX %s tf=%s -> %d candles", market_symbol, tf, len(rows))
+        # Debug: also log the returned range to detect stale data
+        if rows:
+            try:
+                first_ts = datetime.fromtimestamp(rows[0]["ts"], timezone.utc).isoformat()
+                last_ts = datetime.fromtimestamp(rows[-1]["ts"], timezone.utc).isoformat()
+                logger.info("[BARS] OKX %s tf=%s returned range %s -> %s", market_symbol, tf, first_ts, last_ts)
+            except Exception:
+                pass
         return rows[-limit:]
     except Exception as e:
         raise BrokerError(f"OKX candle fetch failed for {market_symbol}: {e}")

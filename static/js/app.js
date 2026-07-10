@@ -1083,7 +1083,9 @@ async function reloadDashboard() {
   msg.classList.remove("hidden");
   msg.textContent = "Loading market data…";
   try {
-    const d = await api(`/api/markets/${exchange}/${symbol}/dashboard?timeframe=${encodeURIComponent(apiTf)}&limit=${limit}`);
+    const url = `/api/markets/${exchange}/${symbol}/dashboard?timeframe=${encodeURIComponent(apiTf)}&limit=${limit}`;
+    console.log("[DASHBOARD] fetching", { exchange, symbol, view, apiTf, limit, url });
+    const d = await api(url);
     if (DASH_STATE.symbol !== symbol || DASH_STATE.view !== view) return; // stale
     renderDashboard(d);
   } catch (e) {
