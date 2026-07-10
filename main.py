@@ -606,6 +606,14 @@ def _bot_performance_highlights(db: Session, bots: list) -> Optional[dict]:
     return {"most_profitable": best, "least_profitable": worst, "bot_count": len(stats)}
 
 
+@app.get("/api/market-status")
+def market_status_endpoint():
+    """US equities session status (open/closed + next open in UTC epoch).
+    Public — the frontend renders next_open in the user's local timezone."""
+    from app.market_hours import market_status
+    return market_status()
+
+
 @app.get("/api/portfolio/performance")
 def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     """

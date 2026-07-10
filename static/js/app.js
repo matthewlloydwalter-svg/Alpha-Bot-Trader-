@@ -7,6 +7,36 @@ let NEWS_FILTER = "all";
 let LIVE_QUOTES = {};        // `${broker}:${symbol}` -> {price, signal_action,...}
 let EVT_SOURCE = null;       // EventSource for the live data stream
 let _perfReloadTimer = null; // debounce portfolio refreshes from the stream
+let MARKET_STATUS = null;    // { open, next_open_epoch, ... } from /api/market-status
+
+// User's local timezone (auto-detected from the device). All times shown on the
+// site are rendered in this zone via toLocale* — East Coast sees ET, West Coast
+// sees PT, China sees CST, etc.
+const USER_TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (_) { return "local"; } })();
+
+// Render a UTC epoch (seconds) as a local day+time with the local tz label,
+// e.g. "Fri 9:30 AM EDT" / "Fri 6:30 AM PDT" / "Fri 9:30 PM CST".
+function fmtLocalFromEpoch(epochSec) {
+  if (!epochSec) return "the next session";
+  try {
+    return new Date(epochSec * 1000).toLocaleString(undefined,
+      { weekday: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+  } catch (_) { return new Date(epochSec * 1000).toLocaleString(); }
+}
+function fmtLocalOpenTime() {
+  return MARKET_STATUS ? fmtLocalFromEpoch(MARKET_STATUS.next_open_epoch) : "the next session";
+}
+function isMarketClosed() { return !!(MARKET_STATUS && MARKET_STATUS.open === false); }
+
+async function loadMarketStatus() {
+  try {
+    MARKET_STATUS = await api("/api/market-status");
+  } catch (_) { return; }
+  // Reflect the new status in any mounted market-aware UI.
+  renderMarketOverlay();
+  const bv = document.getElementById("view-bots");
+  if (bv && !bv.classList.contains("hidden")) renderBots();
+}
 
 async function api(path, options = {}) {
   const resp = await fetch(path, {
@@ -97,6 +127,8 @@ async function enterApp() {
   renderBrokerUI();
   await refreshUserData();
   loadBrokerKeys();
+  await loadMarketStatus();     // market open/closed drives halt UI + overlay
+  if (!window._marketStatusTimer) window._marketStatusTimer = setInterval(loadMarketStatus, 60000);
   loadPortfolioPerformance();  // Portfolio is the default visible tab
   connectLiveStream();         // subscribe to the always-on backend feed
 }
@@ -399,6 +431,8 @@ function _holoChartOpts() {
     rightPriceScale: { borderColor: "rgba(57,217,255,0.18)" },
     timeScale: { borderColor: "rgba(57,217,255,0.18)", timeVisible: true, secondsVisible: false },
     crosshair: { mode: 0, vertLine: { color: "rgba(57,217,255,0.4)" }, horzLine: { color: "rgba(57,217,255,0.4)" } },
+    // Render the crosshair time in the user's local timezone (auto-detected).
+    localization: { timeFormatter: (t) => new Date(t * 1000).toLocaleString() },
     autoSize: true,
   };
 }
@@ -486,11 +520,24 @@ async function loadPortfolioForMode(mode) {
   renderPortfolioMainChart();
   renderWinnerLoser();
   renderActiveBots();
+  renderMarketOverlay();
 }
 
 function setPortfolioTimeframe(tf) {
   PF_STATE.timeframe = tf;
   renderPortfolioMainChart();   // re-slice cached live series, no refetch needed
+}
+
+// Semi-transparent "MARKET OFFLINE" stamp over the main chart when closed.
+function renderMarketOverlay() {
+  const ov = document.getElementById("pf-market-overlay");
+  if (!ov) return;
+  const closed = isMarketClosed();
+  ov.classList.toggle("hidden", !closed);
+  if (closed) {
+    const sub = document.getElementById("pf-market-overlay-sub");
+    if (sub) sub.textContent = `No active trades. Trading algorithms in standby mode. Markets will initialize at ${fmtLocalOpenTime()}.`;
+  }
 }
 
 function renderPortfolioMainChart() {
@@ -770,6 +817,11 @@ function renderBots() {
     const modeBadge = botMode === "live"
       ? `<span class="badge badge-mode-live" title="Live trading account">LIVE</span>`
       : `<span class="badge badge-mode-paper" title="Paper trading account">PAPER</span>`;
+    // Equities halt when the US market is closed; crypto (OKX) trades 24/7.
+    const isStock = (b.broker || "alpaca").toLowerCase() !== "okx";
+    const haltRow = (isStock && isMarketClosed())
+      ? `<div class="bot-halt">🛑 SYSTEM HALT: Market offline. Core trading loops suspended. Awaiting market open at ${esc(fmtLocalOpenTime())}.</div>`
+      : "";
     const sigColor = b.last_signal === "BUY" ? "badge-green" : b.last_signal === "SELL" ? "badge-red" : "badge-amber";
     const pos = b.in_position
       ? `<span class="badge badge-blue">In position @ ${formatPrice(b.avg_entry_price)}</span>`
@@ -799,6 +851,7 @@ function renderBots() {
           <button class="btn btn-sm btn-danger" onclick="deleteBot(${b.id})">🗑</button>
         </div>
       </div>
+      ${haltRow}
       <div style="color:var(--t2);font-size:12px;margin-bottom:8px">
         ${assetLabel} · ${esc((b.broker||"alpaca").toUpperCase())} · ${esc(b.timeframe||"1h")} |
         Funds: $${b.funds_allocated} | Trades: ${b.trade_count} |
@@ -1028,6 +1081,7 @@ function renderDashChart(d) {
     rightPriceScale: { borderColor: "#2a2f3d" },
     timeScale: { borderColor: "#2a2f3d", timeVisible: true, secondsVisible: false },
     crosshair: { mode: 0 },
+    localization: { timeFormatter: (t) => new Date(t * 1000).toLocaleString() },
     autoSize: true,
   });
   DASH_CANDLE_SERIES = DASH_CHART.addCandlestickSeries({
