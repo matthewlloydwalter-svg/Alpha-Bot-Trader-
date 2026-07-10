@@ -48,10 +48,10 @@ from app.pattern_analysis import Analysis
 logger = logging.getLogger("alphabot.engine")
 
 # ── Tunable strategy parameters ──────────────────────────────────────
-ENTRY_MIN_STRENGTH = float(os.getenv("BOT_ENTRY_MIN_STRENGTH", "0.30"))
-DEPLOY_FRACTION = float(os.getenv("BOT_DEPLOY_FRACTION", "0.95"))   # aggressive deployment
-TRAIL_ATR_MULT = float(os.getenv("BOT_TRAIL_ATR_MULT", "1.5"))     # tight trailing stop
-TP_ATR_MULT = float(os.getenv("BOT_TP_ATR_MULT", "3.0"))           # adaptive take-profit
+ENTRY_MIN_STRENGTH = float(os.getenv("BOT_ENTRY_MIN_STRENGTH", "0.38"))
+DEPLOY_FRACTION = float(os.getenv("BOT_DEPLOY_FRACTION", "0.90"))   # slightly more conservative sizing
+TRAIL_ATR_MULT = float(os.getenv("BOT_TRAIL_ATR_MULT", "1.6"))     # slightly wider stop to avoid noise
+TP_ATR_MULT = float(os.getenv("BOT_TP_ATR_MULT", "3.2"))           # slightly more patient profit target
 TRAIL_PCT_FLOOR = float(os.getenv("BOT_TRAIL_PCT_FLOOR", "0.02"))  # min 2% trailing buffer
 ROTATION_STAGNANT_PCT = float(os.getenv("BOT_ROTATION_STAGNANT_PCT", "0.5"))  # <0.5% = stagnating
 CANDLE_LIMIT = int(os.getenv("BOT_CANDLE_LIMIT", "200"))

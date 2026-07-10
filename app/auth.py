@@ -7,7 +7,10 @@ from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from jose import jwt, JWTError
-from app.config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
+from app.config import (
+    SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM,
+    SMTP_USE_SSL, SMTP_USE_TLS,
+)
 
 logger = logging.getLogger("AlphaBotix Trading")
 
@@ -96,7 +99,7 @@ def send_verification_email(to_email: str, code: str) -> bool:
         port = 587
 
     msg = MIMEMultipart()
-    msg["From"] = SMTP_USER
+    msg["From"] = SMTP_FROM or SMTP_USER
     msg["To"] = to_email
     msg["Subject"] = f"[{PLATFORM_NAME}] Your verification code"
     msg.attach(MIMEText(
@@ -106,19 +109,20 @@ def send_verification_email(to_email: str, code: str) -> bool:
     ))
 
     try:
-        if port == 465:
-            # Implicit TLS.
+        if SMTP_USE_SSL or port == 465:
+            # Implicit TLS (common for port 465).
             with smtplib.SMTP_SSL(host, port, timeout=20) as server:
                 server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(SMTP_USER, [to_email], msg.as_string())
+                server.sendmail(SMTP_FROM or SMTP_USER, [to_email], msg.as_string())
         else:
-            # STARTTLS (587 and most others).
+            # STARTTLS (587 and most others). Some providers require explicit TLS.
             with smtplib.SMTP(host, port, timeout=20) as server:
                 server.ehlo()
-                server.starttls()
-                server.ehlo()
+                if SMTP_USE_TLS or port == 587:
+                    server.starttls()
+                    server.ehlo()
                 server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(SMTP_USER, [to_email], msg.as_string())
+                server.sendmail(SMTP_FROM or SMTP_USER, [to_email], msg.as_string())
         logger.info("Verification email sent to %s via %s:%s", to_email, host, port)
         return True
     except smtplib.SMTPAuthenticationError as e:
@@ -127,6 +131,11 @@ def send_verification_email(to_email: str, code: str) -> bool:
             "SMTP authentication failed. For Gmail you must use a 16-character App Password "
             "(Google Account → Security → App passwords) with 2-Step Verification enabled — "
             "your normal Gmail password will not work."
+        )
+    except smtplib.SMTPConnectError as e:
+        logger.error("Mail server connection refused (%s:%s): %s", host, port, e)
+        raise EmailError(
+            f"The mail server {host}:{port} refused the connection. On Railway, this is often caused by network egress restrictions or a blocked SMTP port."
         )
     except (smtplib.SMTPException, OSError) as e:
         logger.error("Mail delivery failed (%s:%s): %s", host, port, e)

@@ -24,6 +24,7 @@ from app.auth import (
     generate_verification_code, send_verification_email, is_user_admin, PLATFORM_NAME,
     get_current_user, EmailError
 )
+from app.config import SESSION_COOKIE_SECURE
 from app.brokers import get_account_info, get_spot_price, BrokerError
 from app.market_data import get_market_analysis
 from app.markets_universe import MARKET_UNIVERSE
@@ -96,6 +97,15 @@ class OKXKeysModel(BaseModel):
     passphrase: str
     mode: Optional[str] = "paper"   # "paper" or "live"
 
+def _cookie_kwargs(request: Request | None = None) -> dict:
+    secure = SESSION_COOKIE_SECURE
+    if request is not None:
+        forwarded_proto = (request.headers.get("x-forwarded-proto") or "").lower()
+        if forwarded_proto == "https":
+            secure = True
+    return {"httponly": True, "max_age": 86400, "samesite": "lax", "secure": secure}
+
+
 def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)) -> User:
     token = request.cookies.get("session_token")
     if not token:
@@ -145,7 +155,7 @@ def admin_pane(request: Request, db: Session = Depends(get_db)):
         return templates.TemplateResponse("index.html", {"request": request, "PLATFORM_NAME": PLATFORM_NAME})
 
 @app.post("/auth/signup")
-def register_endpoint(body: AuthModel, response: Response, db: Session = Depends(get_db)):
+def register_endpoint(body: AuthModel, response: Response, request: Request, db: Session = Depends(get_db)):
     normalized_email = body.email.strip().lower()
     existing = db.query(User).filter(User.email == normalized_email).first()
     if existing:
@@ -162,20 +172,18 @@ def register_endpoint(body: AuthModel, response: Response, db: Session = Depends
     db.refresh(new_user)
     
     token = create_session_token(new_user.id, new_user.email)
-    response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400,
-                        samesite="lax", secure=True)
+    response.set_cookie(key="session_token", value=token, **_cookie_kwargs(request=request))
     return {"id": new_user.id, "email": new_user.email, "is_admin": new_user.is_admin, "email_verified": new_user.email_verified}
 
 @app.post("/auth/login")
-def login_endpoint(body: AuthModel, response: Response, db: Session = Depends(get_db)):
+def login_endpoint(body: AuthModel, response: Response, request: Request, db: Session = Depends(get_db)):
     normalized_email = body.email.strip().lower()
     user = db.query(User).filter(User.email == normalized_email).first()
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Invalid credential combination supplied.")
         
     token = create_session_token(user.id, user.email)
-    response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400,
-                        samesite="lax", secure=True)
+    response.set_cookie(key="session_token", value=token, **_cookie_kwargs(request=request))
 
     return {
         "id": user.id,
@@ -202,8 +210,8 @@ def current_user_endpoint(u: User = Depends(get_current_user_from_cookie)):
     }
 
 @app.post("/auth/logout")
-def logout_endpoint(response: Response):
-    response.delete_cookie("session_token", samesite="lax", secure=True)
+def logout_endpoint(response: Response, request: Request):
+    response.delete_cookie("session_token", samesite="lax", secure=_cookie_kwargs(request=request)["secure"])
     return {"success": True}
 
 @app.post("/auth/trigger-verification")
