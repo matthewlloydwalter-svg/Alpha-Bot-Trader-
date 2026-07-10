@@ -307,6 +307,14 @@ def _backfill_integrity():
                 if rows:
                     logger.info("[BACKFILL] Assigned UUIDs to %d legacy bot(s)", len(rows))
 
+            if "bots" in tables and "users" in tables:
+                # Backfill bot.mode from owner's trading_mode for pre-existing bots
+                conn.execute(text(
+                    "UPDATE bots SET mode = ("
+                    "  SELECT u.trading_mode FROM users u WHERE u.id = bots.owner_id"
+                    ") WHERE mode = 'paper' AND owner_id IS NOT NULL"
+                ))
+
             if "trades" in tables and "bots" in tables:
                 conn.execute(text(
                     "UPDATE trades SET bot_uuid = ("
