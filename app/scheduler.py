@@ -34,8 +34,8 @@ from app import bot_engine
 
 logger = logging.getLogger("alphabot.scheduler")
 
-MARKET_POLL_INTERVAL = int(os.getenv("MARKET_POLL_INTERVAL", "30"))   # seconds
-BOT_SCAN_INTERVAL = int(os.getenv("BOT_SCAN_INTERVAL", "60"))         # seconds
+MARKET_POLL_INTERVAL = int(os.getenv("MARKET_POLL_INTERVAL", "15"))   # seconds
+BOT_SCAN_INTERVAL = int(os.getenv("BOT_SCAN_INTERVAL", "15"))         # seconds
 WATCHLIST_LIMIT = int(os.getenv("MARKET_WATCHLIST_LIMIT", "20"))      # symbols/broker
 POLL_TIMEFRAME = os.getenv("MARKET_POLL_TIMEFRAME", "1h")
 
