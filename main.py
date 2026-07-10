@@ -545,8 +545,6 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
       1M → 30Min bars from now−30 days
       3M → 1Hour bars from now−90 days
     """
-    from app.market_data import resolve_chart_preset, CHART_PRESETS
-
     ex = exchange.lower()
     if ex not in MARKET_UNIVERSE:
         raise HTTPException(status_code=404, detail=f"Unknown exchange '{exchange}'.")
