@@ -1059,72 +1059,155 @@ function filterMarkets() { renderMarkets(); }
 
 /* --- MARKET DASHBOARD --- */
 
-// Maps each UI view to (API timeframe, candle count). These follow the standard
-// TradingView convention: "15m" means 15-minute candles, not a 15-minute window.
-// ~100 bars gives a clean chart without requesting too much data.
-const DASH_TF_MAP = {
-  "15m": { apiTf: "15m",  limit: 100 },  // ~25 hours of 15-min candles
-  "1h":  { apiTf: "1h",   limit: 100 },  // ~4 days of 1-hour candles
-  "1d":  { apiTf: "1d",   limit: 100 },  // ~3 months of daily candles
-  "1w":  { apiTf: "1w",   limit: 100 },  // ~2 years of weekly candles
-  "1mo": { apiTf: "1d",   limit: 30  },  // last 30 daily candles (~1 month)
-  "1y":  { apiTf: "1d",   limit: 365 },  // last 365 daily candles
-  "5y":  { apiTf: "1w",   limit: 260 },  // last ~5 years of weekly candles
-};
+// Chart timeframe presets → backend `preset` codes.
+// Backend maps these to Alpaca-compatible bar size + dynamic UTC start_date:
+//   1D → 1Min / now−1 day
+//   1M → 30Min / now−30 days
+//   3M → 1Hour / now−90 days
+const DASH_PRESETS = ["1D", "1M", "3M"];
+const DASH_REFRESH_MS = 15000;
+const DASH_CHART_TYPES = ["candles", "line"];
 
-let DASH_STATE = { exchange: null, symbol: null, view: "1h" };
-let DASH_CHART = null, DASH_CANDLE_SERIES = null, DASH_SMA20 = null, DASH_SMA50 = null;
+let DASH_STATE = { exchange: null, symbol: null, preset: "1D", chartType: "candles" };
+let DASH_CHART = null, DASH_PRIMARY_SERIES = null, DASH_SMA20 = null, DASH_SMA50 = null;
+let DASH_FETCH_SEQ = 0;
+let DASH_LAST = null; // last dashboard payload — used to switch candles/line without re-fetch
+
+function _setDashFetchStatus(busy, text) {
+  const status = document.getElementById("dash-fetch-status");
+  if (status) {
+    status.textContent = text || "Fetching data…";
+    status.classList.toggle("hidden", !busy);
+  }
+}
+
+function syncDashPresetButtons(preset) {
+  document.querySelectorAll("#dash-preset-group .mode-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.getAttribute("data-preset") === preset);
+  });
+}
+
+function syncDashChartTypeSelect(chartType) {
+  const sel = document.getElementById("dash-chart-type");
+  if (sel && sel.value !== chartType) sel.value = chartType;
+}
+
+function stopDashRefreshTimer() {
+  if (window._dashRefreshTimer) {
+    clearInterval(window._dashRefreshTimer);
+    window._dashRefreshTimer = null;
+  }
+}
+
+function startDashRefreshTimer() {
+  stopDashRefreshTimer();
+  window._dashRefreshTimer = setInterval(() => {
+    const modal = document.getElementById("market-dash-modal");
+    if (!modal || modal.classList.contains("hidden")) return;
+    if (!DASH_STATE.exchange || !DASH_STATE.symbol) return;
+    // Soft refresh re-pulls Alpaca/OKX bars every 15s for BOTH candles and line.
+    reloadDashboard({ soft: true });
+  }, DASH_REFRESH_MS);
+}
 
 async function openMarketDashboard(exchange, symbol) {
-  DASH_STATE = { exchange, symbol, view: "1h" };
+  DASH_STATE = { exchange, symbol, preset: "1D", chartType: "candles" };
+  DASH_LAST = null;
   document.getElementById("market-dash-modal").classList.remove("hidden");
   document.getElementById("dash-symbol").textContent = symbol;
   document.getElementById("dash-name").textContent = "Loading asset…";
   document.getElementById("dash-price").textContent = "—";
-  const sel = document.getElementById("dash-tf-select");
-  if (sel) sel.value = "1h";
+  syncDashPresetButtons("1D");
+  syncDashChartTypeSelect("candles");
+  startDashRefreshTimer();
   await reloadDashboard();
 }
 
 function closeMarketDashboard() {
   document.getElementById("market-dash-modal").classList.add("hidden");
+  stopDashRefreshTimer();
+  _setDashFetchStatus(false);
+  DASH_LAST = null;
   if (DASH_CHART) { try { DASH_CHART.remove(); } catch (_) {} DASH_CHART = null; }
-  DASH_CANDLE_SERIES = DASH_SMA20 = DASH_SMA50 = null;
+  DASH_PRIMARY_SERIES = DASH_SMA20 = DASH_SMA50 = null;
 }
 
-function changeDashTimeframe(view) {
-  DASH_STATE.view = view;
-  const sel = document.getElementById("dash-tf-select");
-  if (sel && sel.value !== view) sel.value = view;
+function setDashPreset(preset) {
+  const code = String(preset || "1D").toUpperCase();
+  if (!DASH_PRESETS.includes(code)) return;
+  DASH_STATE.preset = code;
+  syncDashPresetButtons(code);
+  // Restart the 15s timer so the next tick is relative to this switch, and
+  // immediately fetch with the new date range + timeframe.
+  startDashRefreshTimer();
   reloadDashboard();
 }
 
-async function reloadDashboard() {
-  const { exchange, symbol, view } = DASH_STATE;
+function setDashChartType(type) {
+  const t = String(type || "candles").toLowerCase();
+  if (!DASH_CHART_TYPES.includes(t)) return;
+  DASH_STATE.chartType = t;
+  syncDashChartTypeSelect(t);
+  // Re-render immediately from the latest Alpaca/OKX payload; the 15s timer
+  // keeps pulling fresh bars for whichever style is active.
+  if (DASH_LAST) renderDashChart(DASH_LAST);
+}
+
+// Back-compat alias if anything still calls the old select handler.
+function changeDashTimeframe(view) {
+  const map = { "1d": "1D", "1mo": "1M", "1h": "3M", "15m": "1D", "1w": "3M", "1y": "3M", "5y": "3M" };
+  setDashPreset(map[view] || "1D");
+}
+
+async function reloadDashboard(opts) {
+  const soft = !!(opts && opts.soft);
+  const { exchange, symbol, preset } = DASH_STATE;
   if (!exchange || !symbol) return;
-  const { apiTf, limit } = DASH_TF_MAP[view] || DASH_TF_MAP["1h"];
+  const seq = ++DASH_FETCH_SEQ;
   const msg = document.getElementById("dash-chart-msg");
-  msg.classList.remove("hidden");
-  msg.textContent = "Loading market data…";
+  _setDashFetchStatus(true, "Fetching data…");
+  if (!soft && msg) {
+    msg.classList.remove("hidden");
+    msg.textContent = "Fetching data…";
+  }
   try {
-    const url = `/api/markets/${exchange}/${symbol}/dashboard?timeframe=${encodeURIComponent(apiTf)}&limit=${limit}`;
-    console.log("[DASHBOARD] fetching", { exchange, symbol, view, apiTf, limit, url });
+    const url = `/api/markets/${exchange}/${symbol}/dashboard?preset=${encodeURIComponent(preset || "1D")}`;
+    console.log("[DASHBOARD] fetching", { exchange, symbol, preset, url, soft });
     const d = await api(url);
-    if (DASH_STATE.symbol !== symbol || DASH_STATE.view !== view) return; // stale
+    // Ignore stale responses if the user switched presets mid-flight.
+    if (seq !== DASH_FETCH_SEQ || DASH_STATE.symbol !== symbol || DASH_STATE.preset !== preset) return;
     renderDashboard(d);
   } catch (e) {
-    msg.classList.remove("hidden");
-    msg.textContent = `⚠ ${e.message}`;
+    if (seq !== DASH_FETCH_SEQ) return;
+    if (msg) {
+      msg.classList.remove("hidden");
+      msg.textContent = `⚠ ${e.message}`;
+    }
     document.getElementById("dash-bot-status").innerHTML =
       `<span style="color:var(--red)">${esc(e.message)}</span>`;
+  } finally {
+    if (seq === DASH_FETCH_SEQ) _setDashFetchStatus(false);
   }
 }
 
 function renderDashboard(d) {
+  DASH_LAST = d;
   document.getElementById("dash-symbol").textContent = d.display_symbol || d.symbol;
   document.getElementById("dash-name").textContent = d.asset_name || "";
   document.getElementById("dash-class-badge").textContent = d.asset_class || d.exchange;
   document.getElementById("dash-price").textContent = formatPrice(d.last_price, d.quote);
+
+  const sub = document.getElementById("dash-price-sub");
+  if (sub) {
+    if (d.data_as_of) {
+      const asOf = new Date(d.data_as_of);
+      const ageMin = Math.max(0, Math.round((Date.now() - asOf.getTime()) / 60000));
+      const when = asOf.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      sub.textContent = ageMin <= 1 ? `last bar ${when} (live)` : `last bar ${when} · ${ageMin}m ago`;
+    } else {
+      sub.textContent = "spot price";
+    }
+  }
 
   // Signal badge
   const sig = d.signal || {};
@@ -1152,7 +1235,7 @@ function renderDashChart(d) {
     msg.textContent = "Chart library unavailable (offline). Indicators below are still live.";
     return;
   }
-  const candles = (d.candles || []).filter(c => c && c.time);
+  const candles = (d.candles || []).filter(c => c && c.time != null && c.close != null);
   if (!candles.length) {
     msg.classList.remove("hidden");
     msg.textContent = "No candle data available for this asset/timeframe.";
@@ -1160,7 +1243,10 @@ function renderDashChart(d) {
   }
   msg.classList.add("hidden");
 
+  const chartType = (DASH_STATE.chartType === "line") ? "line" : "candles";
+
   if (DASH_CHART) { try { DASH_CHART.remove(); } catch (_) {} DASH_CHART = null; }
+  DASH_PRIMARY_SERIES = null;
   DASH_CHART = LightweightCharts.createChart(wrap, {
     layout: { background: { color: "#0d0f14" }, textColor: "#8b91a8" },
     grid: { vertLines: { color: "#1a1e28" }, horzLines: { color: "#1a1e28" } },
@@ -1170,13 +1256,27 @@ function renderDashChart(d) {
     localization: { timeFormatter: (t) => new Date(t * 1000).toLocaleString() },
     autoSize: true,
   });
-  DASH_CANDLE_SERIES = DASH_CHART.addCandlestickSeries({
-    upColor: "#00d68f", downColor: "#ff4d6a", borderVisible: false,
-    wickUpColor: "#00d68f", wickDownColor: "#ff4d6a",
-  });
-  DASH_CANDLE_SERIES.setData(candles);
 
-  // Overlay moving averages aligned to candle timestamps.
+  // Both styles use the same Alpaca/OKX OHLCV payload refreshed every 15s.
+  // Line chart plots close prices from those bars.
+  if (chartType === "line") {
+    const linePts = candles.map(c => ({ time: c.time, value: Number(c.close) }));
+    DASH_PRIMARY_SERIES = DASH_CHART.addLineSeries({
+      color: "#00d68f",
+      lineWidth: 2,
+      priceLineVisible: true,
+      lastValueVisible: true,
+    });
+    DASH_PRIMARY_SERIES.setData(linePts);
+  } else {
+    DASH_PRIMARY_SERIES = DASH_CHART.addCandlestickSeries({
+      upColor: "#00d68f", downColor: "#ff4d6a", borderVisible: false,
+      wickUpColor: "#00d68f", wickDownColor: "#ff4d6a",
+    });
+    DASH_PRIMARY_SERIES.setData(candles);
+  }
+
+  // Overlay moving averages aligned to bar timestamps.
   const series = d.series || {};
   const overlay = (arr, color) => {
     if (!Array.isArray(arr)) return;
@@ -1192,12 +1292,14 @@ function renderDashChart(d) {
   overlay(series.sma20, "#4d9fff");
   overlay(series.sma50, "#9b59ff");
 
-  // Mark support / resistance levels as price lines.
+  // Mark support / resistance levels on the primary series.
   const lv = d.levels || {};
-  if (lv.nearest_support != null)
-    DASH_CANDLE_SERIES.createPriceLine({ price: lv.nearest_support, color: "#00d68f", lineStyle: 2, lineWidth: 1, title: "Support" });
-  if (lv.nearest_resistance != null)
-    DASH_CANDLE_SERIES.createPriceLine({ price: lv.nearest_resistance, color: "#ff4d6a", lineStyle: 2, lineWidth: 1, title: "Resistance" });
+  if (DASH_PRIMARY_SERIES) {
+    if (lv.nearest_support != null)
+      DASH_PRIMARY_SERIES.createPriceLine({ price: lv.nearest_support, color: "#00d68f", lineStyle: 2, lineWidth: 1, title: "Support" });
+    if (lv.nearest_resistance != null)
+      DASH_PRIMARY_SERIES.createPriceLine({ price: lv.nearest_resistance, color: "#ff4d6a", lineStyle: 2, lineWidth: 1, title: "Resistance" });
+  }
 
   DASH_CHART.timeScale().fitContent();
 }

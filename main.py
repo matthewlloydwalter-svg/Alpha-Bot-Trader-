@@ -26,7 +26,7 @@ from app.auth import (
 )
 from app.config import SESSION_COOKIE_SECURE
 from app.brokers import get_account_info, get_spot_price, get_position_snapshot, BrokerError
-from app.market_data import get_market_analysis
+from app.market_data import get_market_analysis, resolve_chart_preset, CHART_PRESETS
 from app.markets_universe import MARKET_UNIVERSE
 from app.credentials import resolve_credentials, has_credentials, keys_payload
 from app import bot_engine  # Imported bot engine to wire up the run-cycle logic
@@ -528,6 +528,7 @@ def list_markets(exchange: str):
 
 @app.get("/api/markets/{exchange}/{symbol}/dashboard")
 def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: int = 200,
+                     preset: Optional[str] = None,
                      u: User = Depends(get_current_user_from_cookie),
                      db: Session = Depends(get_db)):
     """
@@ -537,6 +538,12 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
     pattern-analysis brain (indicators + structural patterns + a normalized
     signal) and returns a fully-prepared payload the UI can render directly.
     The bots consume this exact same analysis via market_data.
+
+    Optional ``preset`` (1D / 1M / 3M) maps to Alpaca-compatible timeframe +
+    a dynamically calculated UTC start_date:
+      1D → 1Min bars from now−1 day
+      1M → 30Min bars from now−30 days
+      3M → 1Hour bars from now−90 days
     """
     ex = exchange.lower()
     if ex not in MARKET_UNIVERSE:
@@ -547,17 +554,43 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
     asset_name = meta["name"] if meta else symbol.upper()
     display = meta["display"] if meta else symbol.upper()
 
-    limit = max(50, min(int(limit), 500))
+    start = None
+    resolved_preset = None
+    if preset:
+        try:
+            resolved = resolve_chart_preset(preset)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        timeframe = resolved["timeframe"]
+        limit = resolved["limit"]
+        start = resolved["start"]
+        resolved_preset = resolved["preset"]
+        logger.info(
+            "[DASHBOARD] preset=%s → tf=%s (%s) start=%s limit=%d",
+            resolved_preset, timeframe, resolved["alpaca_timeframe"],
+            start.isoformat(), limit,
+        )
+    else:
+        limit = max(50, min(int(limit), 500))
+
+    # Preset windows need more bars than the legacy dropdown (1-min × 1 day).
+    if resolved_preset:
+        limit = max(50, min(int(limit), 5000))
+
     paper = (u.trading_mode or "paper") == "paper"
     creds = resolve_credentials(u, ex, paper)
 
     try:
         analysis = get_market_analysis(
             broker=ex, symbol=symbol, timeframe=timeframe, limit=limit,
+            start=start, preset=resolved_preset,
             alpaca_key=creds.get("alpaca_key"), alpaca_secret=creds.get("alpaca_secret"),
             okx_key=creds.get("okx_key"), okx_secret=creds.get("okx_secret"),
             okx_passphrase=creds.get("okx_passphrase"),
             paper=paper,
+            # Preset charts refresh every 15s and must recompute end=now; skip the
+            # short in-process cache so soft refreshes cannot serve a stale window.
+            use_cache=not bool(resolved_preset),
         )
     except BrokerError as e:
         logger.warning("Dashboard data unavailable for %s:%s — %s", ex, symbol, e)
@@ -582,12 +615,28 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
     bot_status = _collect_bot_status(u.id, ex, symbol)
 
     payload = analysis.to_dict()
+    # Surface freshness so the UI can show when the last candle actually is
+    # (helps distinguish "refreshing every 15s" from "last trade was at market close").
+    last_candle_ts = None
+    if analysis.candles:
+        last_candle_ts = analysis.candles[-1].get("time") or analysis.candles[-1].get("ts")
+    data_as_of = None
+    if last_candle_ts:
+        try:
+            data_as_of = datetime.fromtimestamp(int(last_candle_ts), timezone.utc).isoformat()
+        except (TypeError, ValueError, OSError):
+            data_as_of = None
     payload.update({
         "asset_name": asset_name,
         "display_symbol": display,
         "asset_class": cfg["asset_class"],
         "quote": cfg["quote"],
         "bot_status": bot_status,
+        "preset": resolved_preset,
+        "chart_presets": list(CHART_PRESETS.keys()),
+        "start_date": start.isoformat() if start else None,
+        "data_as_of": data_as_of,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
     })
     return payload
 
