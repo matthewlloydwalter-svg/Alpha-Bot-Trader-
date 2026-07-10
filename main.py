@@ -140,20 +140,24 @@ def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)
         raise HTTPException(status_code=401, detail="User record context purged.")
     return user
 
+def _html_page(request: Request, template_name: str = "index.html", **extra):
+    """Render an HTML template with cache-busting asset version always set."""
+    ctx = {
+        "request": request,
+        "PLATFORM_NAME": PLATFORM_NAME,
+        "ASSET_VERSION": _asset_version(),
+        **extra,
+    }
+    resp = templates.TemplateResponse(template_name, ctx)
+    if template_name == "index.html":
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+    return resp
+
+
 @app.get("/", response_class=HTMLResponse)
 def index_pane(request: Request):
-    resp = templates.TemplateResponse(
-        "index.html",
-        {
-            "request": request,
-            "PLATFORM_NAME": PLATFORM_NAME,
-            "ASSET_VERSION": _asset_version(),
-        },
-    )
-    # Never let browsers/CDNs keep a stale shell that points at old JS handlers.
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    return resp
+    return _html_page(request, "index.html")
 
 @app.get("/terms", response_class=HTMLResponse)
 def terms_pane():
@@ -179,9 +183,9 @@ def admin_pane(request: Request, db: Session = Depends(get_db)):
         u = get_current_user_from_cookie(request, db)
         if not u.is_admin:
             return RedirectResponse(url="/")
-        return templates.TemplateResponse("admin.html", {"request": request, "PLATFORM_NAME": PLATFORM_NAME})
+        return templates.TemplateResponse("admin.html", {"request": request, "PLATFORM_NAME": PLATFORM_NAME, "ASSET_VERSION": _asset_version()})
     except Exception:
-        return templates.TemplateResponse("index.html", {"request": request, "PLATFORM_NAME": PLATFORM_NAME})
+        return _html_page(request, "index.html")
 
 @app.post("/auth/signup")
 def register_endpoint(body: AuthModel, response: Response, request: Request, db: Session = Depends(get_db)):
