@@ -409,10 +409,9 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 :root{ --holo:#39d9ff; --holo-deep:#1f7bef; }
 
 /* Portfolio stage = full-bleed background canvas under the nav.
-   Valuation + details float ON TOP of this image; empty space shows art. */
+   Valuation + details sit ON TOP of this image; empty space shows art. */
 .portfolio-stage{
   position:relative;
-  /* Inside .dash-main — fill the centered column without overlapping ad sidebars */
   margin:0;
   width:100%;
   max-width:100%;
@@ -424,10 +423,11 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   border-radius:0;
   padding:0;
   min-height:calc(100vh - var(--topbar-h) - var(--nav-h));
-  overflow:hidden;
+  /* visible — overflow:hidden + sticky top was pushing headers ~116px down */
+  overflow:visible;
 }
 
-/* Floating UI layer — transparent shell; only children paint over the art */
+/* Column stack: header first, details immediately below in normal flow */
 .pf-overlay{
   position:relative;
   z-index:2;
@@ -436,21 +436,20 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   align-items:stretch;
   justify-content:flex-start;
   gap:10px;
-  /* Zero top inset — valuation must kiss the top edge of the image */
   padding:0 0 20px;
-  min-height:inherit;
+  margin:0;
+  min-height:0;
   box-sizing:border-box;
   background:transparent;
-  /* Empty overlay areas let the background image show through */
   pointer-events:none;
 }
 .pf-overlay > *{ pointer-events:auto; }
 
-/* Valuation block sits flush at the VERY TOP of the background image */
+/* Header block — normal flow, flush under the nav (not sticky/absolute) */
 .pf-sticky-header{
-  position:sticky;
-  top:calc(var(--topbar-h) + var(--nav-h));
-  z-index:40;
+  position:relative !important;
+  top:auto !important;
+  z-index:2;
   flex:0 0 auto;
   width:100%;
   max-width:100%;
@@ -460,7 +459,6 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   -webkit-backdrop-filter:blur(10px) saturate(130%);
   padding:6px 14px 8px !important;
   margin:0;
-  /* Square top corners so it sits flush against the image top edge */
   border-radius:0 0 14px 14px !important;
   box-shadow:0 8px 28px rgba(0,0,0,0.35);
 }
@@ -494,7 +492,6 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   font-variant-numeric:tabular-nums;
   text-shadow:0 0 14px rgba(57,217,255,0.25);
 }
-/* Details toggle sits at the bottom-right of the valuation block */
 .pf-sticky-footer{
   display:flex;
   justify-content:flex-end;
@@ -514,38 +511,44 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 .pf-details-caret{ display:inline-block; transition:transform .25s ease; color:var(--holo); }
 .pf-details-toggle[aria-expanded="true"] .pf-details-caret{ transform:rotate(180deg); }
 
-/* Details accordion: transparent shell — ONLY the inner holo-cards cover the art */
+/* Details accordion — normal flow BELOW the header (never absolute / never under header) */
 .pf-details{
+  position:relative;
+  z-index:1;
   display:grid;
   grid-template-rows:0fr;
   transition:grid-template-rows .35s ease;
   flex:0 0 auto;
+  width:100%;
   background:transparent;
   border:none;
   box-shadow:none;
-  max-height:calc(100vh - var(--topbar-h) - var(--nav-h) - 140px);
-  z-index:20; /* below sticky valuation */
+  margin:0;
+  max-height:none;
 }
 .pf-details.is-open{
   grid-template-rows:1fr;
-  overflow:auto;
+  overflow:visible;
 }
 .pf-details.collapsed{ grid-template-rows:0fr; overflow:hidden; }
 .pf-details-inner{
   overflow:hidden; min-height:0;
   display:flex; flex-direction:column; gap:12px;
   background:transparent;
-  opacity:0; transform:translateY(-14px);
+  opacity:0;
+  transform:translateY(-8px);
   transition:opacity .28s ease, transform .32s ease;
-  /* Side inset only for the dropped-down cards (header is full-bleed) */
   padding:0 12px 8px;
+  position:relative;
+  z-index:1;
 }
 .pf-details.is-open .pf-details-inner{
   opacity:1; transform:translateY(0);
-  overflow:auto;
+  overflow:visible;
 }
-/* Detail boxes that land on the background when the menu opens */
 .pf-details .holo-card{
+  position:relative;
+  z-index:1;
   background:linear-gradient(160deg, rgba(14,30,56,0.78), rgba(8,16,34,0.70));
   backdrop-filter:blur(8px) saturate(125%);
   -webkit-backdrop-filter:blur(8px) saturate(125%);
@@ -554,7 +557,7 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 @media(max-width:680px){
   .pf-summary-grid{ grid-template-columns:1fr; gap:6px; }
   .pf-total-pnl{ font-size:22px; }
-  .pf-sticky-header{ top:calc(var(--topbar-h) + var(--nav-h)); }
+  .pf-sticky-header{ position:relative !important; top:auto !important; }
   .pf-overlay{ padding:0 0 16px; }
   .pf-details-inner{ padding:0 8px 8px; }
   .portfolio-stage, .tab-stage{ margin:0; }
@@ -694,7 +697,8 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   max-width:1360px;
   width:100%;
   margin:0 auto;
-  padding:12px 12px 24px;
+  /* No top padding — tab headers sit flush under the nav */
+  padding:0 12px 24px;
   box-sizing:border-box;
 }
 .dash-main{
@@ -702,6 +706,8 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   width:100%;
   max-width:960px;
   justify-self:center;
+  margin:0;
+  padding:0;
 }
 .ad-sidebar{
   position:sticky;
@@ -765,7 +771,8 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   border-radius:0;
   padding:0;
   min-height:calc(100vh - var(--topbar-h) - var(--nav-h));
-  overflow:hidden;
+  /* Must stay visible so accordion content isn't clipped under the header */
+  overflow:visible;
 }
 #view-stocks.tab-stage  { background-image:url("/static/images/markets-background1.png"); }
 #view-bots.tab-stage    { background-image:url("/static/images/bots-background1.png"); }
