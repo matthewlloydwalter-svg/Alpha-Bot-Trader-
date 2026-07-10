@@ -329,10 +329,13 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
         "30m": TimeFrame(30, TimeFrameUnit.Minute),
         "1h": TimeFrame(1, TimeFrameUnit.Hour),
         "1d": TimeFrame(1, TimeFrameUnit.Day),
+        # Weekly bars back the dashboard's 1W / 5Y views; without this they
+        # silently fell back to daily bars for Alpaca (stock) charts.
+        "1w": TimeFrame(1, TimeFrameUnit.Week),
     }
     tf = tf_map.get(timeframe, TimeFrame(1, TimeFrameUnit.Day))
 
-    per_bar = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "1d": 1440}.get(timeframe, 1440)
+    per_bar = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "1d": 1440, "1w": 10080}.get(timeframe, 1440)
     minutes_back = per_bar * limit * 3 + 1440
     start = datetime.now(timezone.utc) - timedelta(minutes=minutes_back)
 
