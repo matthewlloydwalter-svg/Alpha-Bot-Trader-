@@ -175,4 +175,53 @@ async function denyAiProposal() {
   AI_PROPOSAL_ID = null;
 }
 
-document.addEventListener('DOMContentLoaded', () => { loadAdminData(); loadAiStatus(); });
+document.addEventListener('DOMContentLoaded', () => {
+  loadAdminData();
+  loadAiStatus();
+  loadAdSettings();
+});
+
+/* ──────────────────────────────────────────────────────────────────
+ * Ad Network Configuration
+ * ────────────────────────────────────────────────────────────────── */
+async function loadAdSettings() {
+  const ta = document.getElementById('ad-network-snippet');
+  const status = document.getElementById('ad-save-status');
+  if (!ta) return;
+  try {
+    const data = await aiApi('/admin/ads');
+    ta.value = data.ad_network_snippet || '';
+    if (status) status.textContent = '';
+  } catch (e) {
+    if (status) {
+      status.style.color = 'var(--red)';
+      status.textContent = e.message || 'Failed to load ad settings';
+    }
+  }
+}
+
+async function saveAdSettings() {
+  const ta = document.getElementById('ad-network-snippet');
+  const btn = document.getElementById('ad-save-btn');
+  const status = document.getElementById('ad-save-status');
+  if (!ta) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  if (status) { status.style.color = 'var(--t2)'; status.textContent = ''; }
+  try {
+    await aiApi('/admin/ads', {
+      method: 'PUT',
+      body: JSON.stringify({ ad_network_snippet: ta.value || '' }),
+    });
+    if (status) {
+      status.style.color = 'var(--green)';
+      status.textContent = 'Ad settings saved. Dashboard sidebars will pick this up on next load.';
+    }
+  } catch (e) {
+    if (status) {
+      status.style.color = 'var(--red)';
+      status.textContent = e.message || 'Save failed';
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '💾 Save Ad Settings'; }
+  }
+}

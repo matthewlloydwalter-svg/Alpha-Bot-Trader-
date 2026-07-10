@@ -102,8 +102,12 @@
     <button id="admin-nav-btn" class="nav-tab hidden" onclick="window.location.href='/admin'">🛡️ Admin</button>
   </nav>
 
-  <main class="page">
-    <div id="view-portfolio" class="tab-view portfolio-stage">
+  <main class="page dash-shell">
+    <!-- Left ad sidebar (sticky). Empty/transparent when no snippet configured. -->
+    <aside class="ad-sidebar ad-sidebar-left" id="ad-sidebar-left" aria-label="Advertisement"></aside>
+
+    <div class="dash-main">
+    <div id="view-portfolio" class="tab-view tab-stage portfolio-stage">
       <!-- Background image fills the stage. Valuation sits on top of it;
            when expanded, only the detail cards drop down onto the image. -->
       <div class="pf-overlay">
@@ -204,186 +208,321 @@
       </div>
     </div>
 
-    <div id="view-assets" class="tab-view hidden">
-      <div class="card">
-        <div class="slbl">Broker funds</div>
-        <div class="info-banner">Funding is handled entirely through your connected broker. Make deposits and withdrawals directly with Alpaca or OKX — the live balance below is the single source of truth for what you can allocate to a Bot.</div>
-      </div>
-      <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <div class="slbl" style="margin-bottom:0">Live broker account</div>
-          <button class="btn btn-sm" onclick="loadBrokerAccount()">🔄 Refresh</button>
-        </div>
-        <div id="broker-account-info" style="font-size:13px;color:var(--t2)">Loading live balance from your connected broker…</div>
-      </div>
-    </div>
-
-    <div id="view-bots" class="tab-view hidden">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-        <div>
-          <div style="font-size:18px;font-weight:700">Trading Bots
-            <span id="bots-mode-badge" class="badge badge-green" style="font-size:10px;vertical-align:middle">● Paper</span>
+    <div id="view-assets" class="tab-view tab-stage hidden" data-bg="assets">
+      <div class="pf-overlay">
+        <header class="pf-sticky-header holo-card">
+          <div class="pf-sticky-top">
+            <div class="pf-mode-title">💰 Assets</div>
           </div>
-          <div style="font-size:12px;color:var(--t2)" id="bots-mode-sub">Showing your Paper account bots · switch account in the top bar or Account tab</div>
-        </div>
-        <button class="btn btn-primary" onclick="showCreateBotModal()">+ New Bot</button>
-      </div>
-      <div id="bots-list-container" style="display:flex;flex-direction:column;gap:14px"></div>
-    </div>
-
-    <div id="view-stocks" class="tab-view hidden">
-      <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-          <div class="slbl" id="markets-view-label" style="margin-bottom:0">Tracked Market Assets</div>
-          <input type="text" id="markets-search" placeholder="🔍 Filter symbol…" oninput="filterMarkets()" style="max-width:200px">
-        </div>
-        <p id="markets-view-desc" style="color:var(--t2);margin:10px 0 4px">Real-time status of equity instruments queried from market endpoints. Click any asset to open its live dashboard.</p>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr><th>Ticker Symbol</th><th>Asset Name</th><th>Asset Class</th><th>Status</th><th></th></tr>
-            </thead>
-            <tbody id="stocks-table-body">
-              <tr><td colspan="5" style="color:var(--t2)">Loading active tokens...</td></tr>
-            </tbody>
-          </table>
+          <div class="pf-summary-grid">
+            <div class="pf-summary-metric">
+              <div class="holo-lbl">Broker funds</div>
+              <div class="holo-total-value" id="assets-header-cash" style="font-size:22px">—</div>
+            </div>
+          </div>
+          <div class="pf-sticky-footer">
+            <button type="button" class="pf-details-toggle" id="assets-details-toggle"
+                    onclick="toggleTabDetails('assets')" aria-expanded="false" aria-controls="assets-details">
+              <span id="assets-details-toggle-label">Show details</span>
+              <span class="pf-details-caret">▾</span>
+            </button>
+          </div>
+        </header>
+        <div class="pf-details collapsed" id="assets-details">
+          <div class="pf-details-inner">
+            <div class="card">
+              <div class="slbl">Broker funds</div>
+              <div class="info-banner">Funding is handled entirely through your connected broker. Make deposits and withdrawals directly with Alpaca or OKX — the live balance below is the single source of truth for what you can allocate to a Bot.</div>
+            </div>
+            <div class="card">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+                <div class="slbl" style="margin-bottom:0">Live broker account</div>
+                <button class="btn btn-sm" onclick="loadBrokerAccount()">🔄 Refresh</button>
+              </div>
+              <div id="broker-account-info" style="font-size:13px;color:var(--t2)">Loading live balance from your connected broker…</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
-    <div id="view-history" class="tab-view hidden">
-      <div class="card">
-        <div class="slbl">System Execution Ledger</div>
-        <p style="color:var(--t2);margin-bottom:12px">Complete structural transaction history executed by the automated trade loops.</p>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr><th>Timestamp</th><th>Bot</th><th>Ticker</th><th>Action</th><th>Quantity</th><th>Price</th><th>Environment</th></tr>
-            </thead>
-            <tbody id="history-table-body">
-              <tr><td colspan="7" style="color:var(--t2)">No trades logged yet.</td></tr>
-            </tbody>
-          </table>
+    <div id="view-bots" class="tab-view tab-stage hidden" data-bg="bots">
+      <div class="pf-overlay">
+        <header class="pf-sticky-header holo-card">
+          <div class="pf-sticky-top">
+            <div class="pf-mode-title">
+              <span>🤖 Trading Bots</span>
+              <span id="bots-mode-badge" class="badge badge-green">● Paper</span>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="showCreateBotModal()">+ New Bot</button>
+          </div>
+          <div class="pf-summary-grid">
+            <div class="pf-summary-metric">
+              <div class="holo-lbl">Total Active Bots</div>
+              <div class="holo-total-value" id="bots-header-count" style="font-size:28px">0</div>
+              <div class="holo-total-sub"><span id="bots-mode-sub" style="font-size:12px;color:var(--t2)">Showing your Paper account bots</span></div>
+            </div>
+          </div>
+          <div class="pf-sticky-footer">
+            <button type="button" class="pf-details-toggle" id="bots-details-toggle"
+                    onclick="toggleTabDetails('bots')" aria-expanded="false" aria-controls="bots-details">
+              <span id="bots-details-toggle-label">Show details</span>
+              <span class="pf-details-caret">▾</span>
+            </button>
+          </div>
+        </header>
+        <div class="pf-details collapsed" id="bots-details">
+          <div class="pf-details-inner">
+            <div id="bots-list-container" style="display:flex;flex-direction:column;gap:14px"></div>
+          </div>
         </div>
       </div>
     </div>
 
-    <div id="view-news" class="tab-view hidden">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
-        <div>
-          <div style="font-size:18px;font-weight:700">📰 Market News</div>
-          <div style="font-size:12px;color:var(--t2)">Latest headlines from major financial sources</div>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-sm" id="news-filter-all" onclick="filterNews('all')" style="border-color:var(--blue);color:var(--blue)">All</button>
-          <button class="btn btn-sm" id="news-filter-bullish" onclick="filterNews('bullish')">🟢 Bullish</button>
-          <button class="btn btn-sm" id="news-filter-bearish" onclick="filterNews('bearish')">🔴 Bearish</button>
-          <button class="btn btn-sm" id="news-filter-neutral" onclick="filterNews('neutral')">⚪ Neutral</button>
-          <button class="btn btn-primary btn-sm" onclick="loadNews()" id="news-refresh-btn">🔄 Refresh</button>
+    <div id="view-stocks" class="tab-view tab-stage hidden" data-bg="markets">
+      <div class="pf-overlay">
+        <header class="pf-sticky-header holo-card">
+          <div class="pf-sticky-top">
+            <div class="pf-mode-title" id="markets-view-label">📊 Markets</div>
+            <input type="text" id="markets-search" placeholder="🔍 Filter symbol…" oninput="filterMarkets()" style="max-width:200px">
+          </div>
+          <div class="pf-summary-grid">
+            <div class="pf-summary-metric">
+              <div class="holo-lbl">Tracked assets</div>
+              <div class="holo-total-value" id="markets-header-count" style="font-size:28px">—</div>
+            </div>
+          </div>
+          <div class="pf-sticky-footer">
+            <button type="button" class="pf-details-toggle" id="stocks-details-toggle"
+                    onclick="toggleTabDetails('stocks')" aria-expanded="false" aria-controls="stocks-details">
+              <span id="stocks-details-toggle-label">Show details</span>
+              <span class="pf-details-caret">▾</span>
+            </button>
+          </div>
+        </header>
+        <div class="pf-details collapsed" id="stocks-details">
+          <div class="pf-details-inner">
+            <div class="card">
+              <p id="markets-view-desc" style="color:var(--t2);margin:0 0 12px">Real-time status of equity instruments queried from market endpoints. Click any asset to open its live dashboard.</p>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr><th>Ticker Symbol</th><th>Asset Name</th><th>Asset Class</th><th>Status</th><th></th></tr>
+                  </thead>
+                  <tbody id="stocks-table-body">
+                    <tr><td colspan="5" style="color:var(--t2)">Loading active tokens...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-      <div id="news-status" style="text-align:center;padding:40px;color:var(--t2);font-size:13px">
-        <div style="font-size:32px;margin-bottom:10px">📰</div>
-        <div>Click Refresh to load the latest market news</div>
-      </div>
-      <div id="news-list" style="display:flex;flex-direction:column;gap:12px"></div>
     </div>
 
-    <div id="view-account" class="tab-view hidden">
-      <div class="card">
-        <div class="slbl">Email verification</div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <div>
-            <div id="verification-text" style="color:var(--t2);margin-top:2px">Verifying data...</div>
+    <div id="view-history" class="tab-view tab-stage hidden" data-bg="history">
+      <div class="pf-overlay">
+        <header class="pf-sticky-header holo-card">
+          <div class="pf-sticky-top">
+            <div class="pf-mode-title">📜 History</div>
           </div>
-          <button id="verify-email-btn" class="btn btn-primary btn-sm hidden" onclick="triggerEmailVerification()">📧 Send Verification Code</button>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="slbl">Trading mode</div>
-        <div class="mode-toggle" style="max-width:320px;margin-bottom:12px">
-          <button class="mode-btn" id="mode-paper" onclick="setTradingMode('paper')">📄 Paper (simulated)</button>
-          <button class="mode-btn" id="mode-live" onclick="setTradingMode('live')">⚡ Live (real money)</button>
-        </div>
-        <div style="font-size:11px;color:var(--t3)">Live mode is currently unlocked for everyone (email verification not required for now).</div>
-      </div>
-
-      <div class="card">
-        <div class="slbl">Broker / Exchange</div>
-        <div class="mode-toggle" style="max-width:300px;margin-bottom:12px">
-          <button class="mode-btn" id="broker-alpaca" onclick="setBroker('alpaca')">📈 Alpaca (Stocks)</button>
-          <button class="mode-btn" id="broker-okx" onclick="setBroker('okx')">₿ OKX (Crypto)</button>
-        </div>
-      </div>
-
-      <div class="card" id="alpaca-keys-card">
-        <div class="slbl">Alpaca API Keys</div>
-        <div class="info-banner">Enter the keys for each mode separately. Paper keys come from the Alpaca <b>Paper</b> dashboard; Live keys from the Live dashboard. The dashboard and bots automatically use the set matching your current Trading Mode.</div>
-        <div class="keys-grid">
-          <div class="keys-col">
-            <div style="font-weight:700;margin-bottom:8px">📄 Paper Trading</div>
-            <label class="field">Key ID<input type="text" id="alpaca-paper-key" placeholder="Paper API Key ID"></label>
-            <label class="field" style="margin-top:10px">Secret Key<input type="password" id="alpaca-paper-secret" placeholder="Paper Secret Key"></label>
-            <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="handleSaveAlpacaKeys('paper')">💾 Save Paper Keys</button>
+          <div class="pf-summary-grid">
+            <div class="pf-summary-metric">
+              <div class="holo-lbl">Logged trades</div>
+              <div class="holo-total-value" id="history-header-count" style="font-size:28px">—</div>
+            </div>
           </div>
-          <div class="keys-col">
-            <div style="font-weight:700;margin-bottom:8px">⚡ Live Trading</div>
-            <label class="field">Key ID<input type="text" id="alpaca-live-key" placeholder="Live API Key ID"></label>
-            <label class="field" style="margin-top:10px">Secret Key<input type="password" id="alpaca-live-secret" placeholder="Live Secret Key"></label>
-            <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="handleSaveAlpacaKeys('live')">💾 Save Live Keys</button>
+          <div class="pf-sticky-footer">
+            <button type="button" class="pf-details-toggle" id="history-details-toggle"
+                    onclick="toggleTabDetails('history')" aria-expanded="false" aria-controls="history-details">
+              <span id="history-details-toggle-label">Show details</span>
+              <span class="pf-details-caret">▾</span>
+            </button>
+          </div>
+        </header>
+        <div class="pf-details collapsed" id="history-details">
+          <div class="pf-details-inner">
+            <div class="card">
+              <div class="slbl">System Execution Ledger</div>
+              <p style="color:var(--t2);margin-bottom:12px">Complete structural transaction history executed by the automated trade loops.</p>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr><th>Timestamp</th><th>Bot</th><th>Ticker</th><th>Action</th><th>Quantity</th><th>Price</th><th>Environment</th></tr>
+                  </thead>
+                  <tbody id="history-table-body">
+                    <tr><td colspan="7" style="color:var(--t2)">No trades logged yet.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-
-      <div class="card hidden" id="okx-keys-card">
-        <div class="slbl">OKX API Keys</div>
-        <div class="info-banner">OKX Paper = <b>Demo Trading</b> keys (generated separately in OKX's demo section). Live = your real account keys. The active set follows your Trading Mode.</div>
-        <div class="keys-grid">
-          <div class="keys-col">
-            <div style="font-weight:700;margin-bottom:8px">📄 Paper (Demo) Trading</div>
-            <label class="field">API Key<input type="text" id="okx-paper-key" placeholder="Demo API Key"></label>
-            <label class="field" style="margin-top:10px">Secret Key<input type="password" id="okx-paper-secret" placeholder="Demo Secret Key"></label>
-            <label class="field" style="margin-top:10px">Passphrase<input type="password" id="okx-paper-pass" placeholder="Demo Passphrase"></label>
-            <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="handleSaveOkxKeys('paper')">💾 Save Paper Keys</button>
-          </div>
-          <div class="keys-col">
-            <div style="font-weight:700;margin-bottom:8px">⚡ Live Trading</div>
-            <label class="field">API Key<input type="text" id="okx-live-key" placeholder="Live API Key"></label>
-            <label class="field" style="margin-top:10px">Secret Key<input type="password" id="okx-live-secret" placeholder="Live Secret Key"></label>
-            <label class="field" style="margin-top:10px">Passphrase<input type="password" id="okx-live-pass" placeholder="Live Passphrase"></label>
-            <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="handleSaveOkxKeys('live')">💾 Save Live Keys</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="card" id="onboarding-card">
-        <div class="slbl">Exchange setup guide</div>
-
-        <div id="onboarding-alpaca">
-          <a href="https://app.alpaca.markets/login" target="_blank" rel="noopener" class="btn btn-primary btn-sm" style="margin-bottom:12px">🔗 Sign in to Alpaca</a>
-          <ol class="onboarding-steps">
-            <li>If you don't have an Alpaca account, click the link above to create one.</li>
-            <li>Log into your Alpaca Dashboard.</li>
-            <li>On the right-hand panel, locate the "API Keys" section.</li>
-            <li>Click "Generate New Keys" to view your Key ID and Secret Key.</li>
-          </ol>
-        </div>
-
-        <div id="onboarding-okx" class="hidden">
-          <a href="https://www.okx.com/account/login" target="_blank" rel="noopener" class="btn btn-primary btn-sm" style="margin-bottom:12px">🔗 Sign in to OKX</a>
-          <ol class="onboarding-steps">
-            <li>If you don't have an OKX account, click the link above to create one.</li>
-            <li>Log into your account and hover over the Profile icon in the top right menu.</li>
-            <li>Click on "API Keys" from the dropdown.</li>
-            <li>Click "Create V5 API Key", choose an API Name, and set a custom Passphrase (keep note of this passphrase!).</li>
-            <li>Set permissions to allow "Read" and "Trade", complete your security verification, and copy your API Key and Secret Key.</li>
-          </ol>
-        </div>
-
-        <div class="info-banner" style="margin-top:14px;margin-bottom:0">and then come back here and enter the keys to start trading.</div>
       </div>
     </div>
+
+    <div id="view-news" class="tab-view tab-stage hidden" data-bg="news">
+      <div class="pf-overlay">
+        <header class="pf-sticky-header holo-card">
+          <div class="pf-sticky-top">
+            <div class="pf-mode-title">📰 Market News</div>
+            <button class="btn btn-primary btn-sm" onclick="loadNews()" id="news-refresh-btn">🔄 Refresh</button>
+          </div>
+          <div class="pf-summary-grid">
+            <div class="pf-summary-metric">
+              <div class="holo-lbl">Headlines loaded</div>
+              <div class="holo-total-value" id="news-header-count" style="font-size:28px">0</div>
+            </div>
+          </div>
+          <div class="pf-sticky-footer">
+            <button type="button" class="pf-details-toggle" id="news-details-toggle"
+                    onclick="toggleTabDetails('news')" aria-expanded="false" aria-controls="news-details">
+              <span id="news-details-toggle-label">Show details</span>
+              <span class="pf-details-caret">▾</span>
+            </button>
+          </div>
+        </header>
+        <div class="pf-details collapsed" id="news-details">
+          <div class="pf-details-inner">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+              <button class="btn btn-sm" id="news-filter-all" onclick="filterNews('all')" style="border-color:var(--blue);color:var(--blue)">All</button>
+              <button class="btn btn-sm" id="news-filter-bullish" onclick="filterNews('bullish')">🟢 Bullish</button>
+              <button class="btn btn-sm" id="news-filter-bearish" onclick="filterNews('bearish')">🔴 Bearish</button>
+              <button class="btn btn-sm" id="news-filter-neutral" onclick="filterNews('neutral')">⚪ Neutral</button>
+            </div>
+            <div id="news-status" style="text-align:center;padding:40px;color:var(--t2);font-size:13px">
+              <div style="font-size:32px;margin-bottom:10px">📰</div>
+              <div>Click Refresh to load the latest market news</div>
+            </div>
+            <div id="news-list" style="display:flex;flex-direction:column;gap:12px"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-account" class="tab-view tab-stage hidden" data-bg="account">
+      <div class="pf-overlay">
+        <header class="pf-sticky-header holo-card">
+          <div class="pf-sticky-top">
+            <div class="pf-mode-title">👤 Account</div>
+          </div>
+          <div class="pf-summary-grid">
+            <div class="pf-summary-metric">
+              <div class="holo-lbl">Signed in as</div>
+              <div class="holo-total-value" id="account-header-email" style="font-size:18px;word-break:break-all">—</div>
+            </div>
+          </div>
+          <div class="pf-sticky-footer">
+            <button type="button" class="pf-details-toggle" id="account-details-toggle"
+                    onclick="toggleTabDetails('account')" aria-expanded="false" aria-controls="account-details">
+              <span id="account-details-toggle-label">Show details</span>
+              <span class="pf-details-caret">▾</span>
+            </button>
+          </div>
+        </header>
+        <div class="pf-details collapsed" id="account-details">
+          <div class="pf-details-inner">
+            <div class="card">
+              <div class="slbl">Email verification</div>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+                <div>
+                  <div id="verification-text" style="color:var(--t2);margin-top:2px">Verifying data...</div>
+                </div>
+                <button id="verify-email-btn" class="btn btn-primary btn-sm hidden" onclick="triggerEmailVerification()">📧 Send Verification Code</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="slbl">Trading mode</div>
+              <div class="mode-toggle" style="max-width:320px;margin-bottom:12px">
+                <button class="mode-btn" id="mode-paper" onclick="setTradingMode('paper')">📄 Paper (simulated)</button>
+                <button class="mode-btn" id="mode-live" onclick="setTradingMode('live')">⚡ Live (real money)</button>
+              </div>
+              <div style="font-size:11px;color:var(--t3)">Live mode is currently unlocked for everyone (email verification not required for now).</div>
+            </div>
+
+            <div class="card">
+              <div class="slbl">Broker / Exchange</div>
+              <div class="mode-toggle" style="max-width:300px;margin-bottom:12px">
+                <button class="mode-btn" id="broker-alpaca" onclick="setBroker('alpaca')">📈 Alpaca (Stocks)</button>
+                <button class="mode-btn" id="broker-okx" onclick="setBroker('okx')">₿ OKX (Crypto)</button>
+              </div>
+            </div>
+
+            <div class="card" id="alpaca-keys-card">
+              <div class="slbl">Alpaca API Keys</div>
+              <div class="info-banner">Enter the keys for each mode separately. Paper keys come from the Alpaca <b>Paper</b> dashboard; Live keys from the Live dashboard. The dashboard and bots automatically use the set matching your current Trading Mode.</div>
+              <div class="keys-grid">
+                <div class="keys-col">
+                  <div style="font-weight:700;margin-bottom:8px">📄 Paper Trading</div>
+                  <label class="field">Key ID<input type="text" id="alpaca-paper-key" placeholder="Paper API Key ID"></label>
+                  <label class="field" style="margin-top:10px">Secret Key<input type="password" id="alpaca-paper-secret" placeholder="Paper Secret Key"></label>
+                  <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="handleSaveAlpacaKeys('paper')">💾 Save Paper Keys</button>
+                </div>
+                <div class="keys-col">
+                  <div style="font-weight:700;margin-bottom:8px">⚡ Live Trading</div>
+                  <label class="field">Key ID<input type="text" id="alpaca-live-key" placeholder="Live API Key ID"></label>
+                  <label class="field" style="margin-top:10px">Secret Key<input type="password" id="alpaca-live-secret" placeholder="Live Secret Key"></label>
+                  <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="handleSaveAlpacaKeys('live')">💾 Save Live Keys</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="card hidden" id="okx-keys-card">
+              <div class="slbl">OKX API Keys</div>
+              <div class="info-banner">OKX Paper = <b>Demo Trading</b> keys (generated separately in OKX's demo section). Live = your real account keys. The active set follows your Trading Mode.</div>
+              <div class="keys-grid">
+                <div class="keys-col">
+                  <div style="font-weight:700;margin-bottom:8px">📄 Paper (Demo) Trading</div>
+                  <label class="field">API Key<input type="text" id="okx-paper-key" placeholder="Demo API Key"></label>
+                  <label class="field" style="margin-top:10px">Secret Key<input type="password" id="okx-paper-secret" placeholder="Demo Secret Key"></label>
+                  <label class="field" style="margin-top:10px">Passphrase<input type="password" id="okx-paper-pass" placeholder="Demo Passphrase"></label>
+                  <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="handleSaveOkxKeys('paper')">💾 Save Paper Keys</button>
+                </div>
+                <div class="keys-col">
+                  <div style="font-weight:700;margin-bottom:8px">⚡ Live Trading</div>
+                  <label class="field">API Key<input type="text" id="okx-live-key" placeholder="Live API Key"></label>
+                  <label class="field" style="margin-top:10px">Secret Key<input type="password" id="okx-live-secret" placeholder="Live Secret Key"></label>
+                  <label class="field" style="margin-top:10px">Passphrase<input type="password" id="okx-live-pass" placeholder="Live Passphrase"></label>
+                  <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="handleSaveOkxKeys('live')">💾 Save Live Keys</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="card" id="onboarding-card">
+              <div class="slbl">Exchange setup guide</div>
+
+              <div id="onboarding-alpaca">
+                <a href="https://app.alpaca.markets/login" target="_blank" rel="noopener" class="btn btn-primary btn-sm" style="margin-bottom:12px">🔗 Sign in to Alpaca</a>
+                <ol class="onboarding-steps">
+                  <li>If you don't have an Alpaca account, click the link above to create one.</li>
+                  <li>Log into your Alpaca Dashboard.</li>
+                  <li>On the right-hand panel, locate the "API Keys" section.</li>
+                  <li>Click "Generate New Keys" to view your Key ID and Secret Key.</li>
+                </ol>
+              </div>
+
+              <div id="onboarding-okx" class="hidden">
+                <a href="https://www.okx.com/account/login" target="_blank" rel="noopener" class="btn btn-primary btn-sm" style="margin-bottom:12px">🔗 Sign in to OKX</a>
+                <ol class="onboarding-steps">
+                  <li>If you don't have an OKX account, click the link above to create one.</li>
+                  <li>Log into your account and hover over the Profile icon in the top right menu.</li>
+                  <li>Click on "API Keys" from the dropdown.</li>
+                  <li>Click "Create V5 API Key", choose an API Name, and set a custom Passphrase (keep note of this passphrase!).</li>
+                  <li>Set permissions to allow "Read" and "Trade", complete your security verification, and copy your API Key and Secret Key.</li>
+                </ol>
+              </div>
+
+              <div class="info-banner" style="margin-top:14px;margin-bottom:0">and then come back here and enter the keys to start trading.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div><!-- /.dash-main -->
+
+    <!-- Right ad sidebar (sticky). Same snippet as left; hidden below 1200px. -->
+    <aside class="ad-sidebar ad-sidebar-right" id="ad-sidebar-right" aria-label="Advertisement"></aside>
   </main>
 </div>
 

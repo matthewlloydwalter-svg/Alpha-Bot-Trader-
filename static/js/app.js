@@ -147,6 +147,7 @@ async function enterApp() {
     if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
   }, 15000);
   loadPortfolioPerformance();  // Portfolio is the default visible tab
+  loadAdSidebars();            // inject admin-configured ad snippet into sidebars
   connectLiveStream();         // subscribe to the always-on backend feed
 }
 
@@ -253,6 +254,9 @@ function setupTabs() {
 async function refreshUserData() {
   try {
     USER = await api("/auth/me");
+
+    const acctEmail = document.getElementById("account-header-email");
+    if (acctEmail) acctEmail.textContent = USER.email || "—";
 
     const vText = document.getElementById("verification-text");
     const vBtn = document.getElementById("verify-email-btn");
@@ -593,6 +597,69 @@ function togglePortfolioDetails() {
 }
 window.togglePortfolioDetails = togglePortfolioDetails;
 
+/* Generic collapsible details for Markets / Bots / News / History / Assets / Account */
+const TAB_DETAILS_OPEN = Object.create(null);
+
+function syncTabDetailsUI(key) {
+  const open = !!TAB_DETAILS_OPEN[key];
+  const details = document.getElementById(`${key}-details`);
+  const toggle = document.getElementById(`${key}-details-toggle`);
+  const label = document.getElementById(`${key}-details-toggle-label`);
+  if (details) {
+    details.classList.toggle("is-open", open);
+    details.classList.toggle("collapsed", !open);
+  }
+  if (toggle) toggle.setAttribute("aria-expanded", String(open));
+  if (label) label.textContent = open ? "Hide details" : "Show details";
+}
+
+function toggleTabDetails(key) {
+  TAB_DETAILS_OPEN[key] = !TAB_DETAILS_OPEN[key];
+  syncTabDetailsUI(key);
+}
+window.toggleTabDetails = toggleTabDetails;
+
+/* ── Ad sidebars: fetch snippet and inject HTML/JS into left + right ── */
+function injectAdSnippet(container, html) {
+  if (!container) return;
+  container.innerHTML = "";
+  const raw = (html || "").trim();
+  if (!raw) {
+    container.classList.add("is-empty");
+    return;
+  }
+  container.classList.remove("is-empty");
+  const slot = document.createElement("div");
+  slot.className = "ad-slot";
+  slot.innerHTML = raw;
+  // Scripts inserted via innerHTML do not execute — re-create them.
+  slot.querySelectorAll("script").forEach((old) => {
+    const s = document.createElement("script");
+    for (const attr of old.attributes) s.setAttribute(attr.name, attr.value);
+    if (old.textContent) s.textContent = old.textContent;
+    old.parentNode.replaceChild(s, old);
+  });
+  container.appendChild(slot);
+}
+
+async function loadAdSidebars() {
+  const left = document.getElementById("ad-sidebar-left");
+  const right = document.getElementById("ad-sidebar-right");
+  if (!left && !right) return;
+  try {
+    const resp = await fetch("/ads/snippet", { credentials: "include" });
+    if (!resp.ok) throw new Error("ads fetch failed");
+    const data = await resp.json();
+    const snippet = data.ad_network_snippet || "";
+    injectAdSnippet(left, snippet);
+    injectAdSnippet(right, snippet);
+  } catch (_) {
+    injectAdSnippet(left, "");
+    injectAdSnippet(right, "");
+  }
+}
+window.loadAdSidebars = loadAdSidebars;
+
 function setPortfolioTimeframe(tf) {
   PF_STATE.timeframe = tf;
   renderPortfolioMainChart();   // re-slice cached live series, no refetch needed
@@ -800,6 +867,13 @@ async function loadBrokerAccount() {
         <span style="font-weight:500">${typeof v === "number" ? "$" + Number(v).toLocaleString() : v}</span>
       </div>`
     ).join("");
+    const cashEl = document.getElementById("assets-header-cash");
+    if (cashEl) {
+      const cash = data.cash ?? data.buying_power ?? data.equity ?? data.balance;
+      cashEl.textContent = (typeof cash === "number")
+        ? "$" + Number(cash).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : (cash != null ? String(cash) : "—");
+    }
   } catch (e) { el.innerHTML = header + `<span style="color:var(--red)">⚠ ${e.message}</span>`; }
 }
 
@@ -902,6 +976,9 @@ function renderBots() {
   const activePaperBots = BOTS.filter(b => ((b.mode || "paper") === "paper"));
   const activeLiveBots  = BOTS.filter(b => ((b.mode || "paper") === "live"));
   const visible = mode === "live" ? activeLiveBots : activePaperBots;
+
+  const hdrCount = document.getElementById("bots-header-count");
+  if (hdrCount) hdrCount.textContent = String(visible.filter(b => b.running).length);
 
   // Reflect the active account in the Bots-tab header.
   const badge = document.getElementById("bots-mode-badge");
@@ -1083,6 +1160,9 @@ function renderMarkets() {
   const items = filter
     ? MARKETS.filter(m => m.symbol.toUpperCase().includes(filter) || (m.name || "").toUpperCase().includes(filter))
     : MARKETS;
+
+  const hdr = document.getElementById("markets-header-count");
+  if (hdr) hdr.textContent = String(MARKETS.length || 0);
 
   if (!items.length) {
     tbody.innerHTML = `<tr><td colspan="5" style="color:var(--t2)">No matching assets.</td></tr>`;
@@ -1473,6 +1553,8 @@ async function loadTradeHistory() {
   const tbody = document.getElementById("history-table-body");
   try {
     const trades = await api("/broker/trades-ledger");
+    const hdr = document.getElementById("history-header-count");
+    if (hdr) hdr.textContent = String((trades && trades.length) || 0);
     if (!trades.length) { tbody.innerHTML = `<tr><td colspan="7" style="color:var(--t2)">No trades logged yet.</td></tr>`; return; }
     tbody.innerHTML = trades.map(t => {
       const qty = Number(t.qty || 0);
@@ -1520,6 +1602,16 @@ function filterNews(f) { NEWS_FILTER = f; renderNews(); }
 function renderNews() {
   const list = document.getElementById("news-list");
   const filtered = NEWS_FILTER === "all" ? ALL_NEWS : ALL_NEWS.filter(n => n.sentiment === NEWS_FILTER);
+  const hdr = document.getElementById("news-header-count");
+  if (hdr) hdr.textContent = String((ALL_NEWS && ALL_NEWS.length) || 0);
+  // Highlight active filter button
+  ["all", "bullish", "bearish", "neutral"].forEach(f => {
+    const btn = document.getElementById(`news-filter-${f}`);
+    if (!btn) return;
+    const on = NEWS_FILTER === f;
+    btn.style.borderColor = on ? "var(--blue)" : "";
+    btn.style.color = on ? "var(--blue)" : "";
+  });
   list.innerHTML = filtered.map(n => `
     <div class="card" style="cursor:pointer" onclick="window.open('${esc(n.link)}')">
       <div style="font-weight:600;margin-bottom:6px">${esc(n.title)}</div>

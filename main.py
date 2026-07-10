@@ -18,7 +18,7 @@ from sse_starlette.sse import EventSourceResponse
 
 load_dotenv()
 
-from app.database import engine, Base, init_db, get_db, SessionLocal, User, Bot, Trade, ActivityLog, MarketQuote
+from app.database import engine, Base, init_db, get_db, SessionLocal, User, Bot, Trade, ActivityLog, MarketQuote, SiteSettings, ensure_site_settings
 from app.auth import (
     hash_password, verify_password, create_session_token, decode_session_token,
     generate_verification_code, send_verification_email, is_user_admin, PLATFORM_NAME,
@@ -401,6 +401,37 @@ def admin_users_list(request: Request, db: Session = Depends(get_db)):
     if not u.is_admin: raise HTTPException(status_code=403)
     users = db.query(User).all()
     return [{"email": x.email, "is_admin": x.is_admin, "email_verified": x.email_verified} for x in users]
+
+
+class AdSnippetModel(BaseModel):
+    ad_network_snippet: str = ""
+
+
+@app.get("/ads/snippet")
+def get_ad_snippet(db: Session = Depends(get_db)):
+    """Public read of the ad network HTML/JS snippet for dashboard sidebars."""
+    row = ensure_site_settings(db)
+    return {"ad_network_snippet": row.ad_network_snippet or ""}
+
+
+@app.get("/admin/ads")
+def admin_get_ads(request: Request, db: Session = Depends(get_db)):
+    _require_admin(request, db)
+    row = ensure_site_settings(db)
+    return {"ad_network_snippet": row.ad_network_snippet or ""}
+
+
+@app.put("/admin/ads")
+def admin_put_ads(body: AdSnippetModel, request: Request, db: Session = Depends(get_db)):
+    """Admin-only update of the raw ad network snippet injected into sidebars."""
+    _require_admin(request, db)
+    row = ensure_site_settings(db)
+    row.ad_network_snippet = body.ad_network_snippet if body.ad_network_snippet is not None else ""
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"ok": True, "ad_network_snippet": row.ad_network_snippet or ""}
+
 
 @app.get("/system/logs")
 def get_system_logs(u: User = Depends(get_current_user), db: Session = Depends(get_db)):

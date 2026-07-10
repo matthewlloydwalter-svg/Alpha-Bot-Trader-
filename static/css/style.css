@@ -412,10 +412,10 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
    Valuation + details float ON TOP of this image; empty space shows art. */
 .portfolio-stage{
   position:relative;
-  /* Cancel .page padding so the art sits flush under the sticky nav */
-  margin:-18px -20px 0;
-  width:calc(100% + 40px);
-  max-width:none;
+  /* Inside .dash-main — fill the centered column without overlapping ad sidebars */
+  margin:0;
+  width:100%;
+  max-width:100%;
   background-image:url("/static/images/portfolio-background1.png");
   background-size:cover;
   background-position:center top;
@@ -557,7 +557,7 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   .pf-sticky-header{ top:calc(var(--topbar-h) + var(--nav-h)); }
   .pf-overlay{ padding:0 0 16px; }
   .pf-details-inner{ padding:0 8px 8px; }
-  .portfolio-stage{ margin:-18px -20px 0; }
+  .portfolio-stage, .tab-stage{ margin:0; }
 }
 
 /* Glass card matched to the glowing cyan/blue globe so the scene shows through */
@@ -680,23 +680,130 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 
 @media(max-width:680px){ .perf-wl-grid{ grid-template-columns:1fr; } .holo-total-value{ font-size:30px; } }
 
-/* ── Per-tab + auth background image PLACEHOLDERS ─────────────────────
-   Each selector is scoped to a single tab (or the auth screen) so a
-   background applies there ONLY. Drop a PNG with the matching name into
-   static/images/ to activate it — until the file exists nothing renders
-   (the dark theme stays), so these are safe no-op placeholders. Sized to
-   cover + centered so the image scales without distortion. */
-#view-stocks  { background-image:url("/static/images/markets-background1.png"); }
-#view-bots    { background-image:url("/static/images/bots-background1.png"); }
-#view-news    { background-image:url("/static/images/news-background1.png"); }
-#view-history { background-image:url("/static/images/history-background1.png"); }
-#view-assets  { background-image:url("/static/images/assets-background1.png"); }
-#view-account { background-image:url("/static/images/account-background1.png"); }
-#view-stocks, #view-bots, #view-news, #view-history, #view-assets, #view-account{
-  background-size:cover; background-position:center; background-repeat:no-repeat;
+/* ════════════════════════════════════════════════════════════════════
+   THREE-COLUMN DASHBOARD + AD SIDEBARS
+   [Left ads] [Centered main card ≤960px] [Right ads]
+   Sidebars never overlap tab background images — they sit beside .dash-main.
+   ════════════════════════════════════════════════════════════════════ */
+.page.dash-shell{
+  display:grid;
+  grid-template-columns:minmax(120px,180px) minmax(0,960px) minmax(120px,180px);
+  justify-content:center;
+  align-items:start;
+  gap:16px;
+  max-width:1360px;
+  width:100%;
+  margin:0 auto;
+  padding:12px 12px 24px;
+  box-sizing:border-box;
 }
-/* Sign in & sign up share one screen (cards toggle inside it). */
+.dash-main{
+  min-width:0;
+  width:100%;
+  max-width:960px;
+  justify-self:center;
+}
+.ad-sidebar{
+  position:sticky;
+  top:calc(var(--topbar-h) + var(--nav-h) + 10px);
+  z-index:5;
+  align-self:start;
+  min-height:240px;
+  max-height:calc(100vh - var(--topbar-h) - var(--nav-h) - 24px);
+  overflow:auto;
+  border-radius:14px;
+  /* Glass shell — blends with AlphaBotix dark UI while an ad loads */
+  background:linear-gradient(160deg, rgba(12,28,52,0.35), rgba(6,14,30,0.22));
+  backdrop-filter:blur(6px) saturate(120%);
+  -webkit-backdrop-filter:blur(6px) saturate(120%);
+  border:1px solid rgba(57,217,255,0.12);
+  box-shadow:0 8px 28px rgba(0,0,0,0.22);
+  padding:8px;
+  box-sizing:border-box;
+}
+.ad-sidebar:empty,
+.ad-sidebar.is-empty{
+  background:transparent;
+  border-color:transparent;
+  box-shadow:none;
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+  min-height:0;
+  padding:0;
+}
+.ad-sidebar .ad-slot{
+  width:100%;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:8px;
+}
+.ad-sidebar .ad-slot img,
+.ad-sidebar .ad-slot iframe{
+  max-width:100%;
+  height:auto;
+}
+@media(max-width:1199px){
+  .ad-sidebar{ display:none !important; }
+  .page.dash-shell{
+    grid-template-columns:minmax(0,960px);
+    justify-items:center;
+    max-width:960px;
+  }
+}
+
+/* ── Shared tab stages (same canvas rules as Portfolio) ───────────── */
+.tab-stage{
+  position:relative;
+  margin:0;
+  width:100%;
+  max-width:100%;
+  background-size:cover;
+  background-position:center top;
+  background-repeat:no-repeat;
+  background-color:#070b14;
+  border-radius:0;
+  padding:0;
+  min-height:calc(100vh - var(--topbar-h) - var(--nav-h));
+  overflow:hidden;
+}
+#view-stocks.tab-stage  { background-image:url("/static/images/markets-background1.png"); }
+#view-bots.tab-stage    { background-image:url("/static/images/bots-background1.png"); }
+#view-news.tab-stage    { background-image:url("/static/images/news-background1.png"); }
+#view-history.tab-stage { background-image:url("/static/images/history-background1.png"); }
+/* Filename spelling matches the asset the user provided */
+#view-assets.tab-stage  { background-image:url("/static/images/assests-background1.png"); }
+#view-account.tab-stage { background-image:url("/static/images/account-background1.png"); }
+
+/* Glass cards over tab backgrounds stay readable */
+.tab-stage .card{
+  background:linear-gradient(160deg, rgba(14,30,56,0.82), rgba(8,16,34,0.74));
+  backdrop-filter:blur(8px) saturate(125%);
+  -webkit-backdrop-filter:blur(8px) saturate(125%);
+  border-color:rgba(57,217,255,0.22);
+  color:#eaf6ff;
+}
+.tab-stage .bot-card{
+  background:linear-gradient(160deg, rgba(14,30,56,0.82), rgba(8,16,34,0.74));
+  backdrop-filter:blur(8px) saturate(125%);
+  -webkit-backdrop-filter:blur(8px) saturate(125%);
+}
+
+/* Sign in / Sign up — full-viewport background matching Portfolio cover rules */
 #auth-screen{
-  background-image:url("/static/images/auth-background1.png");
-  background-size:cover; background-position:center; background-repeat:no-repeat;
+  min-height:100vh;
+  background-image:url("/static/images/signup-background1.png");
+  background-size:cover;
+  background-position:center;
+  background-repeat:no-repeat;
+  background-color:#070b14;
+}
+#auth-screen .auth-wrap{
+  background:transparent;
+}
+#auth-screen .card{
+  background:linear-gradient(160deg, rgba(14,30,56,0.88), rgba(8,16,34,0.80));
+  backdrop-filter:blur(10px) saturate(130%);
+  -webkit-backdrop-filter:blur(10px) saturate(130%);
+  border:1px solid rgba(57,217,255,0.22);
 }
