@@ -422,8 +422,68 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   padding:18px;
   display:flex;
   flex-direction:column;
-  gap:18px;
+  gap:14px;
   min-height:calc(100vh - var(--topbar-h) - var(--nav-h) - 48px);
+}
+
+/* Sticky summary header — valuation + P/L only */
+.pf-sticky-header{
+  position:sticky;
+  top:calc(var(--topbar-h, 56px) + var(--nav-h, 44px) + 8px);
+  z-index:20;
+  /* Slightly more opaque than detail cards so figures stay readable over the art */
+  background:linear-gradient(160deg, rgba(12,28,52,0.72), rgba(6,14,30,0.62)) !important;
+  backdrop-filter:blur(10px) saturate(130%);
+  -webkit-backdrop-filter:blur(10px) saturate(130%);
+}
+.pf-sticky-top{
+  display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
+  flex-wrap:wrap; margin-bottom:14px; padding-bottom:12px;
+  border-bottom:1px solid rgba(57,217,255,0.15);
+}
+.pf-sticky-mode{ margin-bottom:0; padding-bottom:0; border-bottom:none; flex:1; min-width:200px; }
+.pf-summary-grid{
+  display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:end;
+}
+.pf-summary-metric .holo-lbl{ margin-bottom:6px; }
+.pf-total-pnl{
+  font-size:28px; font-weight:800; letter-spacing:-0.3px; line-height:1.1;
+  font-variant-numeric:tabular-nums;
+  text-shadow:0 0 14px rgba(57,217,255,0.25);
+}
+.pf-details-toggle{
+  display:inline-flex; align-items:center; gap:8px;
+  background:rgba(10,24,45,0.45); border:1px solid rgba(57,217,255,0.35);
+  color:#eaf6ff; border-radius:10px; padding:8px 14px; font-size:12px; font-weight:700;
+  cursor:pointer; font-family:inherit; letter-spacing:.3px;
+  box-shadow:0 0 14px rgba(57,217,255,0.08); transition:background .15s, border-color .15s;
+}
+.pf-details-toggle:hover{ background:rgba(16,34,60,0.65); border-color:rgba(57,217,255,0.55); }
+.pf-details-caret{ display:inline-block; transition:transform .25s ease; color:var(--holo); }
+.pf-details-toggle[aria-expanded="true"] .pf-details-caret{ transform:rotate(180deg); }
+
+/* Collapsible details — grid 0fr/1fr for smooth height animation */
+.pf-details{
+  display:grid;
+  grid-template-rows:0fr;
+  transition:grid-template-rows .35s ease;
+}
+.pf-details.is-open{ grid-template-rows:1fr; }
+.pf-details.collapsed{ grid-template-rows:0fr; }
+.pf-details-inner{
+  overflow:hidden; min-height:0;
+  display:flex; flex-direction:column; gap:18px;
+  opacity:0; transform:translateY(-6px);
+  transition:opacity .28s ease, transform .28s ease;
+}
+.pf-details.is-open .pf-details-inner{
+  opacity:1; transform:translateY(0);
+}
+
+@media(max-width:680px){
+  .pf-summary-grid{ grid-template-columns:1fr; gap:12px; }
+  .pf-total-pnl{ font-size:22px; }
+  .pf-sticky-header{ top:calc(var(--topbar-h, 56px) + var(--nav-h, 44px)); }
 }
 
 /* Glass card matched to the glowing cyan/blue globe so the scene shows through */
