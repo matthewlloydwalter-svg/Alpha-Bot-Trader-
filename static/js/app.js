@@ -886,6 +886,10 @@ function renderBots() {
       : `<span class="badge badge-amber">Flat — scanning</span>`;
     const pnlColor = livePnl >= 0 ? PF_GREEN : PF_RED;
     const assetLabel = b.ticker ? esc(b.ticker) : (b.auto_select ? "🧠 Auto-select (all markets)" : "Auto");
+    const strategyLabel = b.low_balance_strategy_label || b.low_balance_strategy || "Standard";
+    const cooldownNote = (b.strategy_cooldown_until && new Date(b.strategy_cooldown_until) > new Date())
+      ? `<span class="badge badge-amber" title="Settlement cooldown active">Cooldown</span>`
+      : "";
     const chartBtn = b.ticker
       ? `<button class="btn btn-sm" onclick="openMarketDashboard('${esc(b.broker||'alpaca')}','${esc(b.ticker)}')">📈 Chart</button>`
       : "";
@@ -912,6 +916,7 @@ function renderBots() {
       ${haltRow}
       <div style="color:var(--t2);font-size:12px;margin-bottom:8px">
         ${assetLabel} · ${esc((b.broker||"alpaca").toUpperCase())} · ${esc(b.timeframe||"1h")} |
+        Strategy: ${esc(strategyLabel)} ${cooldownNote} |
         Funds: $${b.funds_allocated} | Trades: ${b.trade_count} |
         P&L: <span style="color:${pnlColor}">${fmtSignedMoney(livePnl)}</span>
       </div>

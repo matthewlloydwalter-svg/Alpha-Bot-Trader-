@@ -185,23 +185,58 @@ def _get_buying_power(owner: User, broker: str) -> float | None:
         return None
 
 
+def _classify_alpaca_account(info: dict) -> str:
+    """
+    Alpaca accounts are all margin-enabled, but multiplier=1 (<$2k equity) behaves
+    like a cash/limited-margin account for GFV-safe strategy enforcement.
+    """
+    multiplier = info.get("multiplier")
+    try:
+        mult = int(float(multiplier)) if multiplier is not None else None
+    except (TypeError, ValueError):
+        mult = None
+    if mult == 1:
+        return "cash"
+    if mult is not None and mult >= 2:
+        return "margin"
+    equity = info.get("equity")
+    try:
+        equity_value = float(equity) if equity is not None else None
+    except (TypeError, ValueError):
+        equity_value = None
+    if equity_value is not None:
+        return "margin" if equity_value >= 2000 else "cash"
+    return "cash"
+
+
+def _resolve_non_marginable_buying_power(info: dict, account_type: str) -> float | None:
+    """Best-effort settled/non-marginable buying power for GFV guards."""
+    for key in ("non_marginable_buying_power", "buying_power", "cash"):
+        raw = info.get(key)
+        if raw is None:
+            continue
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _get_alpaca_account_context(owner: User, broker: str) -> dict:
     """Inspect Alpaca account metadata needed for cash-account GFV protections."""
     if (broker or "alpaca").lower() != "alpaca":
         return {"account_type": "margin", "equity": None, "non_marginable_buying_power": None}
     try:
         info = get_account_info(broker=broker, paper=_paper(owner), **_creds(owner, broker))
+        if info.get("error"):
+            return {"account_type": "cash", "equity": None, "non_marginable_buying_power": None}
         equity = info.get("equity")
-        non_marginable = info.get("non_marginable_buying_power")
         try:
             equity_value = float(equity) if equity is not None else None
         except (TypeError, ValueError):
             equity_value = None
-        try:
-            non_marginable_value = float(non_marginable) if non_marginable is not None else None
-        except (TypeError, ValueError):
-            non_marginable_value = None
-        account_type = "margin" if equity_value is not None and equity_value >= 2000 else "cash"
+        account_type = _classify_alpaca_account(info)
+        non_marginable_value = _resolve_non_marginable_buying_power(info, account_type)
         return {
             "account_type": account_type,
             "equity": equity_value,
@@ -209,7 +244,7 @@ def _get_alpaca_account_context(owner: User, broker: str) -> dict:
         }
     except Exception as e:
         logger.warning("Alpaca account context lookup failed: %s", e)
-        return {"account_type": "margin", "equity": None, "non_marginable_buying_power": None}
+        return {"account_type": "cash", "equity": None, "non_marginable_buying_power": None}
 
 
 def _strategy_allows_cash_guard(bot: Bot) -> bool:
@@ -876,11 +911,8 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         result.update({"action": "WAIT", "reason": f"Entry skipped — {guard.get('reason')}.", "guard": guard})
         return result
 
-    if guard.get("reason") == "one-shot allowed" and notional > 0:
-        notional = min(notional, guard.get("notional", notional))
-
-    if (bot.low_balance_strategy or "standard").lower() == "one_shot_daily" and notional > 0:
-        bot.strategy_cooldown_until = datetime.utcnow() + timedelta(hours=24)
+    if guard.get("notional") is not None and notional > 0:
+        notional = min(notional, float(guard["notional"]))
 
     # Execute the entry.
     order = _execute(owner, bot.broker, "buy", bot.ticker, notional=notional)
