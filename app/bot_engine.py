@@ -50,12 +50,37 @@ logger = logging.getLogger("alphabot.engine")
 # ── Tunable strategy parameters ──────────────────────────────────────
 ENTRY_MIN_STRENGTH = float(os.getenv("BOT_ENTRY_MIN_STRENGTH", "0.38"))
 DEPLOY_FRACTION = float(os.getenv("BOT_DEPLOY_FRACTION", "0.90"))   # slightly more conservative sizing
-STOP_LOSS_PCT = float(os.getenv("BOT_STOP_LOSS_PCT", "0.005"))      # default 0.5% hard stop
-TAKE_PROFIT_PCT = float(os.getenv("BOT_TAKE_PROFIT_PCT", "0.03"))    # default 3% target
 EXIT_MODE = os.getenv("BOT_EXIT_MODE", "fixed_pct").strip().lower()  # fixed_pct or atr
 TRAIL_ATR_MULT = float(os.getenv("BOT_TRAIL_ATR_MULT", "1.6"))     # slightly wider stop to avoid noise
 TP_ATR_MULT = float(os.getenv("BOT_TP_ATR_MULT", "3.2"))           # slightly more patient profit target
 TRAIL_PCT_FLOOR = float(os.getenv("BOT_TRAIL_PCT_FLOOR", "0.02"))  # min 2% trailing buffer
+
+
+def _get_exit_percentages() -> tuple[float, float]:
+    """Read stop/take-profit percentages from Railway-style env vars."""
+    stop_raw = (
+        os.getenv("STOP_LOSS_PERCENT")
+        or os.getenv("BOT_STOP_LOSS_PCT")
+        or os.getenv("STOP_LOSS_PCT")
+        or "0.005"
+    )
+    take_raw = (
+        os.getenv("TAKE_PROFIT_PERCENT")
+        or os.getenv("BOT_TAKE_PROFIT_PCT")
+        or os.getenv("TAKE_PROFIT_PCT")
+        or "0.03"
+    )
+    return float(stop_raw), float(take_raw)
+
+
+def _get_display_risk_targets(entry_price: float | None) -> tuple[float | None, float | None]:
+    """Calculate stop/target prices from the entry price and current env vars."""
+    if entry_price is None or entry_price <= 0:
+        return None, None
+    stop_pct, take_pct = _get_exit_percentages()
+    stop_dist = max(float(entry_price) * stop_pct, 0.01)
+    target_dist = max(float(entry_price) * take_pct, 0.01)
+    return round(float(entry_price) - stop_dist, 6), round(float(entry_price) + target_dist, 6)
 CONSERVATIVE_ENTRY_FILTER = os.getenv("BOT_CONSERVATIVE_ENTRY_FILTER", "1").strip().lower() in ("1", "true", "yes", "on")
 TREND_CONFIRMATION_FILTER = os.getenv("BOT_TREND_CONFIRMATION_FILTER", "1").strip().lower() in ("1", "true", "yes", "on")
 VOLATILITY_SIZING = os.getenv("BOT_VOLATILITY_SIZING", "1").strip().lower() in ("1", "true", "yes", "on")
@@ -204,8 +229,9 @@ def _arm_risk(bot: Bot, entry_price: float, atr: float | None,
             bot.take_profit_price = round(tp_atr, 6)
         return
 
-    stop_dist = max(entry_price * STOP_LOSS_PCT, 0.01)
-    target_dist = max(entry_price * TAKE_PROFIT_PCT, 0.01)
+    stop_pct, take_pct = _get_exit_percentages()
+    stop_dist = max(entry_price * stop_pct, 0.01)
+    target_dist = max(entry_price * take_pct, 0.01)
     bot.stop_price = round(entry_price - stop_dist, 6)
     bot.take_profit_price = round(entry_price + target_dist, 6)
 

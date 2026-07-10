@@ -519,6 +519,50 @@ def liquidate_position(broker: str, symbol: str,
         raise BrokerError(f"Unknown broker: {broker}")
 
 
+def get_position_snapshot(broker: str, symbol: str,
+                           alpaca_key: str = None, alpaca_secret: str = None,
+                           okx_key: str = None, okx_secret: str = None, okx_passphrase: str = None,
+                           paper: bool = True) -> dict | None:
+    """Return live broker position data for a symbol when available."""
+    if broker == "alpaca":
+        client = get_alpaca_client(alpaca_key, alpaca_secret, paper)
+        if client is None:
+            raise BrokerError("Alpaca API keys not configured.")
+        try:
+            pos = client.get_open_position(symbol.upper())
+            return {
+                "symbol": symbol.upper(),
+                "broker": "alpaca",
+                "avg_entry_price": float(getattr(pos, "avg_entry_price", 0) or 0),
+                "current_price": float(getattr(pos, "current_price", 0) or 0),
+                "unrealized_pl": float(getattr(pos, "unrealized_pl", 0) or 0),
+                "market_value": float(getattr(pos, "market_value", 0) or 0),
+                "qty": float(getattr(pos, "qty", 0) or 0),
+            }
+        except Exception as e:
+            raise BrokerError(f"Alpaca position lookup failed for {symbol.upper()}: {e}")
+    elif broker == "okx":
+        exchange = get_okx_client(okx_key, okx_secret, okx_passphrase, paper)
+        if exchange is None:
+            return None
+        try:
+            market_symbol = symbol if "/" in symbol else f"{symbol.upper()}/USDT"
+            ticker = exchange.fetch_ticker(market_symbol)
+            return {
+                "symbol": market_symbol,
+                "broker": "okx",
+                "avg_entry_price": None,
+                "current_price": float(ticker.get("last", 0) or 0),
+                "unrealized_pl": None,
+                "market_value": None,
+                "qty": None,
+            }
+        except Exception:
+            return None
+    else:
+        raise BrokerError(f"Unknown broker: {broker}")
+
+
 def get_account_info(broker: str, alpaca_key: str = None, alpaca_secret: str = None,
                       okx_key: str = None, okx_secret: str = None, okx_passphrase: str = None,
                       paper: bool = True) -> dict:

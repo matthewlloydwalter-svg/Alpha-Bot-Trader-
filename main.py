@@ -25,7 +25,7 @@ from app.auth import (
     get_current_user, EmailError
 )
 from app.config import SESSION_COOKIE_SECURE
-from app.brokers import get_account_info, get_spot_price, BrokerError
+from app.brokers import get_account_info, get_spot_price, get_position_snapshot, BrokerError
 from app.market_data import get_market_analysis
 from app.markets_universe import MARKET_UNIVERSE
 from app.credentials import resolve_credentials, has_credentials, keys_payload
@@ -392,8 +392,36 @@ def get_system_logs(u: User = Depends(get_current_user), db: Session = Depends(g
 @app.get("/bots")
 def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     bots = db.query(Bot).filter(Bot.owner_id == u.id).all()
-    return [
-        {
+    rows = []
+    for b in bots:
+        broker = (b.broker or u.active_broker or "alpaca").lower()
+        paper = (u.trading_mode or "paper") == "paper"
+        creds = resolve_credentials(u, broker, paper)
+        position_snapshot = None
+        if b.in_position and b.ticker:
+            try:
+                position_snapshot = get_position_snapshot(
+                    broker=broker,
+                    symbol=b.ticker,
+                    paper=paper,
+                    **creds,
+                )
+            except Exception as e:
+                logger.debug("bot position snapshot failed for %s: %s", b.ticker, e)
+
+        entry_price = b.avg_entry_price
+        current_price = None
+        unrealized_pl = None
+        if position_snapshot:
+            current_price = position_snapshot.get("current_price")
+            unrealized_pl = position_snapshot.get("unrealized_pl")
+        if current_price is None and entry_price is not None:
+            current_price = entry_price
+        if unrealized_pl is None and current_price is not None and entry_price is not None and (b.shares_held or 0) > 0:
+            unrealized_pl = (current_price - entry_price) * (b.shares_held or 0)
+
+        display_stop_price, display_take_profit_price = bot_engine._get_display_risk_targets(entry_price)
+        rows.append({
             "id": b.id,
             "name": b.name,
             "ticker": b.ticker,
@@ -408,15 +436,19 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "in_position": b.in_position,
             "shares_held": b.shares_held,
             "avg_entry_price": b.avg_entry_price,
-            "stop_price": b.stop_price,
-            "take_profit_price": b.take_profit_price,
+            "entry_price": entry_price,
+            "current_price": current_price,
+            "unrealized_pl": unrealized_pl,
+            "stop_price": display_stop_price if display_stop_price is not None else b.stop_price,
+            "take_profit_price": display_take_profit_price if display_take_profit_price is not None else b.take_profit_price,
+            "display_stop_price": display_stop_price if display_stop_price is not None else b.stop_price,
+            "display_take_profit_price": display_take_profit_price if display_take_profit_price is not None else b.take_profit_price,
             "realized_pnl": b.realized_pnl,
             "last_signal": b.last_signal,
             "last_pattern_summary": b.last_pattern_summary,
             "last_analysis_at": b.last_analysis_at.isoformat() if b.last_analysis_at else None,
-        }
-        for b in bots
-    ]
+        })
+    return rows
 
 @app.get("/api/news")
 def get_news():

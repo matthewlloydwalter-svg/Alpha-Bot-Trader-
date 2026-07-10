@@ -823,10 +823,17 @@ function renderBots() {
       ? `<div class="bot-halt">🛑 SYSTEM HALT: Market offline. Core trading loops suspended. Awaiting market open at ${esc(fmtLocalOpenTime())}.</div>`
       : "";
     const sigColor = b.last_signal === "BUY" ? "badge-green" : b.last_signal === "SELL" ? "badge-red" : "badge-amber";
+    const entryPrice = (b.entry_price ?? b.avg_entry_price);
+    const currentPrice = (b.current_price ?? entryPrice);
+    const displayStop = (b.display_stop_price ?? b.stop_price);
+    const displayTarget = (b.display_take_profit_price ?? b.take_profit_price);
+    const livePnl = (typeof b.unrealized_pl === "number" && b.in_position)
+      ? b.unrealized_pl
+      : (b.realized_pnl || 0);
     const pos = b.in_position
-      ? `<span class="badge badge-blue">In position @ ${formatPrice(b.avg_entry_price)}</span>`
+      ? `<span class="badge badge-blue">In position</span>`
       : `<span class="badge badge-amber">Flat — scanning</span>`;
-    const pnlColor = (b.realized_pnl || 0) >= 0 ? "var(--green)" : "var(--red)";
+    const pnlColor = livePnl >= 0 ? "var(--green)" : "var(--red)";
     const assetLabel = b.ticker ? esc(b.ticker) : (b.auto_select ? "🧠 Auto-select (all markets)" : "Auto");
     const chartBtn = b.ticker
       ? `<button class="btn btn-sm" onclick="openMarketDashboard('${esc(b.broker||'alpaca')}','${esc(b.ticker)}')">📈 Chart</button>`
@@ -855,11 +862,13 @@ function renderBots() {
       <div style="color:var(--t2);font-size:12px;margin-bottom:8px">
         ${assetLabel} · ${esc((b.broker||"alpaca").toUpperCase())} · ${esc(b.timeframe||"1h")} |
         Funds: $${b.funds_allocated} | Trades: ${b.trade_count} |
-        P&L: <span style="color:${pnlColor}">${(b.realized_pnl||0)>=0?"+":""}$${(b.realized_pnl||0).toFixed(2)}</span>
+        P&L: <span style="color:${pnlColor}">${livePnl>=0?"+":""}$${Number(livePnl||0).toFixed(2)}</span>
       </div>
       <div style="margin-bottom:8px">${pos}
-        ${b.in_position && b.stop_price ? `<span class="ind-pill">Stop ${formatPrice(b.stop_price)}</span>` : ""}
-        ${b.in_position && b.take_profit_price ? `<span class="ind-pill">Target ${formatPrice(b.take_profit_price)}</span>` : ""}
+        ${b.in_position && entryPrice ? `<span class="ind-pill">Entry ${formatPrice(entryPrice)}</span>` : ""}
+        ${b.in_position && currentPrice ? `<span class="ind-pill">Current ${formatPrice(currentPrice)}</span>` : ""}
+        ${b.in_position && displayStop ? `<span class="ind-pill">Stop ${formatPrice(displayStop)}</span>` : ""}
+        ${b.in_position && displayTarget ? `<span class="ind-pill">Target ${formatPrice(displayTarget)}</span>` : ""}
       </div>
       <div class="funds-ctl">
         <span class="funds-ctl-label">Allocated funds</span>
