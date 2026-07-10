@@ -43,13 +43,16 @@ def alpaca_account_info(client: TradingClient) -> dict:
     try:
         a = client.get_account()
         non_marginable_buying_power = getattr(a, "non_marginable_buying_power", None)
+        multiplier = getattr(a, "multiplier", None)
         return {
             "cash": float(a.cash),
             "portfolio_value": float(a.portfolio_value),
             "buying_power": float(a.buying_power),
             "equity": float(a.equity),
             "trading_blocked": a.trading_blocked,
+            "multiplier": str(multiplier) if multiplier is not None else None,
             "non_marginable_buying_power": float(non_marginable_buying_power) if non_marginable_buying_power is not None else None,
+            "multiplier": float(multiplier) if multiplier is not None else None,
         }
     except AlpacaAPIError as e:
         raise BrokerError(f"Alpaca error: {e}")
