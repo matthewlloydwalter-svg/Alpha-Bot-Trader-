@@ -168,6 +168,15 @@ function schedulePerfReload() {
   }, 800);
 }
 
+function scheduleBotsReload() {
+  // Coalesce quote bursts so /bots is not hammered on every market tick.
+  if (window._botsReloadTimer) clearTimeout(window._botsReloadTimer);
+  window._botsReloadTimer = setTimeout(() => {
+    const bv = document.getElementById("view-bots");
+    if (bv && !bv.classList.contains("hidden")) loadBots();
+  }, 800);
+}
+
 function connectLiveStream() {
   if (EVT_SOURCE) { try { EVT_SOURCE.close(); } catch (_) {} }
   try {
@@ -183,10 +192,8 @@ function connectLiveStream() {
       const q = JSON.parse(ev.data);
       LIVE_QUOTES[`${q.broker}:${q.symbol}`] = q;
       applyLiveQuote(q);
-      const bv = document.getElementById("view-bots");
-      if (bv && !bv.classList.contains("hidden")) loadBots();
-      const pv = document.getElementById("view-portfolio");
-      if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
+      scheduleBotsReload();
+      schedulePerfReload();
     } catch (_) {}
   });
 
@@ -878,9 +885,9 @@ function renderBots() {
     const currentPrice = (b.current_price ?? entryPrice);
     const displayStop = (b.display_stop_price ?? b.stop_price);
     const displayTarget = (b.display_take_profit_price ?? b.take_profit_price);
-    const livePnl = (typeof b.unrealized_pl === "number" && b.in_position)
-      ? b.unrealized_pl
-      : (b.realized_pnl || 0);
+    const realized = Number(b.realized_pnl || 0);
+    const unrealized = (typeof b.unrealized_pl === "number" && b.in_position) ? Number(b.unrealized_pl) : 0;
+    const livePnl = realized + unrealized;
     const pos = b.in_position
       ? `<span class="badge badge-blue">In position</span>`
       : `<span class="badge badge-amber">Flat — scanning</span>`;

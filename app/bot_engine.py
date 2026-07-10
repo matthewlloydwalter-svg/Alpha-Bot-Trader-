@@ -105,6 +105,8 @@ def _market_collision_blocked(db: Session, owner: User, bot: Bot, ticker: str | 
                 return False, None
             return True, f"{ticker} is already occupied by another active bot ({other.name})"
     return False, None
+
+
 CONSERVATIVE_ENTRY_FILTER = os.getenv("BOT_CONSERVATIVE_ENTRY_FILTER", "1").strip().lower() in ("1", "true", "yes", "on")
 TREND_CONFIRMATION_FILTER = os.getenv("BOT_TREND_CONFIRMATION_FILTER", "1").strip().lower() in ("1", "true", "yes", "on")
 VOLATILITY_SIZING = os.getenv("BOT_VOLATILITY_SIZING", "1").strip().lower() in ("1", "true", "yes", "on")
@@ -188,11 +190,12 @@ def _get_buying_power(owner: User, broker: str) -> float | None:
 def _get_alpaca_account_context(owner: User, broker: str) -> dict:
     """Inspect Alpaca account metadata needed for cash-account GFV protections."""
     if (broker or "alpaca").lower() != "alpaca":
-        return {"account_type": "margin", "equity": None, "non_marginable_buying_power": None}
+        return {"account_type": "margin", "equity": None, "non_marginable_buying_power": None, "multiplier": None}
     try:
         info = get_account_info(broker=broker, paper=_paper(owner), **_creds(owner, broker))
         equity = info.get("equity")
         non_marginable = info.get("non_marginable_buying_power")
+        multiplier = info.get("multiplier")
         try:
             equity_value = float(equity) if equity is not None else None
         except (TypeError, ValueError):
@@ -201,15 +204,26 @@ def _get_alpaca_account_context(owner: User, broker: str) -> dict:
             non_marginable_value = float(non_marginable) if non_marginable is not None else None
         except (TypeError, ValueError):
             non_marginable_value = None
-        account_type = "margin" if equity_value is not None and equity_value >= 2000 else "cash"
+        # Alpaca cash accounts report multiplier "1"; margin is "2" or "4".
+        try:
+            mult_value = float(multiplier) if multiplier is not None else None
+        except (TypeError, ValueError):
+            mult_value = None
+        if mult_value is not None:
+            account_type = "cash" if mult_value <= 1 else "margin"
+        else:
+            # Fallback only when multiplier is unavailable — do not treat equity
+            # size as a proxy for margin eligibility.
+            account_type = "cash"
         return {
             "account_type": account_type,
             "equity": equity_value,
             "non_marginable_buying_power": non_marginable_value,
+            "multiplier": mult_value,
         }
     except Exception as e:
         logger.warning("Alpaca account context lookup failed: %s", e)
-        return {"account_type": "margin", "equity": None, "non_marginable_buying_power": None}
+        return {"account_type": "margin", "equity": None, "non_marginable_buying_power": None, "multiplier": None}
 
 
 def _strategy_allows_cash_guard(bot: Bot) -> bool:
@@ -244,34 +258,47 @@ def _enforce_low_balance_strategy(db: Session, owner: User, bot: Bot, price: flo
     account_context = _get_alpaca_account_context(owner, bot.broker or "alpaca")
     account_type = account_context.get("account_type", "cash")
     non_marginable = account_context.get("non_marginable_buying_power")
-    if account_type == "margin" or not _strategy_allows_cash_guard(bot):
-        return True, {"account_type": account_type, "reason": "standard or margin account"}
-
     strategy = (bot.low_balance_strategy or "standard").lower()
-    if strategy == "standard":
+
+    if strategy == "standard" or not _strategy_allows_cash_guard(bot):
         return True, {"account_type": account_type, "reason": "standard"}
 
-    if non_marginable is None:
-        return False, {"account_type": account_type, "reason": "cash-account metadata unavailable"}
+    # Cash accounts must respect unsettled-funds limits; margin can opt into the
+    # same sizing rules without the non-marginable buying-power gate.
+    is_cash = account_type == "cash"
 
     if strategy == "one_shot_daily":
         if bot.strategy_cooldown_until and bot.strategy_cooldown_until > datetime.utcnow():
             return False, {"account_type": account_type, "reason": "cooldown active"}
-        if non_marginable <= 0:
-            return False, {"account_type": account_type, "reason": "no non-marginable buying power"}
-        return True, {"account_type": account_type, "reason": "one-shot allowed", "notional": min(float(bot.funds_allocated or 0), non_marginable)}
+        if is_cash:
+            if non_marginable is None:
+                return False, {"account_type": account_type, "reason": "cash-account metadata unavailable"}
+            if non_marginable <= 0:
+                return False, {"account_type": account_type, "reason": "no non-marginable buying power"}
+            return True, {
+                "account_type": account_type,
+                "reason": "one-shot allowed",
+                "notional": min(float(bot.funds_allocated or 0), non_marginable),
+            }
+        return True, {
+            "account_type": account_type,
+            "reason": "one-shot allowed",
+            "notional": float(bot.funds_allocated or 0),
+        }
 
     if strategy == "micro_trader":
-        if non_marginable <= 0:
-            return False, {"account_type": account_type, "reason": "no non-marginable buying power"}
+        if is_cash:
+            if non_marginable is None or non_marginable <= 0:
+                return False, {"account_type": account_type, "reason": "no non-marginable buying power"}
         return True, {"account_type": account_type, "reason": "micro trader", "notional": 1.0}
 
     if strategy == "swing_trader":
         return True, {"account_type": account_type, "reason": "swing holds overnight"}
 
     if strategy == "scattershot":
-        if non_marginable <= 0:
-            return False, {"account_type": account_type, "reason": "no non-marginable buying power"}
+        if is_cash:
+            if non_marginable is None or non_marginable <= 0:
+                return False, {"account_type": account_type, "reason": "no non-marginable buying power"}
         return True, {"account_type": account_type, "reason": "scattershot", "notional": 1.0}
 
     return True, {"account_type": account_type, "reason": "standard"}
@@ -354,19 +381,23 @@ def _arm_risk(bot: Bot, entry_price: float, atr: float | None,
 
 def _ratchet_risk(bot: Bot, price: float, atr: float | None, bullish: bool):
     """Manage exits for ATR mode or fixed-percentage mode."""
-    if bot.peak_price is None or price > bot.peak_price:
+    new_high = bot.peak_price is None or price > bot.peak_price
+    if new_high:
         bot.peak_price = price
 
-    if EXIT_MODE == "atr" and (bot.peak_price is None or price > bot.peak_price):
-        atr = atr or (price * TRAIL_PCT_FLOOR)
-        trail_dist = max(atr * TRAIL_ATR_MULT, price * TRAIL_PCT_FLOOR)
-        new_stop = round(price - trail_dist, 6)
-        if bot.stop_price is None or new_stop > bot.stop_price:
-            bot.stop_price = new_stop  # never loosen
-        if bullish and bot.take_profit_price is not None:
-            ratcheted = round(price + (atr * TP_ATR_MULT), 6)
-            if ratcheted > bot.take_profit_price:
-                bot.take_profit_price = ratcheted
+    # Fixed-percentage mode keeps the stop/target armed at entry.
+    if EXIT_MODE != "atr" or not new_high:
+        return
+
+    atr = atr or (price * TRAIL_PCT_FLOOR)
+    trail_dist = max(atr * TRAIL_ATR_MULT, price * TRAIL_PCT_FLOOR)
+    new_stop = round(price - trail_dist, 6)
+    if bot.stop_price is None or new_stop > bot.stop_price:
+        bot.stop_price = new_stop  # never loosen
+    if bullish and bot.take_profit_price is not None:
+        ratcheted = round(price + (atr * TP_ATR_MULT), 6)
+        if ratcheted > bot.take_profit_price:
+            bot.take_profit_price = ratcheted
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -765,7 +796,7 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
 
     # Manual gates layered on top of the structural signal.
     if not _passes_conservative_entry_filter(analysis):
-        names = ", ".join(p.get("name", "pattern") for p in (analysis.patterns or []) if p.get("bias") == "bullish") or ["none"]
+        names = ", ".join(p.get("name", "pattern") for p in (analysis.patterns or []) if p.get("bias") == "bullish") or "none"
         _log(db, owner.id,
              f"[ENTRY-FILTER] {bot.ticker} rejected — needs stronger bullish confirmation (trend={(analysis.indicators or {}).get('trend') or 'neutral'}, bullish_patterns={names}).",
              "INFO")
@@ -876,11 +907,12 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         result.update({"action": "WAIT", "reason": f"Entry skipped — {guard.get('reason')}.", "guard": guard})
         return result
 
-    if guard.get("reason") == "one-shot allowed" and notional > 0:
-        notional = min(notional, guard.get("notional", notional))
-
-    if (bot.low_balance_strategy or "standard").lower() == "one_shot_daily" and notional > 0:
-        bot.strategy_cooldown_until = datetime.utcnow() + timedelta(hours=24)
+    # Apply strategy-specific notional caps (one-shot, micro, scattershot).
+    if guard.get("notional") is not None and notional > 0:
+        try:
+            notional = min(notional, float(guard["notional"]))
+        except (TypeError, ValueError):
+            pass
 
     # Execute the entry.
     order = _execute(owner, bot.broker, "buy", bot.ticker, notional=notional)
