@@ -41,6 +41,7 @@ from app.brokers import place_order, get_account_info, liquidate_position, Broke
 from app.market_data import get_market_analysis
 from app.markets_universe import MARKET_UNIVERSE
 from app.credentials import resolve_credentials, has_credentials
+from app.market_hours import market_open_for_broker
 from app.news_analysis import get_asset_sentiment
 from app.pattern_analysis import Analysis
 
@@ -663,6 +664,18 @@ def run_cycle(bot_id: int) -> dict:
             return {"action": "ERROR", "reason": "Bot not found."}
 
         owner = bot.owner
+
+        # ── Market-hours halt ─────────────────────────────────────────────
+        # Equities (Alpaca) only trade 09:30–16:00 ET, Mon–Fri. Outside that,
+        # suspend the trading loop so no buy/sell orders are placed. Crypto
+        # (OKX) is 24/7 and never halts. Paused bots are handled below as usual.
+        broker = (bot.broker or owner.active_broker or "alpaca").lower()
+        if bot.running and not market_open_for_broker(broker):
+            bot.last_analysis_at = datetime.utcnow()
+            bot.last_pattern_summary = "SYSTEM HALT: Market offline. Core trading loops suspended."
+            db.commit()
+            return {"action": "HALTED", "market_closed": True,
+                    "reason": "US stock market is closed — trading suspended until the next session."}
 
         # Fully autonomous + flat → scan all markets and pick the best dip.
         if bot.auto_select and not bot.in_position:
