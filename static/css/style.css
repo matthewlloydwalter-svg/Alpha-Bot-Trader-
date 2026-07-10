@@ -436,7 +436,8 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   align-items:stretch;
   justify-content:flex-start;
   gap:10px;
-  padding:6px 12px 20px;
+  /* Zero top inset — valuation must kiss the top edge of the image */
+  padding:0 0 20px;
   min-height:inherit;
   box-sizing:border-box;
   background:transparent;
@@ -445,7 +446,7 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 }
 .pf-overlay > *{ pointer-events:auto; }
 
-/* Valuation block sits ON TOP of the background image (above details) */
+/* Valuation block sits flush at the VERY TOP of the background image */
 .pf-sticky-header{
   position:sticky;
   top:calc(var(--topbar-h) + var(--nav-h));
@@ -459,6 +460,8 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   -webkit-backdrop-filter:blur(10px) saturate(130%);
   padding:6px 14px 8px !important;
   margin:0;
+  /* Square top corners so it sits flush against the image top edge */
+  border-radius:0 0 14px 14px !important;
   box-shadow:0 8px 28px rgba(0,0,0,0.35);
 }
 .pf-sticky-header::before{
@@ -526,7 +529,8 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   background:transparent;
   opacity:0; transform:translateY(-14px);
   transition:opacity .28s ease, transform .32s ease;
-  padding:0 0 8px;
+  /* Side inset only for the dropped-down cards (header is full-bleed) */
+  padding:0 12px 8px;
 }
 .pf-details.is-open .pf-details-inner{
   opacity:1; transform:translateY(0);
@@ -543,7 +547,8 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   .pf-summary-grid{ grid-template-columns:1fr; gap:6px; }
   .pf-total-pnl{ font-size:22px; }
   .pf-sticky-header{ top:calc(var(--topbar-h) + var(--nav-h)); }
-  .pf-overlay{ padding:4px 8px 16px; }
+  .pf-overlay{ padding:0 0 16px; }
+  .pf-details-inner{ padding:0 8px 8px; }
   .portfolio-stage{ margin:-18px -20px 0; }
 }
 
