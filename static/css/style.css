@@ -444,6 +444,11 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 .pf-mode-title{ display:flex; align-items:center; gap:10px; font-size:16px; font-weight:800;
   letter-spacing:-.2px; color:#eaf6ff; text-shadow:0 0 14px rgba(57,217,255,0.25); }
 .pf-mode-toggle{ flex:0 0 auto; }
+/* Low-profile account badges for the Bots tab: LIVE = neon green, PAPER = cyan */
+.badge-mode-live{ background:rgba(0,214,143,.10); color:#00d68f; border:1px solid rgba(0,214,143,.55);
+  letter-spacing:.6px; font-weight:700; }
+.badge-mode-paper{ background:rgba(57,217,255,.08); color:#57d9ff; border:1px solid rgba(57,217,255,.4);
+  letter-spacing:.6px; font-weight:700; }
 .holo-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; }
 .holo-total-value{ font-size:38px; font-weight:800; letter-spacing:-0.5px; line-height:1.05;
   color:#fff; text-shadow:0 0 18px rgba(57,217,255,0.35); font-variant-numeric:tabular-nums; }
@@ -463,6 +468,23 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 
 .holo-chart-wrap{ position:relative; width:100%; height:300px; margin-top:14px; }
 .holo-chart{ position:absolute; inset:0; }
+
+/* Market-offline stamp over the main chart (glassmorphic warning) */
+.market-overlay{ position:absolute; inset:0; z-index:5; display:flex; align-items:center;
+  justify-content:center; pointer-events:none;
+  background:radial-gradient(ellipse at center, rgba(255,77,106,0.06), rgba(8,14,26,0.34)); }
+.market-overlay-box{ text-align:center; padding:18px 26px; border-radius:14px;
+  background:rgba(24,10,14,0.34); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+  border:1px solid rgba(255,77,106,0.5);
+  box-shadow:0 0 30px rgba(255,77,106,0.28), inset 0 0 22px rgba(255,77,106,0.08); }
+.market-overlay-title{ font-size:18px; font-weight:800; letter-spacing:2px; color:#ff6b7f;
+  text-shadow:0 0 16px rgba(255,77,106,0.6); }
+.market-overlay-sub{ font-size:12px; color:#f3c6cd; margin-top:6px; max-width:420px; line-height:1.5; }
+
+/* Per-bot SYSTEM HALT banner in the Bots tab */
+.bot-halt{ margin:2px 0 10px; padding:8px 11px; border-radius:8px; font-size:11.5px; font-weight:600;
+  color:#ffd36b; background:rgba(255,179,71,0.09); border:1px solid rgba(255,179,71,0.45);
+  box-shadow:inset 0 0 16px rgba(255,179,71,0.06); line-height:1.5; }
 
 /* Winner / Loser */
 .perf-wl-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:18px; }

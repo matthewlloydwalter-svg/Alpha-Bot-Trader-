@@ -391,6 +391,7 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "ticker": b.ticker,
             "auto_select": b.auto_select,
             "broker": b.broker,
+            "mode": b.mode or "paper",
             "timeframe": b.timeframe,
             "funds_allocated": b.funds_allocated,
             "is_auto": b.is_auto,
@@ -603,6 +604,14 @@ def _bot_performance_highlights(db: Session, bots: list) -> Optional[dict]:
     best = max(stats, key=lambda s: s["net_profit"])
     worst = min(stats, key=lambda s: s["net_profit"])
     return {"most_profitable": best, "least_profitable": worst, "bot_count": len(stats)}
+
+
+@app.get("/api/market-status")
+def market_status_endpoint():
+    """US equities session status (open/closed + next open in UTC epoch).
+    Public — the frontend renders next_open in the user's local timezone."""
+    from app.market_hours import market_status
+    return market_status()
 
 
 @app.get("/api/portfolio/performance")
@@ -821,6 +830,7 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
         name=data.get("name") or (f"Autonomous {('OKX' if (data.get('broker') or u.active_broker)=='okx' else 'Alpaca')} Bot" if auto_select else "Unnamed Bot"),
         ticker=ticker_raw,  # None for fully autonomous
         broker=data.get("broker") or (u.active_broker or "alpaca"),
+        mode=(u.trading_mode or "paper"),   # assign the bot to the current account
         timeframe=data.get("timeframe") or "1h",
         funds_allocated=funds,
         is_auto=is_auto, # Added is_auto assignment to stop silent drops

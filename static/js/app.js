@@ -7,6 +7,36 @@ let NEWS_FILTER = "all";
 let LIVE_QUOTES = {};        // `${broker}:${symbol}` -> {price, signal_action,...}
 let EVT_SOURCE = null;       // EventSource for the live data stream
 let _perfReloadTimer = null; // debounce portfolio refreshes from the stream
+let MARKET_STATUS = null;    // { open, next_open_epoch, ... } from /api/market-status
+
+// User's local timezone (auto-detected from the device). All times shown on the
+// site are rendered in this zone via toLocale* — East Coast sees ET, West Coast
+// sees PT, China sees CST, etc.
+const USER_TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (_) { return "local"; } })();
+
+// Render a UTC epoch (seconds) as a local day+time with the local tz label,
+// e.g. "Fri 9:30 AM EDT" / "Fri 6:30 AM PDT" / "Fri 9:30 PM CST".
+function fmtLocalFromEpoch(epochSec) {
+  if (!epochSec) return "the next session";
+  try {
+    return new Date(epochSec * 1000).toLocaleString(undefined,
+      { weekday: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+  } catch (_) { return new Date(epochSec * 1000).toLocaleString(); }
+}
+function fmtLocalOpenTime() {
+  return MARKET_STATUS ? fmtLocalFromEpoch(MARKET_STATUS.next_open_epoch) : "the next session";
+}
+function isMarketClosed() { return !!(MARKET_STATUS && MARKET_STATUS.open === false); }
+
+async function loadMarketStatus() {
+  try {
+    MARKET_STATUS = await api("/api/market-status");
+  } catch (_) { return; }
+  // Reflect the new status in any mounted market-aware UI.
+  renderMarketOverlay();
+  const bv = document.getElementById("view-bots");
+  if (bv && !bv.classList.contains("hidden")) renderBots();
+}
 
 async function api(path, options = {}) {
   const resp = await fetch(path, {
@@ -97,6 +127,8 @@ async function enterApp() {
   renderBrokerUI();
   await refreshUserData();
   loadBrokerKeys();
+  await loadMarketStatus();     // market open/closed drives halt UI + overlay
+  if (!window._marketStatusTimer) window._marketStatusTimer = setInterval(loadMarketStatus, 60000);
   loadPortfolioPerformance();  // Portfolio is the default visible tab
   connectLiveStream();         // subscribe to the always-on backend feed
 }
@@ -227,6 +259,9 @@ async function setTradingMode(mode) {
     renderPortfolioModeIndicator();
     const pv = document.getElementById("view-portfolio");
     if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
+    // The Bots tab is also mode-filtered — re-render it if it's showing.
+    const bv = document.getElementById("view-bots");
+    if (bv && !bv.classList.contains("hidden")) renderBots();
     toast(`Switched to ${mode} trading`, "success");
   } catch (e) { toast(e, "error"); }
 }
@@ -396,6 +431,8 @@ function _holoChartOpts() {
     rightPriceScale: { borderColor: "rgba(57,217,255,0.18)" },
     timeScale: { borderColor: "rgba(57,217,255,0.18)", timeVisible: true, secondsVisible: false },
     crosshair: { mode: 0, vertLine: { color: "rgba(57,217,255,0.4)" }, horzLine: { color: "rgba(57,217,255,0.4)" } },
+    // Render the crosshair time in the user's local timezone (auto-detected).
+    localization: { timeFormatter: (t) => new Date(t * 1000).toLocaleString() },
     autoSize: true,
   };
 }
@@ -483,11 +520,24 @@ async function loadPortfolioForMode(mode) {
   renderPortfolioMainChart();
   renderWinnerLoser();
   renderActiveBots();
+  renderMarketOverlay();
 }
 
 function setPortfolioTimeframe(tf) {
   PF_STATE.timeframe = tf;
   renderPortfolioMainChart();   // re-slice cached live series, no refetch needed
+}
+
+// Semi-transparent "MARKET OFFLINE" stamp over the main chart when closed.
+function renderMarketOverlay() {
+  const ov = document.getElementById("pf-market-overlay");
+  if (!ov) return;
+  const closed = isMarketClosed();
+  ov.classList.toggle("hidden", !closed);
+  if (closed) {
+    const sub = document.getElementById("pf-market-overlay-sub");
+    if (sub) sub.textContent = `No active trades. Trading algorithms in standby mode. Markets will initialize at ${fmtLocalOpenTime()}.`;
+  }
 }
 
 function renderPortfolioMainChart() {
@@ -733,8 +783,45 @@ async function loadBots() {
 
 function renderBots() {
   const el = document.getElementById("bots-list-container");
-  if (!BOTS.length) { el.innerHTML = `<div style="text-align:center;color:var(--t2);padding:20px">No bots yet.</div>`; return; }
-  el.innerHTML = BOTS.map((b) => {
+  if (!el) return;
+
+  // ── Mode-aware view filter (UI ONLY) ──────────────────────────────────
+  // Group the user's bots by the account they're assigned to (bot.mode from
+  // GET /bots). Both arrays are kept so it's clear how the view filters; we
+  // render only the one for the current trading mode. This is purely a display
+  // filter — hidden bots keep running on the backend scheduler untouched.
+  const mode = (USER && USER.trading_mode) || "paper";
+  const activePaperBots = BOTS.filter(b => ((b.mode || "paper") === "paper"));
+  const activeLiveBots  = BOTS.filter(b => ((b.mode || "paper") === "live"));
+  const visible = mode === "live" ? activeLiveBots : activePaperBots;
+
+  // Reflect the active account in the Bots-tab header.
+  const badge = document.getElementById("bots-mode-badge");
+  if (badge) {
+    badge.textContent = mode === "live" ? "⚡ Live" : "● Paper";
+    badge.className = "badge " + (mode === "live" ? "badge-red" : "badge-green");
+    badge.style.fontSize = "10px"; badge.style.verticalAlign = "middle";
+  }
+  const sub = document.getElementById("bots-mode-sub");
+  if (sub) sub.textContent = `Showing your ${mode === "live" ? "Live" : "Paper"} account bots (${visible.length}) · switch account in the top bar or Account tab`;
+
+  if (!visible.length) {
+    const other = mode === "live" ? activePaperBots.length : activeLiveBots.length;
+    el.innerHTML = `<div style="text-align:center;color:var(--t2);padding:20px">No ${mode === "live" ? "Live" : "Paper"} account bots yet.` +
+      (other ? ` You have ${other} bot(s) in your ${mode === "live" ? "Paper" : "Live"} account — switch accounts to see them.` : ` Create one with “+ New Bot”.`) +
+      `</div>`;
+    return;
+  }
+  el.innerHTML = visible.map((b) => {
+    const botMode = (b.mode || "paper");
+    const modeBadge = botMode === "live"
+      ? `<span class="badge badge-mode-live" title="Live trading account">LIVE</span>`
+      : `<span class="badge badge-mode-paper" title="Paper trading account">PAPER</span>`;
+    // Equities halt when the US market is closed; crypto (OKX) trades 24/7.
+    const isStock = (b.broker || "alpaca").toLowerCase() !== "okx";
+    const haltRow = (isStock && isMarketClosed())
+      ? `<div class="bot-halt">🛑 SYSTEM HALT: Market offline. Core trading loops suspended. Awaiting market open at ${esc(fmtLocalOpenTime())}.</div>`
+      : "";
     const sigColor = b.last_signal === "BUY" ? "badge-green" : b.last_signal === "SELL" ? "badge-red" : "badge-amber";
     const pos = b.in_position
       ? `<span class="badge badge-blue">In position @ ${formatPrice(b.avg_entry_price)}</span>`
@@ -752,6 +839,7 @@ function renderBots() {
     <div class="bot-card ${b.running ? "running" : "paused"}">
       <div style="display:flex;justify-content:space-between;margin-bottom:10px">
         <div style="font-weight:700">${esc(b.name)}
+          ${modeBadge}
           <span class="badge ${b.running?"badge-green":"badge-amber"}">${b.running?"Running":"Paused"}</span>
           ${b.auto_select ? `<span class="badge badge-purple">Autonomous</span>` : ""}
           ${b.last_signal ? `<span class="badge ${sigColor}">${esc(b.last_signal)}</span>` : ""}
@@ -763,6 +851,7 @@ function renderBots() {
           <button class="btn btn-sm btn-danger" onclick="deleteBot(${b.id})">🗑</button>
         </div>
       </div>
+      ${haltRow}
       <div style="color:var(--t2);font-size:12px;margin-bottom:8px">
         ${assetLabel} · ${esc((b.broker||"alpaca").toUpperCase())} · ${esc(b.timeframe||"1h")} |
         Funds: $${b.funds_allocated} | Trades: ${b.trade_count} |
@@ -992,6 +1081,7 @@ function renderDashChart(d) {
     rightPriceScale: { borderColor: "#2a2f3d" },
     timeScale: { borderColor: "#2a2f3d", timeVisible: true, secondsVisible: false },
     crosshair: { mode: 0 },
+    localization: { timeFormatter: (t) => new Date(t * 1000).toLocaleString() },
     autoSize: true,
   });
   DASH_CANDLE_SERIES = DASH_CHART.addCandlestickSeries({
