@@ -154,6 +154,9 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 /* ════════════════════════════════════════
    TABLES & MODALS
 ════════════════════════════════════════ */
+.tooltip{position:relative;display:inline-block}
+.tooltip .tooltip-text{visibility:hidden;opacity:0;transition:opacity .15s;position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);background:var(--bg2);color:var(--t1);padding:8px 10px;border:1px solid var(--border2);border-radius:8px;font-size:11px;line-height:1.5;max-width:280px;white-space:normal;z-index:10;box-shadow:0 10px 24px rgba(0,0,0,.28)}
+.tooltip:hover .tooltip-text,.tooltip:focus-within .tooltip-text{visibility:visible;opacity:1}
 .table-wrap{width:100%;overflow-x:auto;margin-top:10px}
 .data-table{width:100%;border-collapse:collapse;text-align:left}
 .data-table th{padding:10px;color:var(--t2);font-size:11px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)}

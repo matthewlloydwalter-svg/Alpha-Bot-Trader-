@@ -120,6 +120,8 @@ class Bot(Base):
     realized_pnl = Column(Float, default=0)
     funds_allocated = Column(Float, default=0.0)
     running = Column(Boolean, default=False)
+    low_balance_strategy = Column(String, nullable=True, default="standard")
+    strategy_cooldown_until = Column(DateTime, nullable=True)
 
     # ── First-buy price gate (optional manual entry trigger) ──
     first_buy_price = Column(Float, nullable=True)
@@ -209,6 +211,8 @@ _MIGRATIONS = {
         "trade_count": "INTEGER DEFAULT 0",
         "realized_pnl": "FLOAT DEFAULT 0",
         "running": "BOOLEAN DEFAULT FALSE",
+        "low_balance_strategy": "VARCHAR DEFAULT 'standard'",
+        "strategy_cooldown_until": "TIMESTAMP",
         # Entry price gate
         "first_buy_price": "FLOAT",
         "first_buy_done": "BOOLEAN DEFAULT FALSE",

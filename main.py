@@ -426,6 +426,8 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "name": b.name,
             "ticker": b.ticker,
             "auto_select": b.auto_select,
+            "low_balance_strategy": b.low_balance_strategy or "standard",
+            "strategy_cooldown_until": b.strategy_cooldown_until.isoformat() if b.strategy_cooldown_until else None,
             "broker": b.broker,
             "mode": b.mode or "paper",
             "timeframe": b.timeframe,
@@ -843,6 +845,10 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
 
     is_auto = bool(data.get("is_auto", True))
     ticker_raw = (data.get("ticker") or "").strip().upper() or None
+    strategy = ((data.get("low_balance_strategy") or "standard").strip().lower() or "standard")
+    allowed_strategies = {"standard", "one_shot_daily", "micro_trader", "swing_trader", "scattershot"}
+    if strategy not in allowed_strategies:
+        strategy = "standard"
     # Fully autonomous = autonomous mode with NO fixed ticker → engine picks the asset.
     auto_select = bool(is_auto and not ticker_raw)
 
@@ -867,6 +873,34 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
         if funds > (available - already_allocated) + 1e-6:
             raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
 
+    # ── Alpaca cash-account GFV guard: verify account type and non-marginable buying power
+    broker_selected = (data.get("broker") or (u.active_broker or "alpaca")).lower()
+    if broker_selected == "alpaca":
+        try:
+            acct_ctx = bot_engine._get_alpaca_account_context(u, broker_selected)
+        except Exception:
+            acct_ctx = {"account_type": "margin", "equity": None, "non_marginable_buying_power": None}
+        acct_type = acct_ctx.get("account_type")
+        non_marginable = acct_ctx.get("non_marginable_buying_power")
+        # Cash accounts must be conservative: ensure the selected low-balance
+        # strategy can be satisfied by the account's non-marginable buying power
+        # to prevent Good Faith Violations under T+1 settlement.
+        if acct_type == "cash":
+            if strategy == "one_shot_daily":
+                if non_marginable is None:
+                    raise HTTPException(status_code=400, detail="Unable to verify Alpaca non-marginable buying power for cash account.")
+                if funds > (non_marginable + 1e-6):
+                    raise HTTPException(status_code=400, detail=(
+                        f"Cash Alpaca account non-marginable buying power (${non_marginable:.2f}) insufficient "
+                        f"for One-Shot Daily allocation of ${funds:.2f}. Reduce allocation or switch account type."))
+            if strategy in ("micro_trader", "scattershot"):
+                # These strategies rely on very small notional trades; require at
+                # least $1 of non-marginable buying power to operate safely.
+                if non_marginable is None or non_marginable < 1.0 - 1e-6:
+                    raise HTTPException(status_code=400, detail=(
+                        "Cash Alpaca account non-marginable buying power insufficient for $1 micro trades; "
+                        "add funds or use a margin account."))
+
     new_bot = Bot(
         owner_id=u.id,
         name=data.get("name") or (f"Autonomous {('OKX' if (data.get('broker') or u.active_broker)=='okx' else 'Alpaca')} Bot" if auto_select else "Unnamed Bot"),
@@ -877,6 +911,7 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
         funds_allocated=funds,
         is_auto=is_auto, # Added is_auto assignment to stop silent drops
         auto_select=auto_select,
+        low_balance_strategy=strategy,
         buy_limit=_num("buy_limit"),
         sell_limit=_num("sell_limit"),
         min_profit_pct=_num("min_profit_pct"),

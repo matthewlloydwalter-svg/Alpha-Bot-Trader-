@@ -14,6 +14,15 @@ let MARKET_STATUS = null;    // { open, next_open_epoch, ... } from /api/market-
 // sees PT, China sees CST, etc.
 const USER_TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (_) { return "local"; } })();
 
+// Descriptions used by the Low-balance strategy selector and hover tooltip.
+const LOW_BALANCE_DESCRIPTIONS = {
+  standard: "Standard execution uses your normal allocation logic.",
+  one_shot_daily: "Uses 100% of your allocated funds for a single high-confidence trade today. Halts trading after selling until funds settle tomorrow.",
+  micro_trader: "Executes multiple small day trades ($1.00 each) on a single stock to capture small movements without spending unsettled cash.",
+  swing_trader: "Buys a stock and holds it for several days or weeks to ride larger trends. Safely avoids daily cash settlement rules.",
+  scattershot: "Diversifies your risk by buying $1.00 of 5 different stocks simultaneously at the market open, selling them before the close."
+};
+
 // Render a UTC epoch (seconds) as a local day+time with the local tz label,
 // e.g. "Fri 9:30 AM EDT" / "Fri 6:30 AM PDT" / "Fri 9:30 PM CST".
 function fmtLocalFromEpoch(epochSec) {
@@ -753,7 +762,35 @@ function setBotMode(m) {
   document.getElementById("ticker-field").classList.toggle("hidden", m === "auto");
   document.getElementById("auto-explainer").classList.toggle("hidden", m !== "auto");
 }
-function showCreateBotModal() { document.getElementById("modal-bot").classList.remove("hidden"); }
+function updateLowBalanceStrategyHint() {
+  const el = document.getElementById("b-low-balance-strategy");
+  const hint = document.getElementById("low-balance-strategy-hint");
+  if (!el || !hint) return;
+  hint.textContent = LOW_BALANCE_DESCRIPTIONS[el.value] || LOW_BALANCE_DESCRIPTIONS.standard;
+}
+
+// Show the low-balance description on hover/focus for better discoverability.
+function _attachLowBalanceHover() {
+  const el = document.getElementById("b-low-balance-strategy");
+  const hint = document.getElementById("low-balance-strategy-hint");
+  if (!el || !hint) return;
+  el.addEventListener("mouseenter", () => {
+    hint.textContent = LOW_BALANCE_DESCRIPTIONS[el.value] || LOW_BALANCE_DESCRIPTIONS.standard;
+  });
+  el.addEventListener("focus", () => {
+    hint.textContent = LOW_BALANCE_DESCRIPTIONS[el.value] || LOW_BALANCE_DESCRIPTIONS.standard;
+  });
+  el.addEventListener("mouseleave", () => updateLowBalanceStrategyHint());
+  el.addEventListener("blur", () => updateLowBalanceStrategyHint());
+}
+
+// Attach hover listeners immediately (script is loaded at end of body).
+try { _attachLowBalanceHover(); } catch (e) { /* non-fatal */ }
+
+function showCreateBotModal() {
+  updateLowBalanceStrategyHint();
+  document.getElementById("modal-bot").classList.remove("hidden");
+}
 function hideCreateBotModal() { document.getElementById("modal-bot").classList.add("hidden"); }
 
 async function createBot() {
@@ -765,6 +802,7 @@ async function createBot() {
     : null;
   const buy_limit = document.getElementById("b-buy").value ? +document.getElementById("b-buy").value : null;
   const sell_limit = document.getElementById("b-sell").value ? +document.getElementById("b-sell").value : null;
+  const low_balance_strategy = document.getElementById("b-low-balance-strategy").value;
 
   if (!funds_allocated || funds_allocated <= 0) return toast("Enter a funds amount to allocate", "error");
   if (BOT_MODE === "manual" && !ticker) return toast("Manual bots need a ticker symbol", "error");
@@ -774,6 +812,7 @@ async function createBot() {
       method: "POST",
       body: JSON.stringify({
         name, ticker, funds_allocated,
+        low_balance_strategy,
         broker: USER ? (USER.active_broker || "alpaca") : "alpaca",
         timeframe: "1h",
         is_auto: BOT_MODE === "auto", buy_limit, sell_limit

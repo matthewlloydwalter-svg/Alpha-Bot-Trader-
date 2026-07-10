@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -183,6 +183,98 @@ def _get_buying_power(owner: User, broker: str) -> float | None:
     except Exception as e:
         logger.warning("Buying power lookup failed (%s): %s", broker, e)
         return None
+
+
+def _get_alpaca_account_context(owner: User, broker: str) -> dict:
+    """Inspect Alpaca account metadata needed for cash-account GFV protections."""
+    if (broker or "alpaca").lower() != "alpaca":
+        return {"account_type": "margin", "equity": None, "non_marginable_buying_power": None}
+    try:
+        info = get_account_info(broker=broker, paper=_paper(owner), **_creds(owner, broker))
+        equity = info.get("equity")
+        non_marginable = info.get("non_marginable_buying_power")
+        try:
+            equity_value = float(equity) if equity is not None else None
+        except (TypeError, ValueError):
+            equity_value = None
+        try:
+            non_marginable_value = float(non_marginable) if non_marginable is not None else None
+        except (TypeError, ValueError):
+            non_marginable_value = None
+        account_type = "margin" if equity_value is not None and equity_value >= 2000 else "cash"
+        return {
+            "account_type": account_type,
+            "equity": equity_value,
+            "non_marginable_buying_power": non_marginable_value,
+        }
+    except Exception as e:
+        logger.warning("Alpaca account context lookup failed: %s", e)
+        return {"account_type": "margin", "equity": None, "non_marginable_buying_power": None}
+
+
+def _strategy_allows_cash_guard(bot: Bot) -> bool:
+    strategy = (bot.low_balance_strategy or "standard").lower()
+    return strategy in {"one_shot_daily", "micro_trader", "swing_trader", "scattershot"}
+
+
+def _strategy_label(strategy: str | None) -> str:
+    mapping = {
+        "standard": "Standard",
+        "one_shot_daily": "One-Shot Daily",
+        "micro_trader": "Micro-Trader",
+        "swing_trader": "Swing Trader",
+        "scattershot": "Scattershot",
+    }
+    return mapping.get((strategy or "standard").lower(), "Standard")
+
+
+def _strategy_tooltip(strategy: str | None) -> str:
+    mapping = {
+        "standard": "Uses the standard allocation logic without low-balance adjustments.",
+        "one_shot_daily": "Uses 100% of your allocated funds for a single high-confidence trade today. Halts trading after selling until funds settle tomorrow.",
+        "micro_trader": "Executes multiple small day trades ($1.00 each) on a single stock to capture small movements without spending unsettled cash.",
+        "swing_trader": "Buys a stock and holds it for several days or weeks to ride larger trends. Safely avoids daily cash settlement rules.",
+        "scattershot": "Diversifies your risk by buying $1.00 of 5 different stocks simultaneously at the market open, selling them before the close.",
+    }
+    return mapping.get((strategy or "standard").lower(), mapping["standard"])
+
+
+def _enforce_low_balance_strategy(db: Session, owner: User, bot: Bot, price: float, analysis: Analysis | None) -> tuple[bool, dict]:
+    """Apply GFV-safe Low-balance strategy rules for cash accounts and allow margin accounts to opt in voluntarily."""
+    account_context = _get_alpaca_account_context(owner, bot.broker or "alpaca")
+    account_type = account_context.get("account_type", "cash")
+    non_marginable = account_context.get("non_marginable_buying_power")
+    if account_type == "margin" or not _strategy_allows_cash_guard(bot):
+        return True, {"account_type": account_type, "reason": "standard or margin account"}
+
+    strategy = (bot.low_balance_strategy or "standard").lower()
+    if strategy == "standard":
+        return True, {"account_type": account_type, "reason": "standard"}
+
+    if non_marginable is None:
+        return False, {"account_type": account_type, "reason": "cash-account metadata unavailable"}
+
+    if strategy == "one_shot_daily":
+        if bot.strategy_cooldown_until and bot.strategy_cooldown_until > datetime.utcnow():
+            return False, {"account_type": account_type, "reason": "cooldown active"}
+        if non_marginable <= 0:
+            return False, {"account_type": account_type, "reason": "no non-marginable buying power"}
+        return True, {"account_type": account_type, "reason": "one-shot allowed", "notional": min(float(bot.funds_allocated or 0), non_marginable)}
+
+    if strategy == "micro_trader":
+        if non_marginable <= 0:
+            return False, {"account_type": account_type, "reason": "no non-marginable buying power"}
+        return True, {"account_type": account_type, "reason": "micro trader", "notional": 1.0}
+
+    if strategy == "swing_trader":
+        return True, {"account_type": account_type, "reason": "swing holds overnight"}
+
+    if strategy == "scattershot":
+        if non_marginable <= 0:
+            return False, {"account_type": account_type, "reason": "no non-marginable buying power"}
+        return True, {"account_type": account_type, "reason": "scattershot", "notional": 1.0}
+
+    return True, {"account_type": account_type, "reason": "standard"}
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -353,6 +445,8 @@ def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: st
     bot.peak_price = None
     bot.stop_price = None
     bot.take_profit_price = None
+    if (bot.low_balance_strategy or "standard").lower() == "one_shot_daily":
+        bot.strategy_cooldown_until = datetime.utcnow() + timedelta(hours=24)
     # Fully autonomous bots release the ticker so the next cycle re-scans the
     # whole market for the freshest dip rather than re-buying the same asset.
     if bot.auto_select:
@@ -772,6 +866,21 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         db.commit()
         result["reason"] = "Market price unavailable — entry skipped to avoid an invalid (zero-price) fill."
         return result
+
+    # Before placing a trade, verify cash-account strategy constraints required
+    # for GFV-safe behavior. Margin accounts bypass the cash-settlement guard.
+    allowed, guard = _enforce_low_balance_strategy(db, owner, bot, price, analysis)
+    if not allowed:
+        bot.last_pattern_summary = f"Entry skipped — cash-account strategy guard blocked this trade ({guard.get('reason')})."
+        db.commit()
+        result.update({"action": "WAIT", "reason": f"Entry skipped — {guard.get('reason')}.", "guard": guard})
+        return result
+
+    if guard.get("reason") == "one-shot allowed" and notional > 0:
+        notional = min(notional, guard.get("notional", notional))
+
+    if (bot.low_balance_strategy or "standard").lower() == "one_shot_daily" and notional > 0:
+        bot.strategy_cooldown_until = datetime.utcnow() + timedelta(hours=24)
 
     # Execute the entry.
     order = _execute(owner, bot.broker, "buy", bot.ticker, notional=notional)
