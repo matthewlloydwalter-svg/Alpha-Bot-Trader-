@@ -399,10 +399,18 @@
     </div>
 
     <div class="dash-toolbar">
-      <div class="mode-toggle" id="dash-tf-toggle">
-        <button class="mode-btn" data-tf="15m" onclick="changeDashTimeframe('15m')">15m</button>
-        <button class="mode-btn active" data-tf="1h" onclick="changeDashTimeframe('1h')">1H</button>
-        <button class="mode-btn" data-tf="1d" onclick="changeDashTimeframe('1d')">1D</button>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <label style="font-size:11px;color:var(--t3);white-space:nowrap;">Timeframe</label>
+        <select id="dash-tf-select" onchange="changeDashTimeframe(this.value)"
+          style="background:#1a1e28;color:#e2e8f0;border:1px solid #2a2f3d;border-radius:6px;padding:4px 10px;font-size:13px;cursor:pointer;outline:none;">
+          <option value="15m">15 Min</option>
+          <option value="1h" selected>1 Hour</option>
+          <option value="1d">1 Day</option>
+          <option value="1w">1 Week</option>
+          <option value="1mo">1 Month</option>
+          <option value="1y">1 Year</option>
+          <option value="5y">5 Years</option>
+        </select>
       </div>
       <button class="btn btn-sm" onclick="reloadDashboard()">🔄 Refresh</button>
     </div>

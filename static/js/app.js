@@ -831,17 +831,31 @@ function renderMarkets() {
 function filterMarkets() { renderMarkets(); }
 
 /* --- MARKET DASHBOARD --- */
-let DASH_STATE = { exchange: null, symbol: null, timeframe: "1h" };
+
+// Maps each UI view to (API timeframe, candle count). These follow the standard
+// TradingView convention: "15m" means 15-minute candles, not a 15-minute window.
+// ~100 bars gives a clean chart without requesting too much data.
+const DASH_TF_MAP = {
+  "15m": { apiTf: "15m",  limit: 100 },  // ~25 hours of 15-min candles
+  "1h":  { apiTf: "1h",   limit: 100 },  // ~4 days of 1-hour candles
+  "1d":  { apiTf: "1d",   limit: 100 },  // ~3 months of daily candles
+  "1w":  { apiTf: "1w",   limit: 100 },  // ~2 years of weekly candles
+  "1mo": { apiTf: "1d",   limit: 30  },  // last 30 daily candles (~1 month)
+  "1y":  { apiTf: "1d",   limit: 365 },  // last 365 daily candles
+  "5y":  { apiTf: "1w",   limit: 260 },  // last ~5 years of weekly candles
+};
+
+let DASH_STATE = { exchange: null, symbol: null, view: "1h" };
 let DASH_CHART = null, DASH_CANDLE_SERIES = null, DASH_SMA20 = null, DASH_SMA50 = null;
 
 async function openMarketDashboard(exchange, symbol) {
-  DASH_STATE = { exchange, symbol, timeframe: "1h" };
+  DASH_STATE = { exchange, symbol, view: "1h" };
   document.getElementById("market-dash-modal").classList.remove("hidden");
   document.getElementById("dash-symbol").textContent = symbol;
   document.getElementById("dash-name").textContent = "Loading asset…";
   document.getElementById("dash-price").textContent = "—";
-  document.querySelectorAll("#dash-tf-toggle .mode-btn").forEach(b =>
-    b.classList.toggle("active", b.getAttribute("data-tf") === "1h"));
+  const sel = document.getElementById("dash-tf-select");
+  if (sel) sel.value = "1h";
   await reloadDashboard();
 }
 
@@ -851,22 +865,23 @@ function closeMarketDashboard() {
   DASH_CANDLE_SERIES = DASH_SMA20 = DASH_SMA50 = null;
 }
 
-function changeDashTimeframe(tf) {
-  DASH_STATE.timeframe = tf;
-  document.querySelectorAll("#dash-tf-toggle .mode-btn").forEach(b =>
-    b.classList.toggle("active", b.getAttribute("data-tf") === tf));
+function changeDashTimeframe(view) {
+  DASH_STATE.view = view;
+  const sel = document.getElementById("dash-tf-select");
+  if (sel && sel.value !== view) sel.value = view;
   reloadDashboard();
 }
 
 async function reloadDashboard() {
-  const { exchange, symbol, timeframe } = DASH_STATE;
+  const { exchange, symbol, view } = DASH_STATE;
   if (!exchange || !symbol) return;
+  const { apiTf, limit } = DASH_TF_MAP[view] || DASH_TF_MAP["1h"];
   const msg = document.getElementById("dash-chart-msg");
   msg.classList.remove("hidden");
   msg.textContent = "Loading market data…";
   try {
-    const d = await api(`/api/markets/${exchange}/${symbol}/dashboard?timeframe=${encodeURIComponent(timeframe)}&limit=200`);
-    if (DASH_STATE.symbol !== symbol || DASH_STATE.timeframe !== timeframe) return; // stale
+    const d = await api(`/api/markets/${exchange}/${symbol}/dashboard?timeframe=${encodeURIComponent(apiTf)}&limit=${limit}`);
+    if (DASH_STATE.symbol !== symbol || DASH_STATE.view !== view) return; // stale
     renderDashboard(d);
   } catch (e) {
     msg.classList.remove("hidden");
