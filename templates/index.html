@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ PLATFORM_NAME }}</title>
-<link rel="stylesheet" href="/static/css/style.css">
+<link rel="stylesheet" href="/static/css/style.css?v={{ ASSET_VERSION }}">
 </head>
 <body>
 
@@ -432,12 +432,12 @@
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <label style="font-size:11px;color:var(--t3);white-space:nowrap;">Timeframe</label>
         <div id="dash-preset-group" class="mode-toggle dash-preset-group" role="group" aria-label="Chart timeframe presets">
-          <button type="button" class="mode-btn active" data-preset="1D" onclick="setDashPreset('1D')">1D</button>
-          <button type="button" class="mode-btn" data-preset="1M" onclick="setDashPreset('1M')">1M</button>
-          <button type="button" class="mode-btn" data-preset="3M" onclick="setDashPreset('3M')">3M</button>
+          <button type="button" class="mode-btn active" data-preset="1D">1D</button>
+          <button type="button" class="mode-btn" data-preset="1M">1M</button>
+          <button type="button" class="mode-btn" data-preset="3M">3M</button>
         </div>
         <label style="font-size:11px;color:var(--t3);white-space:nowrap;margin-left:4px;" for="dash-chart-type">Style</label>
-        <select id="dash-chart-type" class="dash-chart-type" onchange="setDashChartType(this.value)" aria-label="Chart style">
+        <select id="dash-chart-type" class="dash-chart-type" aria-label="Chart style">
           <option value="candles" selected>Candles</option>
           <option value="line">Line</option>
         </select>
@@ -470,6 +470,6 @@
 </div>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="/static/js/app.js"></script>
+<script src="/static/js/app.js?v={{ ASSET_VERSION }}"></script>
 </body>
 </html>

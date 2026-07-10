@@ -1111,6 +1111,7 @@ function startDashRefreshTimer() {
 }
 
 async function openMarketDashboard(exchange, symbol) {
+  bindDashControls();
   DASH_STATE = { exchange, symbol, preset: "1D", chartType: "candles" };
   DASH_LAST = null;
   document.getElementById("market-dash-modal").classList.remove("hidden");
@@ -1133,24 +1134,46 @@ function closeMarketDashboard() {
 }
 
 function setDashPreset(preset) {
-  const code = String(preset || "1D").toUpperCase();
-  if (!DASH_PRESETS.includes(code)) return;
-  DASH_STATE.preset = code;
-  syncDashPresetButtons(code);
-  // Restart the 15s timer so the next tick is relative to this switch, and
-  // immediately fetch with the new date range + timeframe.
-  startDashRefreshTimer();
-  reloadDashboard();
+  try {
+    const code = String(preset || "1D").toUpperCase();
+    if (!DASH_PRESETS.includes(code)) {
+      console.warn("[DASH] unknown preset", preset);
+      return;
+    }
+    console.log("[DASH] setDashPreset", code);
+    DASH_STATE.preset = code;
+    syncDashPresetButtons(code);
+    // Restart the 15s timer so the next tick is relative to this switch, and
+    // immediately fetch with the new date range + timeframe.
+    startDashRefreshTimer();
+    reloadDashboard({ soft: false });
+  } catch (e) {
+    console.error("[DASH] setDashPreset failed", e);
+    try { toast(String(e.message || e), "error"); } catch (_) {}
+  }
 }
 
 function setDashChartType(type) {
-  const t = String(type || "candles").toLowerCase();
-  if (!DASH_CHART_TYPES.includes(t)) return;
-  DASH_STATE.chartType = t;
-  syncDashChartTypeSelect(t);
-  // Re-render immediately from the latest Alpaca/OKX payload; the 15s timer
-  // keeps pulling fresh bars for whichever style is active.
-  if (DASH_LAST) renderDashChart(DASH_LAST);
+  try {
+    const t = String(type || "candles").toLowerCase();
+    if (!DASH_CHART_TYPES.includes(t)) {
+      console.warn("[DASH] unknown chart type", type);
+      return;
+    }
+    console.log("[DASH] setDashChartType", t, "hasData=", !!DASH_LAST);
+    DASH_STATE.chartType = t;
+    syncDashChartTypeSelect(t);
+    // Re-render immediately from the latest Alpaca/OKX payload; if we don't
+    // have data yet, force a fetch so Line/Candles still switches visibly.
+    if (DASH_LAST) {
+      renderDashChart(DASH_LAST);
+    } else {
+      reloadDashboard({ soft: false });
+    }
+  } catch (e) {
+    console.error("[DASH] setDashChartType failed", e);
+    try { toast(String(e.message || e), "error"); } catch (_) {}
+  }
 }
 
 // Back-compat alias if anything still calls the old select handler.
@@ -1158,6 +1181,35 @@ function changeDashTimeframe(view) {
   const map = { "1d": "1D", "1mo": "1M", "1h": "3M", "15m": "1D", "1w": "3M", "1y": "3M", "5y": "3M" };
   setDashPreset(map[view] || "1D");
 }
+
+// Event-delegation backup so controls work even if inline onclick is blocked
+// or a stale cached HTML shell is mixed with a fresh app.js.
+function bindDashControls() {
+  const modal = document.getElementById("market-dash-modal");
+  if (!modal || modal.dataset.dashBound === "1") return;
+  modal.dataset.dashBound = "1";
+  modal.addEventListener("click", (ev) => {
+    const btn = ev.target && ev.target.closest ? ev.target.closest("[data-preset]") : null;
+    if (btn && modal.contains(btn)) {
+      ev.preventDefault();
+      setDashPreset(btn.getAttribute("data-preset"));
+    }
+  });
+  const typeSel = document.getElementById("dash-chart-type");
+  if (typeSel) {
+    typeSel.addEventListener("change", () => setDashChartType(typeSel.value));
+  }
+}
+
+// Expose handlers globally for inline HTML onclick/onchange attributes.
+window.setDashPreset = setDashPreset;
+window.setDashChartType = setDashChartType;
+window.changeDashTimeframe = changeDashTimeframe;
+window.openMarketDashboard = openMarketDashboard;
+window.closeMarketDashboard = closeMarketDashboard;
+window.reloadDashboard = reloadDashboard;
+
+try { bindDashControls(); } catch (e) { console.warn("[DASH] bindDashControls", e); }
 
 async function reloadDashboard(opts) {
   const soft = !!(opts && opts.soft);

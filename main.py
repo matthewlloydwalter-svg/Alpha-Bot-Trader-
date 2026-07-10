@@ -73,6 +73,24 @@ if not os.path.exists(STATIC_DIR):
 if not os.path.exists(TEMPLATES_DIR):
     os.makedirs(TEMPLATES_DIR)
 
+# Bust browser caches whenever static assets change (critical on Railway so
+# redeploys don't leave users on a stale app.js while HTML already updated).
+def _asset_version() -> str:
+    paths = [
+        os.path.join(STATIC_DIR, "js", "app.js"),
+        os.path.join(STATIC_DIR, "css", "style.css"),
+    ]
+    mtimes = []
+    for p in paths:
+        try:
+            mtimes.append(int(os.path.getmtime(p)))
+        except OSError:
+            pass
+    return str(max(mtimes) if mtimes else int(datetime.now(timezone.utc).timestamp()))
+
+
+ASSET_VERSION = _asset_version()
+
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
@@ -124,7 +142,18 @@ def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)
 
 @app.get("/", response_class=HTMLResponse)
 def index_pane(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "PLATFORM_NAME": PLATFORM_NAME})
+    resp = templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "PLATFORM_NAME": PLATFORM_NAME,
+            "ASSET_VERSION": _asset_version(),
+        },
+    )
+    # Never let browsers/CDNs keep a stale shell that points at old JS handlers.
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 @app.get("/terms", response_class=HTMLResponse)
 def terms_pane():
