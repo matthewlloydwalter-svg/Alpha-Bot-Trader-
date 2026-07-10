@@ -50,6 +50,7 @@ def alpaca_account_info(client: TradingClient) -> dict:
             "buying_power": float(a.buying_power),
             "equity": float(a.equity),
             "trading_blocked": a.trading_blocked,
+            "multiplier": str(multiplier) if multiplier is not None else None,
             "non_marginable_buying_power": float(non_marginable_buying_power) if non_marginable_buying_power is not None else None,
             "multiplier": float(multiplier) if multiplier is not None else None,
         }

@@ -445,7 +445,12 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "ticker": b.ticker,
             "auto_select": b.auto_select,
             "low_balance_strategy": b.low_balance_strategy or "standard",
+            "low_balance_strategy_label": bot_engine._strategy_label(b.low_balance_strategy),
+            "low_balance_strategy_tooltip": bot_engine._strategy_tooltip(b.low_balance_strategy),
             "strategy_cooldown_until": b.strategy_cooldown_until.isoformat() if b.strategy_cooldown_until else None,
+            "scattershot_legs": scattershot_legs,
+            "position_opened_at": b.position_opened_at.isoformat() if b.position_opened_at else None,
+            "swing_hold_days": swing_hold_days,
             "broker": b.broker,
             "mode": b.mode or "paper",
             "timeframe": b.timeframe,
@@ -852,6 +857,35 @@ def _broker_available_funds(user: User) -> Optional[float]:
     return total if found else None
 
 
+def _validate_cash_account_strategy_allocation(user: User, broker: str, strategy: str, funds: float) -> None:
+    """Reject allocations that would violate GFV-safe low-balance strategy limits."""
+    if strategy == "scattershot" and (broker or "alpaca").lower() != "alpaca":
+        raise HTTPException(status_code=400, detail="Scattershot is available for Alpaca equities only.")
+    if (broker or "alpaca").lower() != "alpaca":
+        return
+    try:
+        acct_ctx = bot_engine._get_alpaca_account_context(user, broker)
+    except Exception:
+        acct_ctx = {"account_type": "cash", "equity": None, "non_marginable_buying_power": None}
+    if acct_ctx.get("account_type") != "cash":
+        return
+    non_marginable = acct_ctx.get("non_marginable_buying_power")
+    if strategy == "one_shot_daily":
+        if non_marginable is None:
+            raise HTTPException(status_code=400, detail="Unable to verify Alpaca non-marginable buying power for cash account.")
+        if funds > (non_marginable + 1e-6):
+            raise HTTPException(status_code=400, detail=(
+                f"Cash Alpaca account non-marginable buying power (${non_marginable:.2f}) insufficient "
+                f"for One-Shot Daily allocation of ${funds:.2f}. Reduce allocation or switch account type."))
+    if strategy in ("micro_trader", "scattershot"):
+        min_needed = 5.0 if strategy == "scattershot" else 1.0
+        if non_marginable is None or non_marginable < min_needed - 1e-6:
+            raise HTTPException(status_code=400, detail=(
+                f"Cash Alpaca account non-marginable buying power insufficient for "
+                f"{'$5 scattershot basket' if strategy == 'scattershot' else '$1 micro trades'}; "
+                "add funds or use a margin account."))
+
+
 @app.post("/bots")
 async def create_bot(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     data = await request.json()
@@ -1046,6 +1080,9 @@ async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_
         )
         if new_funds > (available - others_allocated) + 1e-6:
             raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
+
+    strategy = (bot.low_balance_strategy or "standard").lower()
+    _validate_cash_account_strategy_allocation(u, bot.broker or "alpaca", strategy, new_funds)
 
     previous = float(bot.funds_allocated or 0.0)
     bot.funds_allocated = new_funds
