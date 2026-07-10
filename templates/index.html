@@ -436,6 +436,11 @@
           <button type="button" class="mode-btn" data-preset="1M" onclick="setDashPreset('1M')">1M</button>
           <button type="button" class="mode-btn" data-preset="3M" onclick="setDashPreset('3M')">3M</button>
         </div>
+        <label style="font-size:11px;color:var(--t3);white-space:nowrap;margin-left:4px;" for="dash-chart-type">Style</label>
+        <select id="dash-chart-type" class="dash-chart-type" onchange="setDashChartType(this.value)" aria-label="Chart style">
+          <option value="candles" selected>Candles</option>
+          <option value="line">Line</option>
+        </select>
         <span id="dash-fetch-status" class="dash-fetch-status hidden">Fetching data…</span>
       </div>
       <button class="btn btn-sm" onclick="reloadDashboard()">🔄 Refresh</button>
