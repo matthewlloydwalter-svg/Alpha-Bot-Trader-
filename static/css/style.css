@@ -444,6 +444,11 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 .pf-mode-title{ display:flex; align-items:center; gap:10px; font-size:16px; font-weight:800;
   letter-spacing:-.2px; color:#eaf6ff; text-shadow:0 0 14px rgba(57,217,255,0.25); }
 .pf-mode-toggle{ flex:0 0 auto; }
+/* Low-profile account badges for the Bots tab: LIVE = neon green, PAPER = cyan */
+.badge-mode-live{ background:rgba(0,214,143,.10); color:#00d68f; border:1px solid rgba(0,214,143,.55);
+  letter-spacing:.6px; font-weight:700; }
+.badge-mode-paper{ background:rgba(57,217,255,.08); color:#57d9ff; border:1px solid rgba(57,217,255,.4);
+  letter-spacing:.6px; font-weight:700; }
 .holo-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; }
 .holo-total-value{ font-size:38px; font-weight:800; letter-spacing:-0.5px; line-height:1.05;
   color:#fff; text-shadow:0 0 18px rgba(57,217,255,0.35); font-variant-numeric:tabular-nums; }
