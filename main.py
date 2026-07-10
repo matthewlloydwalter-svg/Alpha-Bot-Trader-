@@ -606,7 +606,7 @@ def _bot_performance_highlights(db: Session, bots: list) -> Optional[dict]:
 
 
 @app.get("/api/portfolio/performance")
-def portfolio_performance(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     """
     Build the bot-performance dataset for the Portfolio graph:
       - funds_allocated : capital currently deployed in open bot positions
@@ -617,16 +617,26 @@ def portfolio_performance(u: User = Depends(get_current_user_from_cookie), db: S
     The realized P/L per sell is reconstructed by replaying the trade ledger
     per bot (cost-basis accounting) since trades don't store gain directly.
     """
+    # ── Paper vs Live separation ──────────────────────────────────────────
+    # Everything below is scoped to ONE trading mode. Defaults to the account's
+    # current trading_mode but can be requested explicitly via ?mode=paper|live.
+    active_mode = (mode or u.trading_mode or "paper").lower()
+    if active_mode not in ("paper", "live"):
+        active_mode = "paper"
+    # Open positions are only actually "held" in the account the user is live in,
+    # so they only count toward the mode matching the current account state.
+    include_open = active_mode == (u.trading_mode or "paper").lower()
+
     bots = db.query(Bot).filter(Bot.owner_id == u.id).all()
     bot_names = {b.id: b.name for b in bots}
 
-    # funds_allocated = capital currently deployed in open bot positions
+    # funds_allocated = capital currently deployed in open bot positions (this mode)
     funds_allocated = sum(
         float(b.funds_allocated or 0.0) for b in bots if b.in_position
-    )
+    ) if include_open else 0.0
 
     trades = (db.query(Trade)
-                .filter(Trade.owner_id == u.id)
+                .filter(Trade.owner_id == u.id, Trade.mode == active_mode)
                 .order_by(Trade.created_at.asc(), Trade.id.asc())
                 .all())
 
@@ -683,12 +693,14 @@ def portfolio_performance(u: User = Depends(get_current_user_from_cookie), db: S
         m["value"] = series_map.get(m["time"], round(cumulative, 2))
 
     # Unrealized P/L: mark each open bot position against the live stored quote.
+    # Only counts for the currently-live mode (see include_open above).
     unrealized = 0.0
-    for b in bots:
-        if b.in_position and b.avg_entry_price and b.shares_held:
-            q = market_store.get_quote(db, b.broker or "alpaca", b.ticker or "")
-            mark = float(q.price) if (q and q.price) else float(b.avg_entry_price)
-            unrealized += (mark - float(b.avg_entry_price)) * float(b.shares_held)
+    if include_open:
+        for b in bots:
+            if b.in_position and b.avg_entry_price and b.shares_held:
+                q = market_store.get_quote(db, b.broker or "alpaca", b.ticker or "")
+                mark = float(q.price) if (q and q.price) else float(b.avg_entry_price)
+                unrealized += (mark - float(b.avg_entry_price)) * float(b.shares_held)
 
     live_value = round(cumulative + unrealized, 2)
     series = [{"time": ts, "value": v} for ts, v in sorted(series_map.items())]
@@ -701,6 +713,7 @@ def portfolio_performance(u: User = Depends(get_current_user_from_cookie), db: S
     markers.sort(key=lambda m: m["time"])
 
     return {
+        "mode": active_mode,
         "funds_allocated": round(funds_allocated, 2),
         "net_position": round(cumulative, 2),
         "unrealized": round(unrealized, 2),

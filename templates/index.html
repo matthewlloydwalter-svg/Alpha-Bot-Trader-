@@ -106,6 +106,16 @@
     <div id="view-portfolio" class="tab-view portfolio-stage">
       <!-- ── Main Portfolio holo card ─────────────────────────────── -->
       <div class="holo-card portfolio-main">
+        <div class="pf-mode-bar">
+          <div class="pf-mode-title">
+            <span id="pf-mode-label">Paper Trading Portfolio</span>
+            <span id="pf-mode-badge" class="badge badge-green">● Paper</span>
+          </div>
+          <div class="mode-toggle pf-mode-toggle">
+            <button class="mode-btn active" id="pf-mode-paper" onclick="setPortfolioMode('paper')">📄 Paper</button>
+            <button class="mode-btn" id="pf-mode-live" onclick="setPortfolioMode('live')">⚡ Live</button>
+          </div>
+        </div>
         <div class="holo-head">
           <div class="holo-total">
             <div class="holo-lbl">Total Alpha Bot valuation</div>

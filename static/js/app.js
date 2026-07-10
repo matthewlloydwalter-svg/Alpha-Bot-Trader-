@@ -223,8 +223,34 @@ async function setTradingMode(mode) {
     const data = await api("/broker/trading-mode", { method: "POST", body: JSON.stringify({ mode }) });
     USER.trading_mode = data.trading_mode;
     renderModeUI();
+    // The Portfolio is mode-aware: refresh its indicator + data for the new mode.
+    renderPortfolioModeIndicator();
+    const pv = document.getElementById("view-portfolio");
+    if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
     toast(`Switched to ${mode} trading`, "success");
   } catch (e) { toast(e, "error"); }
+}
+
+// Portfolio-page mode toggle — switches the whole account mode (paper/live) and
+// re-renders the Portfolio so all P&L / charts / bots reflect that account only.
+function setPortfolioMode(mode) {
+  if (((USER && USER.trading_mode) || "paper") === mode) return;
+  setTradingMode(mode);
+}
+
+// Reflects the active trading mode in the Portfolio header (label + badge + toggle).
+function renderPortfolioModeIndicator() {
+  const mode = (USER && USER.trading_mode) || "paper";
+  const label = document.getElementById("pf-mode-label");
+  if (label) label.textContent = mode === "live" ? "Live Trading Portfolio" : "Paper Trading Portfolio";
+  const badge = document.getElementById("pf-mode-badge");
+  if (badge) {
+    badge.textContent = mode === "live" ? "⚡ Live" : "● Paper";
+    badge.className = "badge " + (mode === "live" ? "badge-red" : "badge-green");
+  }
+  const pB = document.getElementById("pf-mode-paper"), lB = document.getElementById("pf-mode-live");
+  if (pB) pB.classList.toggle("active", mode === "paper");
+  if (lB) lB.classList.toggle("active", mode === "live");
 }
 
 function renderBrokerUI() {
@@ -422,16 +448,28 @@ function _botExecData(botId) {
 }
 
 // Public entry — called on boot, tab switch and SSE refresh. Pulls LIVE data.
+// Public entry — loads the Portfolio for the account's CURRENT trading mode.
 async function loadPortfolioPerformance() {
+  return loadPortfolioForMode((USER && USER.trading_mode) || "paper");
+}
+
+// Fetches + renders the Portfolio for ONE trading mode. Paper and Live are
+// fully separated: the backend only returns that mode's trades, and open
+// positions only count toward the account you're currently live in.
+async function loadPortfolioForMode(mode) {
+  renderPortfolioModeIndicator();
   const msg = document.getElementById("pf-main-chart-msg");
   let perf, bots;
   try {
-    [perf, bots] = await Promise.all([api("/api/portfolio/performance"), api("/bots")]);
+    [perf, bots] = await Promise.all([
+      api(`/api/portfolio/performance?mode=${encodeURIComponent(mode)}`),
+      api("/bots"),
+    ]);
   } catch (e) {
     if (msg) { msg.classList.remove("hidden"); msg.textContent = `⚠ ${e.message}`; }
     return;
   }
-  PF_DATA = { perf: perf || {}, bots: Array.isArray(bots) ? bots : (bots && bots.bots) || [] };
+  PF_DATA = { perf: perf || {}, bots: Array.isArray(bots) ? bots : (bots && bots.bots) || [], mode };
 
   // Total current asset valuation held by active bots = open-position cost
   // basis + live unrealized mark-to-market.
@@ -525,20 +563,36 @@ function renderActiveBots() {
   const list = document.getElementById("active-bots-list");
   const cnt = document.getElementById("active-bots-count");
   if (!list) return;
-  const bots = PF_DATA.bots || [];
+
+  // Scope the list to the selected mode: a bot belongs to this view if it has
+  // executions in this mode (its markers are already mode-filtered by the API),
+  // or it is currently holding a position in the account you're live in.
+  const mode = PF_DATA.mode || (USER && USER.trading_mode) || "paper";
+  const isActiveMode = mode === ((USER && USER.trading_mode) || "paper");
+  const markers = (PF_DATA.perf && PF_DATA.perf.markers) || [];
+  const pnlByBot = {}, activeIds = new Set();
+  for (const m of markers) {
+    if (m.bot_id == null) continue;
+    activeIds.add(m.bot_id);
+    if (m.type && m.type.indexOf("sell") === 0 && m.pnl != null) {
+      pnlByBot[m.bot_id] = (pnlByBot[m.bot_id] || 0) + Number(m.pnl);
+    }
+  }
+  const bots = (PF_DATA.bots || []).filter(b => activeIds.has(b.id) || (isActiveMode && b.in_position));
   if (cnt) cnt.textContent = bots.length;
   if (!bots.length) {
-    list.innerHTML = `<div style="color:rgba(234,246,255,0.6);font-size:13px;padding:6px 2px">No active bots yet — create one in the Bots tab.</div>`;
+    const label = mode === "live" ? "live" : "paper";
+    list.innerHTML = `<div style="color:rgba(234,246,255,0.6);font-size:13px;padding:6px 2px">No ${label}-mode bot activity yet${isActiveMode ? " — create one in the Bots tab." : "."}</div>`;
     return;
   }
   list.innerHTML = bots.map(b => {
-    const realized = Number(b.realized_pnl || 0);
+    const realized = Number(pnlByBot[b.id] || 0);   // realized P&L for THIS mode
     const alloc = Number(b.funds_allocated || 0);
     const plPct = alloc > 0 ? (realized / alloc * 100) : 0;
     const plCls = plPct >= 0 ? "pup" : "pdn";
     const tks = b.ticker ? [b.ticker] : (b.auto_select ? ["AUTO"] : ["—"]);
     const tickers = tks.map(t => `<span class="tk">${esc(t)}</span>`).join("");
-    const posBadge = b.in_position ? `<span class="badge badge-blue" style="font-size:9px;margin-left:6px">In position</span>` : "";
+    const posBadge = (isActiveMode && b.in_position) ? `<span class="badge badge-blue" style="font-size:9px;margin-left:6px">In position</span>` : "";
     return `
     <div class="mini-bot" id="mini-bot-${b.id}">
       <div class="mini-bot-row" onclick="toggleBotPanel(${b.id})">
