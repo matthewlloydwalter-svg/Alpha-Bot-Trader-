@@ -408,42 +408,65 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
    ════════════════════════════════════════════════════════════════════ */
 :root{ --holo:#39d9ff; --holo-deep:#1f7bef; }
 
-/* Background image is scoped to the Portfolio tab container ONLY.
-   cover keeps the aspect ratio (no distortion) and centers it. */
+/* Portfolio stage = full-bleed background canvas under the nav.
+   Valuation + details float ON TOP of this image; empty space shows art. */
 .portfolio-stage{
+  position:relative;
+  /* Cancel .page padding so the art sits flush under the sticky nav */
+  margin:-18px -20px 0;
+  width:calc(100% + 40px);
+  max-width:none;
   background-image:url("/static/images/portfolio-background1.png");
-  /* contain = show the FULL image (no cropping) scaled to fit, centered */
-  background-size:contain;
+  background-size:cover;
   background-position:center top;
   background-repeat:no-repeat;
-  background-attachment:local;
-  background-color:#070b14;          /* frame behind the letterboxed image */
-  border-radius:16px;
-  padding:18px;
-  display:flex;
-  flex-direction:column;
-  gap:14px;
-  min-height:calc(100vh - var(--topbar-h) - var(--nav-h) - 48px);
+  background-color:#070b14;
+  border-radius:0;
+  padding:0;
+  min-height:calc(100vh - var(--topbar-h) - var(--nav-h));
+  overflow:hidden;
 }
 
-/* Sticky summary header — valuation + P/L only */
+/* Floating UI layer — transparent shell; only children paint over the art */
+.pf-overlay{
+  position:relative;
+  z-index:2;
+  display:flex;
+  flex-direction:column;
+  align-items:stretch;
+  justify-content:flex-start;
+  gap:10px;
+  padding:6px 12px 20px;
+  min-height:inherit;
+  box-sizing:border-box;
+  background:transparent;
+  /* Empty overlay areas let the background image show through */
+  pointer-events:none;
+}
+.pf-overlay > *{ pointer-events:auto; }
+
+/* Valuation block sits ON TOP of the background image (above details) */
 .pf-sticky-header{
   position:sticky;
-  top:calc(var(--topbar-h, 56px) + var(--nav-h, 44px) + 8px);
-  z-index:20;
-  /* Slightly more opaque than detail cards so figures stay readable over the art */
-  background:linear-gradient(160deg, rgba(12,28,52,0.72), rgba(6,14,30,0.62)) !important;
+  top:calc(var(--topbar-h) + var(--nav-h));
+  z-index:40;
+  flex:0 0 auto;
+  width:100%;
+  max-width:100%;
+  box-sizing:border-box;
+  background:linear-gradient(160deg, rgba(12,28,52,0.82), rgba(6,14,30,0.72)) !important;
   backdrop-filter:blur(10px) saturate(130%);
   -webkit-backdrop-filter:blur(10px) saturate(130%);
-  /* Flush metrics toward the top edge (small inset only) */
-  padding:8px 16px 10px !important;
+  padding:6px 14px 8px !important;
+  margin:0;
+  box-shadow:0 8px 28px rgba(0,0,0,0.35);
 }
 .pf-sticky-header::before{
   background:linear-gradient(180deg, rgba(57,217,255,0.06), transparent 50%);
 }
 .pf-sticky-top{
   display:flex; align-items:center; justify-content:space-between; gap:8px;
-  flex-wrap:wrap; margin:0 0 4px; padding:0 0 4px;
+  flex-wrap:wrap; margin:0 0 2px; padding:0 0 3px;
   border-bottom:1px solid rgba(57,217,255,0.12);
 }
 .pf-sticky-mode{
@@ -451,20 +474,20 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   flex:1; min-width:180px; gap:8px;
 }
 .pf-sticky-header .pf-mode-title{
-  font-size:14px; gap:8px;
+  font-size:13px; gap:8px;
 }
 .pf-sticky-header .pf-mode-toggle .mode-btn{
-  padding:5px 12px; font-size:12px;
+  padding:4px 10px; font-size:11px;
 }
 .pf-summary-grid{
-  display:grid; grid-template-columns:1fr 1fr; gap:6px 16px; align-items:start;
+  display:grid; grid-template-columns:1fr 1fr; gap:4px 14px; align-items:start;
   margin:0; padding:0;
 }
-.pf-summary-metric .holo-lbl{ margin-bottom:2px; }
-.pf-summary-metric .holo-total-value{ font-size:32px; line-height:1; margin:0; }
-.pf-summary-pnl .holo-total-sub{ margin-top:2px; }
+.pf-summary-metric .holo-lbl{ margin-bottom:1px; }
+.pf-summary-metric .holo-total-value{ font-size:30px; line-height:1; margin:0; }
+.pf-summary-pnl .holo-total-sub{ margin-top:1px; }
 .pf-total-pnl{
-  font-size:26px; font-weight:800; letter-spacing:-0.3px; line-height:1;
+  font-size:24px; font-weight:800; letter-spacing:-0.3px; line-height:1;
   font-variant-numeric:tabular-nums;
   text-shadow:0 0 14px rgba(57,217,255,0.25);
 }
@@ -480,28 +503,48 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 .pf-details-caret{ display:inline-block; transition:transform .25s ease; color:var(--holo); }
 .pf-details-toggle[aria-expanded="true"] .pf-details-caret{ transform:rotate(180deg); }
 
-/* Collapsible details — grid 0fr/1fr for smooth height animation */
+/* Details accordion: transparent shell — ONLY the inner holo-cards cover the art */
 .pf-details{
   display:grid;
   grid-template-rows:0fr;
   transition:grid-template-rows .35s ease;
+  flex:0 0 auto;
+  background:transparent;
+  border:none;
+  box-shadow:none;
+  max-height:calc(100vh - var(--topbar-h) - var(--nav-h) - 140px);
+  z-index:20; /* below sticky valuation */
 }
-.pf-details.is-open{ grid-template-rows:1fr; }
-.pf-details.collapsed{ grid-template-rows:0fr; }
+.pf-details.is-open{
+  grid-template-rows:1fr;
+  overflow:auto;
+}
+.pf-details.collapsed{ grid-template-rows:0fr; overflow:hidden; }
 .pf-details-inner{
   overflow:hidden; min-height:0;
-  display:flex; flex-direction:column; gap:18px;
-  opacity:0; transform:translateY(-6px);
-  transition:opacity .28s ease, transform .28s ease;
+  display:flex; flex-direction:column; gap:12px;
+  background:transparent;
+  opacity:0; transform:translateY(-14px);
+  transition:opacity .28s ease, transform .32s ease;
+  padding:0 0 8px;
 }
 .pf-details.is-open .pf-details-inner{
   opacity:1; transform:translateY(0);
+  overflow:auto;
+}
+/* Detail boxes that land on the background when the menu opens */
+.pf-details .holo-card{
+  background:linear-gradient(160deg, rgba(14,30,56,0.78), rgba(8,16,34,0.70));
+  backdrop-filter:blur(8px) saturate(125%);
+  -webkit-backdrop-filter:blur(8px) saturate(125%);
 }
 
 @media(max-width:680px){
-  .pf-summary-grid{ grid-template-columns:1fr; gap:12px; }
+  .pf-summary-grid{ grid-template-columns:1fr; gap:6px; }
   .pf-total-pnl{ font-size:22px; }
-  .pf-sticky-header{ top:calc(var(--topbar-h, 56px) + var(--nav-h, 44px)); }
+  .pf-sticky-header{ top:calc(var(--topbar-h) + var(--nav-h)); }
+  .pf-overlay{ padding:4px 8px 16px; }
+  .portfolio-stage{ margin:-18px -20px 0; }
 }
 
 /* Glass card matched to the glowing cyan/blue globe so the scene shows through */
