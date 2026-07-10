@@ -185,8 +185,10 @@
     <div id="view-bots" class="tab-view hidden">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <div>
-          <div style="font-size:18px;font-weight:700">Trading Bots</div>
-          <div style="font-size:12px;color:var(--t2)">RSI + moving average analysis detects dips automatically</div>
+          <div style="font-size:18px;font-weight:700">Trading Bots
+            <span id="bots-mode-badge" class="badge badge-green" style="font-size:10px;vertical-align:middle">● Paper</span>
+          </div>
+          <div style="font-size:12px;color:var(--t2)" id="bots-mode-sub">Showing your Paper account bots · switch account in the top bar or Account tab</div>
         </div>
         <button class="btn btn-primary" onclick="showCreateBotModal()">+ New Bot</button>
       </div>

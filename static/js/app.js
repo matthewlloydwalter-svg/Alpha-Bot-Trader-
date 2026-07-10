@@ -227,6 +227,9 @@ async function setTradingMode(mode) {
     renderPortfolioModeIndicator();
     const pv = document.getElementById("view-portfolio");
     if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
+    // The Bots tab is also mode-filtered — re-render it if it's showing.
+    const bv = document.getElementById("view-bots");
+    if (bv && !bv.classList.contains("hidden")) renderBots();
     toast(`Switched to ${mode} trading`, "success");
   } catch (e) { toast(e, "error"); }
 }
@@ -733,8 +736,40 @@ async function loadBots() {
 
 function renderBots() {
   const el = document.getElementById("bots-list-container");
-  if (!BOTS.length) { el.innerHTML = `<div style="text-align:center;color:var(--t2);padding:20px">No bots yet.</div>`; return; }
-  el.innerHTML = BOTS.map((b) => {
+  if (!el) return;
+
+  // ── Mode-aware view filter (UI ONLY) ──────────────────────────────────
+  // Group the user's bots by the account they're assigned to (bot.mode from
+  // GET /bots). Both arrays are kept so it's clear how the view filters; we
+  // render only the one for the current trading mode. This is purely a display
+  // filter — hidden bots keep running on the backend scheduler untouched.
+  const mode = (USER && USER.trading_mode) || "paper";
+  const activePaperBots = BOTS.filter(b => ((b.mode || "paper") === "paper"));
+  const activeLiveBots  = BOTS.filter(b => ((b.mode || "paper") === "live"));
+  const visible = mode === "live" ? activeLiveBots : activePaperBots;
+
+  // Reflect the active account in the Bots-tab header.
+  const badge = document.getElementById("bots-mode-badge");
+  if (badge) {
+    badge.textContent = mode === "live" ? "⚡ Live" : "● Paper";
+    badge.className = "badge " + (mode === "live" ? "badge-red" : "badge-green");
+    badge.style.fontSize = "10px"; badge.style.verticalAlign = "middle";
+  }
+  const sub = document.getElementById("bots-mode-sub");
+  if (sub) sub.textContent = `Showing your ${mode === "live" ? "Live" : "Paper"} account bots (${visible.length}) · switch account in the top bar or Account tab`;
+
+  if (!visible.length) {
+    const other = mode === "live" ? activePaperBots.length : activeLiveBots.length;
+    el.innerHTML = `<div style="text-align:center;color:var(--t2);padding:20px">No ${mode === "live" ? "Live" : "Paper"} account bots yet.` +
+      (other ? ` You have ${other} bot(s) in your ${mode === "live" ? "Paper" : "Live"} account — switch accounts to see them.` : ` Create one with “+ New Bot”.`) +
+      `</div>`;
+    return;
+  }
+  el.innerHTML = visible.map((b) => {
+    const botMode = (b.mode || "paper");
+    const modeBadge = botMode === "live"
+      ? `<span class="badge badge-mode-live" title="Live trading account">LIVE</span>`
+      : `<span class="badge badge-mode-paper" title="Paper trading account">PAPER</span>`;
     const sigColor = b.last_signal === "BUY" ? "badge-green" : b.last_signal === "SELL" ? "badge-red" : "badge-amber";
     const pos = b.in_position
       ? `<span class="badge badge-blue">In position @ ${formatPrice(b.avg_entry_price)}</span>`
@@ -752,6 +787,7 @@ function renderBots() {
     <div class="bot-card ${b.running ? "running" : "paused"}">
       <div style="display:flex;justify-content:space-between;margin-bottom:10px">
         <div style="font-weight:700">${esc(b.name)}
+          ${modeBadge}
           <span class="badge ${b.running?"badge-green":"badge-amber"}">${b.running?"Running":"Paused"}</span>
           ${b.auto_select ? `<span class="badge badge-purple">Autonomous</span>` : ""}
           ${b.last_signal ? `<span class="badge ${sigColor}">${esc(b.last_signal)}</span>` : ""}

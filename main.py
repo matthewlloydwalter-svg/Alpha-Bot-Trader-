@@ -391,6 +391,7 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "ticker": b.ticker,
             "auto_select": b.auto_select,
             "broker": b.broker,
+            "mode": b.mode or "paper",
             "timeframe": b.timeframe,
             "funds_allocated": b.funds_allocated,
             "is_auto": b.is_auto,
@@ -821,6 +822,7 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
         name=data.get("name") or (f"Autonomous {('OKX' if (data.get('broker') or u.active_broker)=='okx' else 'Alpaca')} Bot" if auto_select else "Unnamed Bot"),
         ticker=ticker_raw,  # None for fully autonomous
         broker=data.get("broker") or (u.active_broker or "alpaca"),
+        mode=(u.trading_mode or "paper"),   # assign the bot to the current account
         timeframe=data.get("timeframe") or "1h",
         funds_allocated=funds,
         is_auto=is_auto, # Added is_auto assignment to stop silent drops
