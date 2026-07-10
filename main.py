@@ -588,6 +588,9 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
             okx_key=creds.get("okx_key"), okx_secret=creds.get("okx_secret"),
             okx_passphrase=creds.get("okx_passphrase"),
             paper=paper,
+            # Preset charts refresh every 15s and must recompute end=now; skip the
+            # short in-process cache so soft refreshes cannot serve a stale window.
+            use_cache=not bool(resolved_preset),
         )
     except BrokerError as e:
         logger.warning("Dashboard data unavailable for %s:%s — %s", ex, symbol, e)
@@ -612,6 +615,17 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
     bot_status = _collect_bot_status(u.id, ex, symbol)
 
     payload = analysis.to_dict()
+    # Surface freshness so the UI can show when the last candle actually is
+    # (helps distinguish "refreshing every 15s" from "last trade was at market close").
+    last_candle_ts = None
+    if analysis.candles:
+        last_candle_ts = analysis.candles[-1].get("time") or analysis.candles[-1].get("ts")
+    data_as_of = None
+    if last_candle_ts:
+        try:
+            data_as_of = datetime.fromtimestamp(int(last_candle_ts), timezone.utc).isoformat()
+        except (TypeError, ValueError, OSError):
+            data_as_of = None
     payload.update({
         "asset_name": asset_name,
         "display_symbol": display,
@@ -621,6 +635,8 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
         "preset": resolved_preset,
         "chart_presets": list(CHART_PRESETS.keys()),
         "start_date": start.isoformat() if start else None,
+        "data_as_of": data_as_of,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
     })
     return payload
 

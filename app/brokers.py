@@ -360,25 +360,41 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
             start = start.astimezone(timezone.utc)
     else:
         per_bar = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "1d": 1440, "1w": 10080}.get(timeframe, 1440)
-        minutes_back = per_bar * limit * 3 + 1440
+        minutes_back = per_bar * max(limit, 1) * 3 + 1440
         start = datetime.now(timezone.utc) - timedelta(minutes=minutes_back)
-    # Debug: log the computed start window so we can trace timeframe bugs
+
+    # Always pin an explicit UTC end. Free-tier Alpaca defaults end to ~15 minutes
+    # ago when omitted; chart presets must recalculate against "now" every refresh.
+    end = datetime.now(timezone.utc)
+    if end <= start:
+        end = start + timedelta(minutes=1)
+
+    # CRITICAL: Alpaca's `limit` is "first N bars after start", NOT "last N bars".
+    # Passing limit with a lookback window therefore returns the OLDEST slice and
+    # drops the most recent candles (exactly the "chart is days behind" bug).
+    # Request the full start→end window (SDK paginates) and trim locally.
     try:
-        logger.info("[BARS] Alpaca request: symbol=%s timeframe=%s limit=%d start=%s",
-                    symbol, timeframe, limit, start.isoformat())
+        logger.info("[BARS] Alpaca request: symbol=%s timeframe=%s limit=%d start=%s end=%s",
+                    symbol, timeframe, limit, start.isoformat(), end.isoformat())
     except Exception:
         pass
 
     client = StockHistoricalDataClient(api_key, secret_key)
 
     def _fetch(feed=None) -> list[dict]:
-        kwargs = dict(symbol_or_symbols=symbol.upper(), timeframe=tf, start=start, limit=limit)
+        kwargs = dict(
+            symbol_or_symbols=symbol.upper(),
+            timeframe=tf,
+            start=start,
+            end=end,
+            # Intentionally omit limit so we receive the full window through "now".
+        )
         if feed is not None:
             kwargs["feed"] = feed
         req = StockBarsRequest(**kwargs)
         bars = client.get_stock_bars(req)
         data = bars.data.get(symbol.upper(), []) if hasattr(bars, "data") else []
-        return [
+        rows = [
             {
                 "ts": int(b.timestamp.timestamp()),
                 "open": float(b.open), "high": float(b.high),
@@ -387,6 +403,8 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
             }
             for b in data
         ]
+        rows.sort(key=lambda r: r["ts"])
+        return rows
 
     try:
         # First attempt — no explicit feed restriction (works for SIP + IEX).
@@ -397,7 +415,9 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
             try:
                 first_ts = datetime.fromtimestamp(rows[0]["ts"], timezone.utc).isoformat()
                 last_ts = datetime.fromtimestamp(rows[-1]["ts"], timezone.utc).isoformat()
-                logger.info("[BARS] Alpaca %s tf=%s returned range %s -> %s", symbol, timeframe, first_ts, last_ts)
+                age_sec = max(0, int(end.timestamp()) - int(rows[-1]["ts"]))
+                logger.info("[BARS] Alpaca %s tf=%s returned range %s -> %s (last bar age %ss)",
+                            symbol, timeframe, first_ts, last_ts, age_sec)
             except Exception:
                 pass
     except AlpacaAPIError as first_err:
@@ -423,7 +443,8 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
             "Outside US market hours there may be no recent IEX data for short timeframes — "
             "try switching to the 1D timeframe or check that the ticker symbol is correct."
         )
-    return rows[-limit:]
+    # Keep the most recent bars for analysis/charting.
+    return rows[-limit:] if limit and limit > 0 else rows
 
 
 def _humanize_alpaca_error(e, key_hint: str = "????") -> str:
@@ -474,6 +495,9 @@ def get_okx_candles(symbol: str, timeframe: str, limit: int,
         exchange = ccxt.okx(cfg)
         if paper and api_key:
             exchange.set_sandbox_mode(True)
+
+        # ccxt's limit is also "from since forward". When a start window is set,
+        # page forward until we reach now so the chart includes the newest bars.
         since = None
         if start is not None:
             if start.tzinfo is None:
@@ -481,13 +505,41 @@ def get_okx_candles(symbol: str, timeframe: str, limit: int,
             else:
                 start = start.astimezone(timezone.utc)
             since = int(start.timestamp() * 1000)
-        raw = exchange.fetch_ohlcv(market_symbol, timeframe=tf, since=since, limit=limit)
+
+        raw: list = []
+        if since is None:
+            raw = exchange.fetch_ohlcv(market_symbol, timeframe=tf, limit=limit)
+        else:
+            cursor = since
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            page_size = min(max(limit, 100), 300)
+            for _ in range(40):  # hard cap pages
+                batch = exchange.fetch_ohlcv(
+                    market_symbol, timeframe=tf, since=cursor, limit=page_size
+                )
+                if not batch:
+                    break
+                raw.extend(batch)
+                last_ms = int(batch[-1][0])
+                if last_ms >= now_ms - 1000:
+                    break
+                next_cursor = last_ms + 1
+                if next_cursor <= cursor:
+                    break
+                cursor = next_cursor
+                if len(batch) < page_size:
+                    break
+
+        # De-dupe + sort, then keep the most recent `limit` bars.
+        by_ts = {}
+        for r in raw:
+            by_ts[int(r[0] / 1000)] = r
+        ordered = [by_ts[k] for k in sorted(by_ts)]
         rows = [{
             "ts": int(r[0] / 1000), "open": float(r[1]), "high": float(r[2]),
             "low": float(r[3]), "close": float(r[4]), "volume": float(r[5] or 0),
-        } for r in raw]
+        } for r in ordered]
         logger.info("[BARS] OKX %s tf=%s -> %d candles", market_symbol, tf, len(rows))
-        # Debug: also log the returned range to detect stale data
         if rows:
             try:
                 first_ts = datetime.fromtimestamp(rows[0]["ts"], timezone.utc).isoformat()
@@ -495,7 +547,7 @@ def get_okx_candles(symbol: str, timeframe: str, limit: int,
                 logger.info("[BARS] OKX %s tf=%s returned range %s -> %s", market_symbol, tf, first_ts, last_ts)
             except Exception:
                 pass
-        return rows[-limit:]
+        return rows[-limit:] if limit and limit > 0 else rows
     except Exception as e:
         raise BrokerError(f"OKX candle fetch failed for {market_symbol}: {e}")
 

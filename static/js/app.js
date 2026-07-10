@@ -1178,6 +1178,18 @@ function renderDashboard(d) {
   document.getElementById("dash-class-badge").textContent = d.asset_class || d.exchange;
   document.getElementById("dash-price").textContent = formatPrice(d.last_price, d.quote);
 
+  const sub = document.getElementById("dash-price-sub");
+  if (sub) {
+    if (d.data_as_of) {
+      const asOf = new Date(d.data_as_of);
+      const ageMin = Math.max(0, Math.round((Date.now() - asOf.getTime()) / 60000));
+      const when = asOf.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      sub.textContent = ageMin <= 1 ? `last bar ${when} (live)` : `last bar ${when} · ${ageMin}m ago`;
+    } else {
+      sub.textContent = "spot price";
+    }
+  }
+
   // Signal badge
   const sig = d.signal || {};
   const sBadge = document.getElementById("dash-signal-badge");
