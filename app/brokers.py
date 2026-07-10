@@ -294,7 +294,8 @@ def _clean_key(raw: str) -> str:
 
 
 def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
-                    api_key: str, secret_key: str) -> list[dict]:
+                    api_key: str, secret_key: str,
+                    start: datetime | None = None) -> list[dict]:
     """
     Fetch historical stock bars from data.alpaca.markets.
 
@@ -307,6 +308,9 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
     (subscription required) we retry with DataFeed.IEX, which is free for every
     Alpaca account.  A 401 always means the key/secret pair itself is wrong —
     we surface the first 4 chars of the key so the user can quickly cross-check.
+
+    Optional ``start`` (UTC datetime) overrides the default lookback window
+    derived from limit × bar duration — used by chart timeframe presets.
     """
     api_key = _clean_key(api_key)
     secret_key = _clean_key(secret_key)
@@ -324,6 +328,15 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
     from alpaca.data.enums import DataFeed
 
+    # Accept both internal codes (1m) and Alpaca-style aliases (1Min).
+    _tf_aliases = {
+        "1Min": "1m", "1MIN": "1m", "1min": "1m",
+        "5Min": "5m", "15Min": "15m", "30Min": "30m",
+        "1Hour": "1h", "1HOUR": "1h", "1hour": "1h",
+        "1Day": "1d", "1Week": "1w",
+    }
+    timeframe = _tf_aliases.get(timeframe, timeframe)
+
     tf_map = {
         "1m": TimeFrame(1, TimeFrameUnit.Minute),
         "5m": TimeFrame(5, TimeFrameUnit.Minute),
@@ -337,13 +350,19 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
     }
     tf = tf_map.get(timeframe, TimeFrame(1, TimeFrameUnit.Day))
 
-    per_bar = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "1d": 1440, "1w": 10080}.get(timeframe, 1440)
-    minutes_back = per_bar * limit * 3 + 1440
-    start = datetime.now(timezone.utc) - timedelta(minutes=minutes_back)
+    if start is not None:
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        else:
+            start = start.astimezone(timezone.utc)
+    else:
+        per_bar = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "1d": 1440, "1w": 10080}.get(timeframe, 1440)
+        minutes_back = per_bar * limit * 3 + 1440
+        start = datetime.now(timezone.utc) - timedelta(minutes=minutes_back)
     # Debug: log the computed start window so we can trace timeframe bugs
     try:
-        logger.info("[BARS] Alpaca request: symbol=%s timeframe=%s limit=%d minutes_back=%d start=%s",
-                    symbol, timeframe, limit, minutes_back, start.isoformat())
+        logger.info("[BARS] Alpaca request: symbol=%s timeframe=%s limit=%d start=%s",
+                    symbol, timeframe, limit, start.isoformat())
     except Exception:
         pass
 
@@ -437,7 +456,8 @@ def _humanize_alpaca_error(e, key_hint: str = "????") -> str:
 
 def get_okx_candles(symbol: str, timeframe: str, limit: int,
                     api_key: str = None, secret_key: str = None,
-                    passphrase: str = None, paper: bool = True) -> list[dict]:
+                    passphrase: str = None, paper: bool = True,
+                    start: datetime | None = None) -> list[dict]:
     """
     Fetch OHLCV candles from OKX. Public market data does NOT require keys,
     so the dashboard works even before a user connects their account.
@@ -451,7 +471,14 @@ def get_okx_candles(symbol: str, timeframe: str, limit: int,
         exchange = ccxt.okx(cfg)
         if paper and api_key:
             exchange.set_sandbox_mode(True)
-        raw = exchange.fetch_ohlcv(market_symbol, timeframe=tf, limit=limit)
+        since = None
+        if start is not None:
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            else:
+                start = start.astimezone(timezone.utc)
+            since = int(start.timestamp() * 1000)
+        raw = exchange.fetch_ohlcv(market_symbol, timeframe=tf, since=since, limit=limit)
         rows = [{
             "ts": int(r[0] / 1000), "open": float(r[1]), "high": float(r[2]),
             "low": float(r[3]), "close": float(r[4]), "volume": float(r[5] or 0),
@@ -473,12 +500,13 @@ def get_okx_candles(symbol: str, timeframe: str, limit: int,
 def get_candles(broker: str, symbol: str, timeframe: str = "1h", limit: int = 200,
                 alpaca_key: str = None, alpaca_secret: str = None,
                 okx_key: str = None, okx_secret: str = None, okx_passphrase: str = None,
-                paper: bool = True) -> list[dict]:
+                paper: bool = True, start: datetime | None = None) -> list[dict]:
     """Unified candle feeder used by both the dashboard API and the bot engine."""
     if broker == "alpaca":
-        return get_alpaca_bars(symbol, timeframe, limit, alpaca_key, alpaca_secret)
+        return get_alpaca_bars(symbol, timeframe, limit, alpaca_key, alpaca_secret, start=start)
     elif broker == "okx":
-        return get_okx_candles(symbol, timeframe, limit, okx_key, okx_secret, okx_passphrase, paper)
+        return get_okx_candles(symbol, timeframe, limit, okx_key, okx_secret, okx_passphrase, paper,
+                               start=start)
     raise BrokerError(f"Unknown broker: {broker}")
 
 

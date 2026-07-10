@@ -1035,64 +1035,116 @@ function filterMarkets() { renderMarkets(); }
 
 /* --- MARKET DASHBOARD --- */
 
-// Maps each UI view to (API timeframe, candle count). These follow the standard
-// TradingView convention: "15m" means 15-minute candles, not a 15-minute window.
-// ~100 bars gives a clean chart without requesting too much data.
-const DASH_TF_MAP = {
-  "15m": { apiTf: "15m",  limit: 100 },  // ~25 hours of 15-min candles
-  "1h":  { apiTf: "1h",   limit: 100 },  // ~4 days of 1-hour candles
-  "1d":  { apiTf: "1d",   limit: 100 },  // ~3 months of daily candles
-  "1w":  { apiTf: "1w",   limit: 100 },  // ~2 years of weekly candles
-  "1mo": { apiTf: "1d",   limit: 30  },  // last 30 daily candles (~1 month)
-  "1y":  { apiTf: "1d",   limit: 365 },  // last 365 daily candles
-  "5y":  { apiTf: "1w",   limit: 260 },  // last ~5 years of weekly candles
-};
+// Chart timeframe presets → backend `preset` codes.
+// Backend maps these to Alpaca-compatible bar size + dynamic UTC start_date:
+//   1D → 1Min / now−1 day
+//   1M → 30Min / now−30 days
+//   3M → 1Hour / now−90 days
+const DASH_PRESETS = ["1D", "1M", "3M"];
+const DASH_REFRESH_MS = 15000;
 
-let DASH_STATE = { exchange: null, symbol: null, view: "1h" };
+let DASH_STATE = { exchange: null, symbol: null, preset: "1D" };
 let DASH_CHART = null, DASH_CANDLE_SERIES = null, DASH_SMA20 = null, DASH_SMA50 = null;
+let DASH_FETCH_SEQ = 0;
+
+function _setDashFetchStatus(busy, text) {
+  const status = document.getElementById("dash-fetch-status");
+  if (status) {
+    status.textContent = text || "Fetching data…";
+    status.classList.toggle("hidden", !busy);
+  }
+}
+
+function syncDashPresetButtons(preset) {
+  document.querySelectorAll("#dash-preset-group .mode-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.getAttribute("data-preset") === preset);
+  });
+}
+
+function stopDashRefreshTimer() {
+  if (window._dashRefreshTimer) {
+    clearInterval(window._dashRefreshTimer);
+    window._dashRefreshTimer = null;
+  }
+}
+
+function startDashRefreshTimer() {
+  stopDashRefreshTimer();
+  window._dashRefreshTimer = setInterval(() => {
+    const modal = document.getElementById("market-dash-modal");
+    if (!modal || modal.classList.contains("hidden")) return;
+    if (!DASH_STATE.exchange || !DASH_STATE.symbol) return;
+    reloadDashboard({ soft: true });
+  }, DASH_REFRESH_MS);
+}
 
 async function openMarketDashboard(exchange, symbol) {
-  DASH_STATE = { exchange, symbol, view: "1h" };
+  DASH_STATE = { exchange, symbol, preset: "1D" };
   document.getElementById("market-dash-modal").classList.remove("hidden");
   document.getElementById("dash-symbol").textContent = symbol;
   document.getElementById("dash-name").textContent = "Loading asset…";
   document.getElementById("dash-price").textContent = "—";
-  const sel = document.getElementById("dash-tf-select");
-  if (sel) sel.value = "1h";
+  syncDashPresetButtons("1D");
+  startDashRefreshTimer();
   await reloadDashboard();
 }
 
 function closeMarketDashboard() {
   document.getElementById("market-dash-modal").classList.add("hidden");
+  stopDashRefreshTimer();
+  _setDashFetchStatus(false);
   if (DASH_CHART) { try { DASH_CHART.remove(); } catch (_) {} DASH_CHART = null; }
   DASH_CANDLE_SERIES = DASH_SMA20 = DASH_SMA50 = null;
 }
 
-function changeDashTimeframe(view) {
-  DASH_STATE.view = view;
-  const sel = document.getElementById("dash-tf-select");
-  if (sel && sel.value !== view) sel.value = view;
+function setDashPreset(preset) {
+  const code = String(preset || "1D").toUpperCase();
+  if (!DASH_PRESETS.includes(code)) return;
+  if (DASH_STATE.preset === code) {
+    // Re-clicking the active preset still forces a fresh fetch with a new start_date.
+  }
+  DASH_STATE.preset = code;
+  syncDashPresetButtons(code);
+  // Restart the 15s timer so the next tick is relative to this switch, and
+  // immediately fetch with the new date range + timeframe.
+  startDashRefreshTimer();
   reloadDashboard();
 }
 
-async function reloadDashboard() {
-  const { exchange, symbol, view } = DASH_STATE;
+// Back-compat alias if anything still calls the old select handler.
+function changeDashTimeframe(view) {
+  const map = { "1d": "1D", "1mo": "1M", "1h": "3M", "15m": "1D", "1w": "3M", "1y": "3M", "5y": "3M" };
+  setDashPreset(map[view] || "1D");
+}
+
+async function reloadDashboard(opts) {
+  const soft = !!(opts && opts.soft);
+  const { exchange, symbol, preset } = DASH_STATE;
   if (!exchange || !symbol) return;
-  const { apiTf, limit } = DASH_TF_MAP[view] || DASH_TF_MAP["1h"];
+  const seq = ++DASH_FETCH_SEQ;
   const msg = document.getElementById("dash-chart-msg");
-  msg.classList.remove("hidden");
-  msg.textContent = "Loading market data…";
+  _setDashFetchStatus(true, "Fetching data…");
+  if (!soft && msg) {
+    msg.classList.remove("hidden");
+    msg.textContent = "Fetching data…";
+  }
   try {
-    const url = `/api/markets/${exchange}/${symbol}/dashboard?timeframe=${encodeURIComponent(apiTf)}&limit=${limit}`;
-    console.log("[DASHBOARD] fetching", { exchange, symbol, view, apiTf, limit, url });
+    const url = `/api/markets/${exchange}/${symbol}/dashboard?preset=${encodeURIComponent(preset || "1D")}`;
+    console.log("[DASHBOARD] fetching", { exchange, symbol, preset, url, soft });
     const d = await api(url);
-    if (DASH_STATE.symbol !== symbol || DASH_STATE.view !== view) return; // stale
+    // Ignore stale responses if the user switched presets mid-flight.
+    if (seq !== DASH_FETCH_SEQ || DASH_STATE.symbol !== symbol || DASH_STATE.preset !== preset) return;
     renderDashboard(d);
   } catch (e) {
-    msg.classList.remove("hidden");
-    msg.textContent = `⚠ ${e.message}`;
+    if (seq !== DASH_FETCH_SEQ) return;
+    if (msg) {
+      msg.classList.remove("hidden");
+      msg.textContent = `⚠ ${e.message}`;
+    }
     document.getElementById("dash-bot-status").innerHTML =
       `<span style="color:var(--red)">${esc(e.message)}</span>`;
+  } finally {
+    if (seq === DASH_FETCH_SEQ) _setDashFetchStatus(false);
   }
 }
 

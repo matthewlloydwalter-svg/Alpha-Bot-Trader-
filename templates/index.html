@@ -428,18 +428,14 @@
     </div>
 
     <div class="dash-toolbar">
-      <div style="display:flex;align-items:center;gap:8px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <label style="font-size:11px;color:var(--t3);white-space:nowrap;">Timeframe</label>
-        <select id="dash-tf-select" onchange="changeDashTimeframe(this.value)"
-          style="background:#1a1e28;color:#e2e8f0;border:1px solid #2a2f3d;border-radius:6px;padding:4px 10px;font-size:13px;cursor:pointer;outline:none;">
-          <option value="15m">15 Min</option>
-          <option value="1h" selected>1 Hour</option>
-          <option value="1d">1 Day</option>
-          <option value="1w">1 Week</option>
-          <option value="1mo">1 Month</option>
-          <option value="1y">1 Year</option>
-          <option value="5y">5 Years</option>
-        </select>
+        <div id="dash-preset-group" class="mode-toggle dash-preset-group" role="group" aria-label="Chart timeframe presets">
+          <button type="button" class="mode-btn active" data-preset="1D" onclick="setDashPreset('1D')">1D</button>
+          <button type="button" class="mode-btn" data-preset="1M" onclick="setDashPreset('1M')">1M</button>
+          <button type="button" class="mode-btn" data-preset="3M" onclick="setDashPreset('3M')">3M</button>
+        </div>
+        <span id="dash-fetch-status" class="dash-fetch-status hidden">Fetching data…</span>
       </div>
       <button class="btn btn-sm" onclick="reloadDashboard()">🔄 Refresh</button>
     </div>
