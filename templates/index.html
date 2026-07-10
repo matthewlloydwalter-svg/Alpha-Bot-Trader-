@@ -11,67 +11,77 @@
 <div id="toast-container" class="toast-wrap"></div>
 
 <div id="auth-screen">
-  <div class="auth-wrap">
-    <div style="width:100%;max-width:520px">
-      <div style="text-align:center;margin-bottom:2rem">
-        <img src="/static/images/alphabot-trading-logo.png" alt="{{ PLATFORM_NAME }} logo" class="auth-logo">
-        <div class="brand-title" style="font-size:28px;font-weight:700;letter-spacing:-.5px;line-height:1.15">AlphaBotix Trading</div>
-        <div style="font-size:14px;color:var(--t2);margin-top:8px">AI-powered autonomous trading</div>
-      </div>
-      
-      <div class="card" id="login-card">
-        <form onsubmit="handleLogin(event)">
-          <div style="display:flex;flex-direction:column;gap:16px">
-            <label class="field">Email Address
-              <input type="email" id="login-email" required placeholder="you@example.com">
-            </label>
-            <div class="field">
-              <label for="login-password">Password</label>
-              <div class="input-icon-wrap">
-                <input type="password" id="login-password" required placeholder="••••••••">
-                <img src="/static/images/hide-password.png" id="robot-login" onclick="togglePassword('login-password', 'robot-login', event)">
-              </div>
+  <!-- Same three-column shell as Portfolio (dash-shell): side gutters + centered main card.
+       Ad slots are structural spacers only — hidden/empty so login stays clean. -->
+  <div class="page dash-shell auth-shell">
+    <aside class="ad-sidebar ad-sidebar-left auth-no-ads is-empty" aria-hidden="true"></aside>
+    <div class="dash-main">
+      <div class="tab-stage auth-stage">
+        <div class="pf-overlay auth-overlay">
+          <div class="auth-panel">
+            <div class="auth-brand">
+              <img src="/static/images/alphabot-trading-logo.png" alt="{{ PLATFORM_NAME }} logo" class="auth-logo">
+              <div class="brand-title auth-brand-title">AlphaBotix Trading</div>
+              <div class="auth-brand-sub">AI-powered autonomous trading</div>
             </div>
-            <button type="submit" class="btn btn-primary" style="width:100%;margin-top:6px">Sign In</button>
-          </div>
-        </form>
-        <div style="text-align:center;margin-top:16px;font-size:13px;color:var(--t2)">
-          Don't have an account? <a href="#" onclick="toggleAuthMode(false)" style="color:var(--blue);text-decoration:none">Create one</a>
-        </div>
-      </div>
 
-      <div class="card hidden" id="register-card">
-        <form onsubmit="handleRegister(event)">
-          <div style="display:flex;flex-direction:column;gap:16px">
-            <label class="field">Email Address
-              <input type="email" id="reg-email" required placeholder="you@example.com">
-            </label>
-            <div class="field">
-              <label for="reg-password">Password</label>
-              <div class="input-icon-wrap">
-                <input type="password" id="reg-password" required placeholder="Minimum 6 characters">
-                <img src="/static/images/hide-password.png" id="robot-reg" onclick="togglePassword('reg-password', 'robot-reg', event)">
+            <div class="card" id="login-card">
+              <form onsubmit="handleLogin(event)">
+                <div style="display:flex;flex-direction:column;gap:16px">
+                  <label class="field">Email Address
+                    <input type="email" id="login-email" required placeholder="you@example.com">
+                  </label>
+                  <div class="field">
+                    <label for="login-password">Password</label>
+                    <div class="input-icon-wrap">
+                      <input type="password" id="login-password" required placeholder="••••••••">
+                      <img src="/static/images/hide-password.png" id="robot-login" onclick="togglePassword('login-password', 'robot-login', event)">
+                    </div>
+                  </div>
+                  <button type="submit" class="btn btn-primary" style="width:100%;margin-top:6px">Sign In</button>
+                </div>
+              </form>
+              <div style="text-align:center;margin-top:16px;font-size:13px;color:var(--t2)">
+                Don't have an account? <a href="#" onclick="toggleAuthMode(false)" style="color:var(--blue);text-decoration:none">Create one</a>
               </div>
             </div>
-            <div class="field">
-              <label for="reg-confirm">Confirm Password</label>
-              <div class="input-icon-wrap">
-                <input type="password" id="reg-confirm" required placeholder="Confirm password">
-                <img src="/static/images/hide-password.png" id="robot-reg-confirm" onclick="togglePassword('reg-confirm', 'robot-reg-confirm', event)">
+
+            <div class="card hidden" id="register-card">
+              <form onsubmit="handleRegister(event)">
+                <div style="display:flex;flex-direction:column;gap:16px">
+                  <label class="field">Email Address
+                    <input type="email" id="reg-email" required placeholder="you@example.com">
+                  </label>
+                  <div class="field">
+                    <label for="reg-password">Password</label>
+                    <div class="input-icon-wrap">
+                      <input type="password" id="reg-password" required placeholder="Minimum 6 characters">
+                      <img src="/static/images/hide-password.png" id="robot-reg" onclick="togglePassword('reg-password', 'robot-reg', event)">
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label for="reg-confirm">Confirm Password</label>
+                    <div class="input-icon-wrap">
+                      <input type="password" id="reg-confirm" required placeholder="Confirm password">
+                      <img src="/static/images/hide-password.png" id="robot-reg-confirm" onclick="togglePassword('reg-confirm', 'robot-reg-confirm', event)">
+                    </div>
+                  </div>
+                  <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--t2);cursor:pointer;line-height:1.6">
+                    <input type="checkbox" id="reg-tos" style="width:auto;margin-top:3px;accent-color:var(--blue);flex-shrink:0" required>
+                    <span>I agree to the <a href="#" onclick="openTosModal(event)" style="color:var(--blue)">Terms of Service</a>.</span>
+                  </label>
+                  <button type="submit" class="btn btn-primary" style="width:100%;margin-top:6px">Create Account</button>
+                </div>
+              </form>
+              <div style="text-align:center;margin-top:16px;font-size:12px;color:var(--t2)">
+                Already have an account? <a href="#" onclick="toggleAuthMode(true)" style="color:var(--blue);text-decoration:none">Sign In</a>
               </div>
             </div>
-            <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--t2);cursor:pointer;line-height:1.6">
-              <input type="checkbox" id="reg-tos" style="width:auto;margin-top:3px;accent-color:var(--blue);flex-shrink:0" required>
-              <span>I agree to the <a href="#" onclick="openTosModal(event)" style="color:var(--blue)">Terms of Service</a>.</span>
-            </label>
-            <button type="submit" class="btn btn-primary" style="width:100%;margin-top:6px">Create Account</button>
           </div>
-        </form>
-        <div style="text-align:center;margin-top:16px;font-size:12px;color:var(--t2)">
-          Already have an account? <a href="#" onclick="toggleAuthMode(true)" style="color:var(--blue);text-decoration:none">Sign In</a>
         </div>
       </div>
     </div>
+    <aside class="ad-sidebar ad-sidebar-right auth-no-ads is-empty" aria-hidden="true"></aside>
   </div>
 </div>
 
