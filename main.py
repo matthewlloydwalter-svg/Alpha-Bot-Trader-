@@ -421,6 +421,12 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             unrealized_pl = (current_price - entry_price) * (b.shares_held or 0)
 
         display_stop_price, display_take_profit_price = bot_engine._get_display_risk_targets(entry_price)
+        strategy_state = bot_engine._load_strategy_state(b)
+        scattershot_legs = strategy_state.get("legs") if (b.low_balance_strategy or "standard").lower() == "scattershot" else None
+        swing_hold_days = None
+        if (b.low_balance_strategy or "standard").lower() == "swing_trader" and b.position_opened_at and b.in_position:
+            held = (datetime.utcnow() - b.position_opened_at).total_seconds() / 86400.0
+            swing_hold_days = round(max(0.0, held), 1)
         rows.append({
             "id": b.id,
             "name": b.name,
@@ -428,7 +434,11 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "auto_select": b.auto_select,
             "low_balance_strategy": b.low_balance_strategy or "standard",
             "low_balance_strategy_label": bot_engine._strategy_label(b.low_balance_strategy),
+            "low_balance_strategy_tooltip": bot_engine._strategy_tooltip(b.low_balance_strategy),
             "strategy_cooldown_until": b.strategy_cooldown_until.isoformat() if b.strategy_cooldown_until else None,
+            "scattershot_legs": scattershot_legs,
+            "position_opened_at": b.position_opened_at.isoformat() if b.position_opened_at else None,
+            "swing_hold_days": swing_hold_days,
             "broker": b.broker,
             "mode": b.mode or "paper",
             "timeframe": b.timeframe,
@@ -835,6 +845,8 @@ def _broker_available_funds(user: User) -> Optional[float]:
 
 def _validate_cash_account_strategy_allocation(user: User, broker: str, strategy: str, funds: float) -> None:
     """Reject allocations that would violate GFV-safe low-balance strategy limits."""
+    if strategy == "scattershot" and (broker or "alpaca").lower() != "alpaca":
+        raise HTTPException(status_code=400, detail="Scattershot is available for Alpaca equities only.")
     if (broker or "alpaca").lower() != "alpaca":
         return
     try:
@@ -852,9 +864,11 @@ def _validate_cash_account_strategy_allocation(user: User, broker: str, strategy
                 f"Cash Alpaca account non-marginable buying power (${non_marginable:.2f}) insufficient "
                 f"for One-Shot Daily allocation of ${funds:.2f}. Reduce allocation or switch account type."))
     if strategy in ("micro_trader", "scattershot"):
-        if non_marginable is None or non_marginable < 1.0 - 1e-6:
+        min_needed = 5.0 if strategy == "scattershot" else 1.0
+        if non_marginable is None or non_marginable < min_needed - 1e-6:
             raise HTTPException(status_code=400, detail=(
-                "Cash Alpaca account non-marginable buying power insufficient for $1 micro trades; "
+                f"Cash Alpaca account non-marginable buying power insufficient for "
+                f"{'$5 scattershot basket' if strategy == 'scattershot' else '$1 micro trades'}; "
                 "add funds or use a margin account."))
 
 

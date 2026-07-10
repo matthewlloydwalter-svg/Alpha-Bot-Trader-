@@ -765,8 +765,14 @@ function setBotMode(m) {
 function updateLowBalanceStrategyHint() {
   const el = document.getElementById("b-low-balance-strategy");
   const hint = document.getElementById("low-balance-strategy-hint");
+  const tooltip = document.getElementById("low-balance-strategy-tooltip");
   if (!el || !hint) return;
-  hint.textContent = LOW_BALANCE_DESCRIPTIONS[el.value] || LOW_BALANCE_DESCRIPTIONS.standard;
+  const desc = LOW_BALANCE_DESCRIPTIONS[el.value] || LOW_BALANCE_DESCRIPTIONS.standard;
+  hint.textContent = desc;
+  if (tooltip) {
+    tooltip.textContent = desc;
+    tooltip.classList.toggle("hidden", !desc);
+  }
 }
 
 // Show the low-balance description on hover/focus for better discoverability.
@@ -890,6 +896,12 @@ function renderBots() {
     const cooldownNote = (b.strategy_cooldown_until && new Date(b.strategy_cooldown_until) > new Date())
       ? `<span class="badge badge-amber" title="Settlement cooldown active">Cooldown</span>`
       : "";
+    const scattershotNote = (b.scattershot_legs && b.scattershot_legs.length)
+      ? `<span class="badge badge-purple" title="${esc(b.scattershot_legs.map(l => l.ticker).join(', '))}">${b.scattershot_legs.length}-leg basket</span>`
+      : "";
+    const swingNote = (b.low_balance_strategy === "swing_trader" && b.in_position && typeof b.swing_hold_days === "number")
+      ? `<span class="badge badge-blue" title="Minimum 3-day swing hold">Day ${b.swing_hold_days}</span>`
+      : "";
     const chartBtn = b.ticker
       ? `<button class="btn btn-sm" onclick="openMarketDashboard('${esc(b.broker||'alpaca')}','${esc(b.ticker)}')">📈 Chart</button>`
       : "";
@@ -916,7 +928,7 @@ function renderBots() {
       ${haltRow}
       <div style="color:var(--t2);font-size:12px;margin-bottom:8px">
         ${assetLabel} · ${esc((b.broker||"alpaca").toUpperCase())} · ${esc(b.timeframe||"1h")} |
-        Strategy: ${esc(strategyLabel)} ${cooldownNote} |
+        Strategy: ${esc(strategyLabel)} ${cooldownNote} ${scattershotNote} ${swingNote} |
         Funds: $${b.funds_allocated} | Trades: ${b.trade_count} |
         P&L: <span style="color:${pnlColor}">${fmtSignedMoney(livePnl)}</span>
       </div>

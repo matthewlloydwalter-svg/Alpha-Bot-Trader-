@@ -59,6 +59,47 @@ def market_open_for_broker(broker: str | None, now_utc: datetime | None = None) 
     return is_market_open(now_utc)
 
 
+def session_date_et(now_utc: datetime | None = None) -> str:
+    """Return the current US equities session date as YYYY-MM-DD in ET."""
+    return _now_et(now_utc).strftime("%Y-%m-%d")
+
+
+def minutes_since_open(now_utc: datetime | None = None) -> float | None:
+    """Minutes elapsed since today's 09:30 ET open, or None if the market is closed."""
+    et = _now_et(now_utc)
+    if et.weekday() >= 5:
+        return None
+    open_t = et.replace(hour=OPEN_H, minute=OPEN_M, second=0, microsecond=0)
+    close_t = et.replace(hour=CLOSE_H, minute=CLOSE_M, second=0, microsecond=0)
+    if et < open_t or et >= close_t:
+        return None
+    return (et - open_t).total_seconds() / 60.0
+
+
+def minutes_until_close(now_utc: datetime | None = None) -> float | None:
+    """Minutes remaining until today's 16:00 ET close, or None if the market is closed."""
+    et = _now_et(now_utc)
+    if et.weekday() >= 5:
+        return None
+    open_t = et.replace(hour=OPEN_H, minute=OPEN_M, second=0, microsecond=0)
+    close_t = et.replace(hour=CLOSE_H, minute=CLOSE_M, second=0, microsecond=0)
+    if et < open_t or et >= close_t:
+        return None
+    return (close_t - et).total_seconds() / 60.0
+
+
+def is_open_entry_window(window_minutes: int = 45, now_utc: datetime | None = None) -> bool:
+    """True during the first ``window_minutes`` after the regular session open."""
+    mins = minutes_since_open(now_utc)
+    return mins is not None and 0 <= mins <= window_minutes
+
+
+def is_eod_exit_window(window_minutes: int = 20, now_utc: datetime | None = None) -> bool:
+    """True during the final ``window_minutes`` before the regular session close."""
+    mins = minutes_until_close(now_utc)
+    return mins is not None and 0 <= mins <= window_minutes
+
+
 def market_status(now_utc: datetime | None = None) -> dict:
     """Serializable market-status payload for the frontend.
 

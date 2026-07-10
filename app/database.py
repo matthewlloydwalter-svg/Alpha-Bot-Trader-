@@ -122,6 +122,8 @@ class Bot(Base):
     running = Column(Boolean, default=False)
     low_balance_strategy = Column(String, nullable=True, default="standard")
     strategy_cooldown_until = Column(DateTime, nullable=True)
+    strategy_state = Column(String, nullable=True)   # JSON blob for multi-leg / session state
+    position_opened_at = Column(DateTime, nullable=True)
 
     # ── First-buy price gate (optional manual entry trigger) ──
     first_buy_price = Column(Float, nullable=True)
@@ -213,6 +215,8 @@ _MIGRATIONS = {
         "running": "BOOLEAN DEFAULT FALSE",
         "low_balance_strategy": "VARCHAR DEFAULT 'standard'",
         "strategy_cooldown_until": "TIMESTAMP",
+        "strategy_state": "TEXT",
+        "position_opened_at": "TIMESTAMP",
         # Entry price gate
         "first_buy_price": "FLOAT",
         "first_buy_done": "BOOLEAN DEFAULT FALSE",
