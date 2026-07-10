@@ -833,7 +833,7 @@ function renderBots() {
     const pos = b.in_position
       ? `<span class="badge badge-blue">In position</span>`
       : `<span class="badge badge-amber">Flat — scanning</span>`;
-    const pnlColor = livePnl >= 0 ? "var(--green)" : "var(--red)";
+    const pnlColor = livePnl >= 0 ? PF_GREEN : PF_RED;
     const assetLabel = b.ticker ? esc(b.ticker) : (b.auto_select ? "🧠 Auto-select (all markets)" : "Auto");
     const chartBtn = b.ticker
       ? `<button class="btn btn-sm" onclick="openMarketDashboard('${esc(b.broker||'alpaca')}','${esc(b.ticker)}')">📈 Chart</button>`
@@ -862,7 +862,7 @@ function renderBots() {
       <div style="color:var(--t2);font-size:12px;margin-bottom:8px">
         ${assetLabel} · ${esc((b.broker||"alpaca").toUpperCase())} · ${esc(b.timeframe||"1h")} |
         Funds: $${b.funds_allocated} | Trades: ${b.trade_count} |
-        P&L: <span style="color:${pnlColor}">${livePnl>=0?"+":""}$${Number(livePnl||0).toFixed(2)}</span>
+        P&L: <span style="color:${pnlColor}">${fmtSignedMoney(livePnl)}</span>
       </div>
       <div style="margin-bottom:8px">${pos}
         ${b.in_position && entryPrice ? `<span class="ind-pill">Entry ${formatPrice(entryPrice)}</span>` : ""}
