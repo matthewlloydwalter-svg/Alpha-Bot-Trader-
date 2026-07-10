@@ -438,6 +438,12 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 .holo-lbl{ font-size:10px; font-weight:700; letter-spacing:1.2px; text-transform:uppercase;
   color:var(--holo); text-shadow:0 0 10px rgba(57,217,255,0.45); margin-bottom:8px; }
 
+.pf-mode-bar{ display:flex; align-items:center; justify-content:space-between; gap:12px;
+  flex-wrap:wrap; margin-bottom:16px; padding-bottom:14px;
+  border-bottom:1px solid rgba(57,217,255,0.15); }
+.pf-mode-title{ display:flex; align-items:center; gap:10px; font-size:16px; font-weight:800;
+  letter-spacing:-.2px; color:#eaf6ff; text-shadow:0 0 14px rgba(57,217,255,0.25); }
+.pf-mode-toggle{ flex:0 0 auto; }
 .holo-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; }
 .holo-total-value{ font-size:38px; font-weight:800; letter-spacing:-0.5px; line-height:1.05;
   color:#fff; text-shadow:0 0 18px rgba(57,217,255,0.35); font-variant-numeric:tabular-nums; }
