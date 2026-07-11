@@ -14,7 +14,18 @@ EMAIL_FROM = (
 SESSION_COOKIE_SECURE = _env_flag("SESSION_COOKIE_SECURE", "0")
 
 APP_ENV = (os.getenv("ENV") or os.getenv("APP_ENV") or "development").strip().lower()
-_IS_PROD = APP_ENV in {"production", "prod", "railway"} or bool(os.getenv("RAILWAY_ENVIRONMENT"))
+IS_PROD = APP_ENV in {"production", "prod", "railway"} or bool(os.getenv("RAILWAY_ENVIRONMENT"))
+_IS_PROD = IS_PROD  # backward-compatible alias
+
+# Admin AI disk writes — off in production unless explicitly enabled.
+ADMIN_AI_WRITES = _env_flag("ADMIN_AI_WRITES", "0")
+
+# Free-tier bot cap for non-admins. 0 = unlimited (current default).
+# Stripe tiers can override this later via a subscription_tier column.
+try:
+    FREE_BOT_LIMIT = int(os.getenv("FREE_BOT_LIMIT", "0") or 0)
+except ValueError:
+    FREE_BOT_LIMIT = 0
 
 # Comma-separated browser origins allowed for credentialed CORS.
 _raw_origins = (os.getenv("FRONTEND_ORIGIN") or "").strip()

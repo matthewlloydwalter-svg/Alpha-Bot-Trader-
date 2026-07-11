@@ -26,7 +26,10 @@ from app.auth import (
     create_password_reset_token, decode_password_reset_token,
     is_user_admin, PLATFORM_NAME, get_current_user, EmailError
 )
-from app.config import SESSION_COOKIE_SECURE, FRONTEND_ORIGINS, DOCS_ENABLED, APP_ENV
+from app.config import (
+    SESSION_COOKIE_SECURE, FRONTEND_ORIGINS, DOCS_ENABLED, APP_ENV, IS_PROD,
+    ADMIN_AI_WRITES, FREE_BOT_LIMIT, RESEND_API_KEY,
+)
 from app.brokers import get_account_info, get_spot_price, get_position_snapshot, BrokerError
 from app.market_data import get_market_analysis, resolve_chart_preset, CHART_PRESETS
 from app.markets_universe import MARKET_UNIVERSE
@@ -42,16 +45,37 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 logger = logging.getLogger("alphabot")
 
 
+def _assert_production_config() -> None:
+    """Fail closed on missing launch-critical secrets in production."""
+    if not IS_PROD:
+        return
+    key_secret = (os.getenv("KEY_ENCRYPTION_SECRET") or "").strip()
+    if len(key_secret) < 24:
+        raise RuntimeError(
+            "KEY_ENCRYPTION_SECRET must be set to a unique secret of at least 24 "
+            "characters in production so broker API keys are encrypted at rest."
+        )
+    if not RESEND_API_KEY:
+        raise RuntimeError(
+            "RESEND_API_KEY must be set in production for email verification "
+            "and password reset."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Capture the running event loop so background worker threads can stream
     # events to SSE subscribers, then start the always-on background engine.
+    _assert_production_config()
     try:
         bus.bind_loop(asyncio.get_running_loop())
     except RuntimeError:
         pass
     engine_scheduler.start_scheduler()
-    logger.info("[STARTUP] %s engine core online.", PLATFORM_NAME)
+    logger.info(
+        "[STARTUP] %s engine core online (env=%s, free_bot_limit=%s).",
+        PLATFORM_NAME, APP_ENV, FREE_BOT_LIMIT or "unlimited",
+    )
     try:
         yield
     finally:
@@ -74,6 +98,19 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    if IS_PROD:
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -188,7 +225,48 @@ def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=401, detail="User record context purged.")
+    try:
+        token_sv = int(payload.get("sv", 0))
+    except (TypeError, ValueError):
+        token_sv = 0
+    if token_sv != int(user.session_version or 0):
+        raise HTTPException(status_code=401, detail="Session expired. Please sign in again.")
     return user
+
+
+def _issue_session(response: Response, request: Request, user: User) -> None:
+    token = create_session_token(user.id, user.email, session_version=int(user.session_version or 0))
+    response.set_cookie(key="session_token", value=token, **_cookie_kwargs(request=request))
+
+
+def _bump_session_version(user: User) -> None:
+    user.session_version = int(user.session_version or 0) + 1
+
+
+def _user_bot_limit(user: User) -> Optional[int]:
+    """
+    Max bots this user may create. None = unlimited.
+    Admins are always unlimited. FREE_BOT_LIMIT=0 means unlimited for everyone
+    (current public default). Stripe tiers can map onto this later.
+    """
+    if user.is_admin or is_user_admin(user.email or ""):
+        return None
+    return FREE_BOT_LIMIT if FREE_BOT_LIMIT > 0 else None
+
+
+def _enforce_bot_create_limit(user: User, db: Session) -> None:
+    limit = _user_bot_limit(user)
+    if limit is None:
+        return
+    count = db.query(Bot).filter(Bot.owner_id == user.id).count()
+    if count >= limit:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Free accounts can run up to {limit} bot"
+                f"{'s' if limit != 1 else ''}. Upgrade your plan to create more."
+            ),
+        )
 
 def _html_page(request: Request, template_name: str = "index.html", **extra):
     """Render an HTML template with cache-busting asset version always set."""
@@ -203,6 +281,17 @@ def _html_page(request: Request, template_name: str = "index.html", **extra):
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         resp.headers["Pragma"] = "no-cache"
     return resp
+
+
+@app.get("/health")
+def health():
+    """Lightweight liveness probe for Railway / uptime monitors."""
+    return {
+        "status": "ok",
+        "env": APP_ENV,
+        "engine": os.getenv("ENGINE_ENABLED", "1"),
+        "time": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -279,8 +368,7 @@ def register_endpoint(body: AuthModel, response: Response, request: Request, db:
         raise HTTPException(status_code=400, detail="Email already registered in system databases.")
     db.refresh(new_user)
     
-    token = create_session_token(new_user.id, new_user.email)
-    response.set_cookie(key="session_token", value=token, **_cookie_kwargs(request=request))
+    _issue_session(response, request, new_user)
     return {"id": new_user.id, "email": new_user.email, "is_admin": new_user.is_admin, "email_verified": new_user.email_verified}
 
 @app.post("/auth/login")
@@ -291,8 +379,7 @@ def login_endpoint(body: AuthModel, response: Response, request: Request, db: Se
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Invalid credential combination supplied.")
         
-    token = create_session_token(user.id, user.email)
-    response.set_cookie(key="session_token", value=token, **_cookie_kwargs(request=request))
+    _issue_session(response, request, user)
 
     return {
         "id": user.id,
@@ -306,12 +393,21 @@ def login_endpoint(body: AuthModel, response: Response, request: Request, db: Se
     }
 
 @app.get("/auth/me")
-def current_user_endpoint(u: User = Depends(get_current_user_from_cookie)):
+def current_user_endpoint(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    limit = _user_bot_limit(u)
+    bot_count = db.query(Bot).filter(Bot.owner_id == u.id).count()
     return {
         "id": u.id,
         "email": u.email,
         "is_admin": u.is_admin,
         "email_verified": u.email_verified,
+        "trading_mode": u.trading_mode or "paper",
+        "active_broker": u.active_broker or "alpaca",
+        "total_deposited": u.total_deposited or 0.0,
+        "total_withdrawn": u.total_withdrawn or 0.0,
+        "bot_count": bot_count,
+        "bot_limit": limit,  # null = unlimited
+    }
         "trading_mode": u.trading_mode or "paper",
         "active_broker": u.active_broker or "alpaca",
         "total_deposited": u.total_deposited or 0.0,
@@ -348,7 +444,8 @@ def trigger_verification(request: Request, u: User = Depends(get_current_user_fr
     return {"success": True}
 
 @app.post("/auth/confirm-verification")
-def confirm_verification(body: VerificationChallengeModel, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+def confirm_verification(body: VerificationChallengeModel, request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    limit_verification(request)
     stored = (u.verification_code or "").strip()
     # Password-reset codes are namespaced so they cannot confirm email verify.
     if not stored or stored.startswith("rp:") or stored != body.code.strip():
@@ -446,8 +543,9 @@ def password_reset_confirm(body: PasswordResetConfirmModel, request: Request, db
 
     user.hashed_password = hash_password(body.password)
     user.verification_code = None
+    _bump_session_version(user)
     db.commit()
-    logger.info("[AUTH] Password reset completed for user %s", user.id)
+    logger.info("[AUTH] Password reset completed for user %s (sessions invalidated)", user.id)
     return {"success": True, "detail": "Password updated. You can sign in with your new password."}
 
 @app.post("/broker/alpaca/keys")
@@ -521,9 +619,37 @@ async def set_trading_mode(request: Request, u: User = Depends(get_current_user_
                 status_code=403,
                 detail=f"Save valid Live {broker.upper()} API keys in Account before enabling Live trading.",
             )
+    previous = (u.trading_mode or "paper").lower()
     u.trading_mode = mode
+
+    # Switching the account UI to Paper must not leave Live bots running in the
+    # background. Pause any running bots assigned to the mode we are leaving.
+    paused_ids: list[int] = []
+    if previous != mode:
+        leaving = previous
+        running_bots = (
+            db.query(Bot)
+            .filter(
+                Bot.owner_id == u.id,
+                Bot.running == True,  # noqa: E712
+            )
+            .all()
+        )
+        for b in running_bots:
+            bot_mode = (b.mode or previous).lower()
+            if bot_mode == leaving:
+                b.running = False
+                paused_ids.append(b.id)
+                b.last_pattern_summary = (
+                    f"Paused automatically — account switched from {leaving} to {mode}."
+                )
+
     db.commit()
-    return {"trading_mode": u.trading_mode}
+    return {
+        "trading_mode": u.trading_mode,
+        "paused_bots": paused_ids,
+        "paused_count": len(paused_ids),
+    }
 
 @app.post("/broker/switch")
 async def switch_broker(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
@@ -553,7 +679,11 @@ def get_broker_account(u: User = Depends(get_current_user_from_cookie)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.warning("broker account lookup failed for user %s: %s", u.id, e)
+        detail = "Could not reach the broker account. Check your API keys and try again."
+        if not IS_PROD:
+            detail = f"{detail} ({e})"
+        raise HTTPException(status_code=400, detail=detail)
 
 @app.get("/broker/trades-ledger")
 def get_trades_ledger(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
@@ -1232,6 +1362,7 @@ def _validate_cash_account_strategy_allocation(user: User, broker: str, strategy
 
 @app.post("/bots")
 async def create_bot(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    _enforce_bot_create_limit(u, db)
     data = await request.json()
 
     def _num(key):
@@ -1556,6 +1687,11 @@ def ai_audit(body: AIAuditModel, request: Request, db: Session = Depends(get_db)
 @app.post("/admin/ai/approve")
 def ai_approve(body: AIProposalModel, request: Request, db: Session = Depends(get_db)):
     """APPROVE — explicitly apply a previously-previewed proposal to disk."""
+    if IS_PROD and not ADMIN_AI_WRITES:
+        raise HTTPException(
+            status_code=403,
+            detail="AI code writes are disabled in production. Set ADMIN_AI_WRITES=1 only for controlled maintenance.",
+        )
     u = _require_admin(request, db)
     try:
         result = ai_assistant.apply_proposal(body.proposal_id)

@@ -64,6 +64,8 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     email_verified = Column(Boolean, default=False)
     verification_code = Column(String, nullable=True)
+    # Bumped on password reset so existing session JWTs stop working.
+    session_version = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     trading_mode = Column(String, default="paper")
     active_broker = Column(String, default="alpaca")
@@ -255,6 +257,7 @@ _MIGRATIONS = {
         "total_withdrawn": "FLOAT DEFAULT 0",
         "email_verified": "BOOLEAN DEFAULT FALSE",
         "verification_code": "VARCHAR",
+        "session_version": "INTEGER DEFAULT 0",
         "alpaca_key": "VARCHAR",
         "alpaca_secret": "VARCHAR",
         "okx_key": "VARCHAR",

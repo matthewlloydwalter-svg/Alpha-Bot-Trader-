@@ -55,6 +55,12 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    try:
+        token_sv = int(payload.get("sv", 0))
+    except (TypeError, ValueError):
+        token_sv = 0
+    if token_sv != int(user.session_version or 0):
+        raise HTTPException(status_code=401, detail="Session expired. Please sign in again.")
     return user
 
 PLATFORM_NAME = os.getenv("PLATFORM_NAME", "AlphaBotix Trading")
@@ -127,10 +133,11 @@ def send_password_reset_email(to_email: str, code: str) -> bool:
 def is_user_admin(email: str) -> bool:
     return email.strip().lower() in ADMIN_EMAILS
 
-def create_session_token(user_id: int, email: str) -> str:
+def create_session_token(user_id: int, email: str, session_version: int = 0) -> str:
     payload = {
         "sub": str(user_id),
         "email": email,
+        "sv": int(session_version or 0),
         "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRE_HOURS),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)

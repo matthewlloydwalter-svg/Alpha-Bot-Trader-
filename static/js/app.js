@@ -434,8 +434,13 @@ async function setTradingMode(mode) {
     if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
     // The Bots tab is also mode-filtered — re-render it if it's showing.
     const bv = document.getElementById("view-bots");
-    if (bv && !bv.classList.contains("hidden")) renderBots();
-    toast(`Switched to ${mode} trading`, "success");
+    if (bv && !bv.classList.contains("hidden")) loadBots();
+    const paused = Number(data.paused_count || 0);
+    if (paused > 0) {
+      toast(`Switched to ${mode}. Paused ${paused} bot${paused === 1 ? "" : "s"} from the previous mode.`, "success");
+    } else {
+      toast(`Switched to ${mode} trading`, "success");
+    }
   } catch (e) { toast(e, "error"); }
 }
 
