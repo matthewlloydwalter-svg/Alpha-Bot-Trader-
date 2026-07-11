@@ -58,7 +58,7 @@
                 <a href="#" onclick="openForgotPassword(event)" style="color:var(--blue);text-decoration:none">Forgot password?</a>
               </div>
               <div style="text-align:center;margin-top:16px;font-size:13px;color:var(--t2)">
-                Don't have an account? <a href="#" onclick="toggleAuthMode(false)" style="color:var(--blue);text-decoration:none">Create one</a>
+                Don't have an account? <a href="/signup" onclick="navigateAuth(event, 'signup')" style="color:var(--blue);text-decoration:none">Create one</a>
               </div>
             </div>
 
@@ -92,7 +92,7 @@
                 </div>
               </form>
               <div style="text-align:center;margin-top:16px;font-size:12px;color:var(--t2)">
-                Already have an account? <a href="#" onclick="toggleAuthMode(true)" style="color:var(--blue);text-decoration:none">Sign In</a>
+                Already have an account? <a href="/login" onclick="navigateAuth(event, 'login')" style="color:var(--blue);text-decoration:none">Sign In</a>
               </div>
             </div>
           </div>
@@ -118,16 +118,16 @@
     </div>
   </div>
 
-  <nav class="nav">
-    <button class="nav-tab active" data-tab="portfolio">💼 Portfolio</button>
-    <button class="nav-tab" id="markets-nav-tab" data-tab="stocks">📊 Markets</button>
-    <button class="nav-tab" data-tab="bots"><img src="/static/images/bots-tab.png" alt="" class="tab-icon" onerror="this.replaceWith(document.createTextNode('🤖'))"> Bots</button>
-    <button class="nav-tab" data-tab="news">📰 News</button>
-    <button class="nav-tab" data-tab="history">📜 History</button>
+  <nav class="nav" aria-label="Dashboard">
+    <a class="nav-tab active" data-tab="portfolio" href="/dashboard/portfolio">💼 Portfolio</a>
+    <a class="nav-tab" id="markets-nav-tab" data-tab="stocks" href="/dashboard/markets">📊 Markets</a>
+    <a class="nav-tab" data-tab="bots" href="/dashboard/bots"><img src="/static/images/bots-tab.png" alt="" class="tab-icon" onerror="this.replaceWith(document.createTextNode('🤖'))"> Bots</a>
+    <a class="nav-tab" data-tab="news" href="/dashboard/news">📰 News</a>
+    <a class="nav-tab" data-tab="history" href="/dashboard/history">📜 History</a>
     <div class="nav-spacer"></div>
-    <button class="nav-tab" data-tab="assets">💰 Assets</button>
-    <button class="nav-tab" data-tab="account">👤 Account</button>
-    <button id="admin-nav-btn" class="nav-tab hidden" onclick="window.location.href='/admin'">🛡️ Admin</button>
+    <a class="nav-tab" data-tab="assets" href="/dashboard/assets">💰 Assets</a>
+    <a class="nav-tab" data-tab="account" href="/dashboard/account">👤 Account</a>
+    <a id="admin-nav-btn" class="nav-tab hidden" href="/admin">🛡️ Admin</a>
   </nav>
 
   <main class="page dash-shell">

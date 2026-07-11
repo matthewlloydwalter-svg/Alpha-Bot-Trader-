@@ -89,6 +89,96 @@ function toggleAuthMode(showLogin) {
   closeForgotPassword();
 }
 
+/* --- URL router (History API) — dashboard tabs are real paths --- */
+// Internal tab keys (data-tab / view-*) stay stable; URL segments are public-facing.
+const TAB_PATHS = {
+  portfolio: "/dashboard/portfolio",
+  stocks: "/dashboard/markets",
+  bots: "/dashboard/bots",
+  news: "/dashboard/news",
+  history: "/dashboard/history",
+  assets: "/dashboard/assets",
+  account: "/dashboard/account",
+};
+const PATH_TO_TAB = {
+  portfolio: "portfolio",
+  markets: "stocks",
+  stocks: "stocks",
+  crypto: "stocks",
+  bots: "bots",
+  news: "news",
+  history: "history",
+  assets: "assets",
+  account: "account",
+};
+
+function normalizePath(pathname) {
+  return String(pathname || "/").replace(/\/+$/, "") || "/";
+}
+
+function isAuthPath(pathname) {
+  const p = normalizePath(pathname);
+  return p === "/login" || p === "/signup";
+}
+
+function isDashboardPath(pathname) {
+  const p = normalizePath(pathname);
+  return p === "/dashboard" || p === "/app" || p.startsWith("/dashboard/");
+}
+
+function pathForTab(tab) {
+  return TAB_PATHS[tab] || TAB_PATHS.portfolio;
+}
+
+function tabFromPath(pathname) {
+  const p = normalizePath(pathname);
+  if (p === "/dashboard" || p === "/app") return "portfolio";
+  if (!p.startsWith("/dashboard/")) return null;
+  const segment = p.slice("/dashboard/".length).split("/")[0].toLowerCase();
+  return PATH_TO_TAB[segment] || "portfolio";
+}
+
+function navigateAuth(e, mode) {
+  if (e) {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+  }
+  const showLogin = mode !== "signup";
+  toggleAuthMode(showLogin);
+  const path = showLogin ? "/login" : "/signup";
+  if (normalizePath(location.pathname) !== path) {
+    history.pushState({ auth: mode }, "", path);
+  }
+}
+
+async function activateTab(tab, { push = false, replace = false } = {}) {
+  const target = TAB_PATHS[tab] ? tab : "portfolio";
+  const path = pathForTab(target);
+
+  document.querySelectorAll(".nav-tab").forEach(t => {
+    if (t.id === "admin-nav-btn") return;
+    t.classList.toggle("active", t.getAttribute("data-tab") === target);
+  });
+  document.querySelectorAll(".tab-view").forEach(v => v.classList.add("hidden"));
+  const view = document.getElementById(`view-${target}`);
+  if (view) view.classList.remove("hidden");
+
+  if (push) history.pushState({ tab: target }, "", path);
+  else if (replace) history.replaceState({ tab: target }, "", path);
+
+  if (target === "portfolio") loadPortfolioPerformance();
+  if (target === "assets") loadBrokerAccount();
+  if (target === "bots") loadBots();
+  if (target === "stocks") loadStocks();
+  if (target === "history") loadTradeHistory();
+  if (target === "account") { loadBrokerKeys(); renderOnboarding(); }
+  if (target === "news" && ALL_NEWS.length === 0) loadNews();
+}
+
+function navigateToTab(tab, { push = true } = {}) {
+  return activateTab(tab, { push, replace: !push });
+}
+
 /* --- Forgot password (Resend verification → new password) --- */
 let FORGOT_RESET_TOKEN = null;
 
@@ -258,8 +348,10 @@ function openPrivacyModal(e) {
 }
 
 async function handleLogoutClick() {
-  try { await api("/auth/logout", { method: "POST" }); location.reload(); } 
-  catch (e) { location.reload(); }
+  try { await api("/auth/logout", { method: "POST" }); }
+  catch (_) {}
+  USER = null;
+  location.href = "/login";
 }
 
 async function enterApp() {
@@ -272,7 +364,7 @@ async function enterApp() {
     document.getElementById("admin-topbar-badge")?.classList.remove("hidden");
   }
   
-  setupTabs();
+  setupRouter();
   renderModeUI();
   renderBrokerUI();
   await refreshUserData();
@@ -287,7 +379,27 @@ async function enterApp() {
     const pv = document.getElementById("view-portfolio");
     if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
   }, 15000);
-  loadPortfolioPerformance();  // Portfolio is the default visible tab
+
+  // Resolve deep link / auth alias → canonical dashboard section URL.
+  let tab = tabFromPath(location.pathname);
+  if (isAuthPath(location.pathname) || !tab) {
+    try {
+      const saved = sessionStorage.getItem("post_login_path");
+      if (saved) {
+        sessionStorage.removeItem("post_login_path");
+        tab = tabFromPath(saved) || "portfolio";
+      } else {
+        tab = "portfolio";
+      }
+    } catch (_) {
+      tab = "portfolio";
+    }
+    history.replaceState({ tab }, "", pathForTab(tab));
+  } else if (normalizePath(location.pathname) !== normalizePath(pathForTab(tab))) {
+    history.replaceState({ tab }, "", pathForTab(tab));
+  }
+
+  await activateTab(tab, { push: false });
   loadAdSidebars();            // inject admin-configured ad snippet into sidebars
   connectLiveStream();         // subscribe to the always-on backend feed
 }
@@ -371,25 +483,42 @@ function applyLiveQuote(q) {
   }
 }
 
-function setupTabs() {
+function setupRouter() {
   document.querySelectorAll(".nav-tab").forEach(tab => {
     if (tab.id === "admin-nav-btn") return;
-    tab.onclick = async () => {
-      document.querySelectorAll(".nav-tab").forEach(t => t.classList.remove("active"));
-      tab.classList.add("active");
+    if (tab.dataset.routerBound === "1") return;
+    tab.dataset.routerBound = "1";
+    tab.addEventListener("click", (e) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      e.preventDefault();
       const target = tab.getAttribute("data-tab");
-      document.querySelectorAll(".tab-view").forEach(v => v.classList.add("hidden"));
-      document.getElementById(`view-${target}`).classList.remove("hidden");
-      
-      if (target === "portfolio") loadPortfolioPerformance();
-      if (target === "assets") loadBrokerAccount();
-      if (target === "bots") loadBots();
-      if (target === "stocks") loadStocks();
-      if (target === "history") loadTradeHistory();
-      if (target === "account") { loadBrokerKeys(); renderOnboarding(); }
-      if (target === "news" && ALL_NEWS.length === 0) loadNews();
-    };
+      if (!target) return;
+      const next = pathForTab(target);
+      if (normalizePath(location.pathname) === normalizePath(next)) {
+        activateTab(target, { push: false });
+        return;
+      }
+      navigateToTab(target, { push: true });
+    });
   });
+
+  if (!window._dashPopstateBound) {
+    window._dashPopstateBound = true;
+    window.addEventListener("popstate", () => {
+      if (!USER) {
+        const path = normalizePath(location.pathname);
+        toggleAuthMode(path !== "/signup");
+        return;
+      }
+      const tab = tabFromPath(location.pathname) || "portfolio";
+      activateTab(tab, { push: false });
+    });
+  }
+}
+
+function setupTabs() {
+  // Back-compat alias — tabs are URL-routed via setupRouter().
+  setupRouter();
 }
 
 async function refreshUserData() {
@@ -1759,7 +1888,7 @@ function renderDashBotStatus(status, sig) {
 
 function prefillBotFromDashboard() {
   closeMarketDashboard();
-  document.querySelector('.nav-tab[data-tab="bots"]')?.click();
+  navigateToTab("bots", { push: true });
   showCreateBotModal();
   setBotMode("manual");
   const t = document.getElementById("b-ticker");
@@ -1850,10 +1979,16 @@ function renderNews() {
     USER = await api("/auth/me");
     await enterApp();
   } catch (_) {
-    // Landing CTAs use /login and /signup — open the matching auth card.
-    const path = (location.pathname || "").replace(/\/+$/, "");
-    const showLogin = !path.endsWith("/signup");
-    toggleAuthMode(showLogin);
+    // Unauthenticated: show login/signup. Preserve deep-linked dashboard paths
+    // so post-login restore works; AdSense stays off the public landing `/`.
+    const path = normalizePath(location.pathname);
+    if (isDashboardPath(path)) {
+      try { sessionStorage.setItem("post_login_path", path); } catch (_) {}
+      history.replaceState({ auth: "login" }, "", "/login");
+      toggleAuthMode(true);
+    } else {
+      toggleAuthMode(path !== "/signup");
+    }
   }
 })();
 

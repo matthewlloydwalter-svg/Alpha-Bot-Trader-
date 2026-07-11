@@ -15,15 +15,15 @@
       <span class="badge badge-purple">Admin Mode</span>
     </div>
     <div>
-      <button class="btn btn-sm btn-ghost" onclick="window.location.href='/'">Return to Dashboard</button>
+      <a class="btn btn-sm btn-ghost" href="/dashboard/portfolio">Return to Dashboard</a>
     </div>
   </div>
 
-  <nav class="nav">
-    <button class="nav-tab" onclick="window.location.href='/'">💼 Portfolio</button>
-    <button class="nav-tab" onclick="window.location.href='/'">🤖 Bots</button>
-    <button class="nav-tab" onclick="window.location.href='/'">👤 Account</button>
-    <button class="nav-tab active">🛡️ Admin</button>
+  <nav class="nav" aria-label="Admin">
+    <a class="nav-tab" href="/dashboard/portfolio">💼 Portfolio</a>
+    <a class="nav-tab" href="/dashboard/bots">🤖 Bots</a>
+    <a class="nav-tab" href="/dashboard/account">👤 Account</a>
+    <a class="nav-tab active" href="/admin">🛡️ Admin</a>
   </nav>
 
   <main class="page">

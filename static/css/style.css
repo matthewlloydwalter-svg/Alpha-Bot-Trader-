@@ -64,8 +64,11 @@ body{
   align-items:center;
   gap:6px;
   transition:color .15s, border-color .15s;
+  text-decoration:none;
+  box-sizing:border-box;
 }
-.nav-tab:hover{color:var(--t1)}
+a.nav-tab{color:var(--t2)}
+.nav-tab:hover{color:var(--t1);text-decoration:none}
 .nav-tab.active{color:var(--t1);border-bottom-color:var(--blue)}
 .nav-spacer{flex:1}
 

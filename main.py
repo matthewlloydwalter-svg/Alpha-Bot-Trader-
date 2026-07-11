@@ -314,13 +314,46 @@ def landing_pane(request: Request):
     )
 
 
-@app.get("/app", response_class=HTMLResponse)
-@app.get("/dashboard", response_class=HTMLResponse)
+# Dashboard SPA sections (URL segment → served by index.html shell).
+# "stocks" / "crypto" are accepted aliases for the Markets tab ("markets").
+DASHBOARD_SECTIONS = frozenset({
+    "portfolio",
+    "markets",
+    "stocks",
+    "crypto",
+    "bots",
+    "news",
+    "history",
+    "assets",
+    "account",
+})
+
+
 @app.get("/login", response_class=HTMLResponse)
 @app.get("/signup", response_class=HTMLResponse)
-def app_pane(request: Request):
-    """Trading application + auth screens (login / signup / dashboard)."""
+def auth_pane(request: Request):
+    """Auth screens only — separate URLs from the public landing page."""
     return _html_page(request, "index.html")
+
+
+@app.get("/app", response_class=HTMLResponse)
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard_root(request: Request):
+    """Canonical app entry: redirect bare /dashboard and legacy /app to Portfolio."""
+    return RedirectResponse(url="/dashboard/portfolio", status_code=307)
+
+
+@app.get("/dashboard/{section}", response_class=HTMLResponse)
+def dashboard_section(section: str, request: Request):
+    """Private trading app shell — one URL per former SPA tab (AdSense-eligible)."""
+    key = (section or "").strip().lower()
+    if key not in DASHBOARD_SECTIONS:
+        return RedirectResponse(url="/dashboard/portfolio", status_code=307)
+    # Normalize aliases to the canonical Markets path.
+    if key in ("stocks", "crypto"):
+        return RedirectResponse(url="/dashboard/markets", status_code=307)
+    return _html_page(request, "index.html")
+
 
 @app.get("/terms", response_class=HTMLResponse)
 def terms_pane(request: Request):
@@ -357,7 +390,7 @@ def admin_pane(request: Request, db: Session = Depends(get_db)):
     try:
         u = get_current_user_from_cookie(request, db)
         if not u.is_admin:
-            return RedirectResponse(url="/")
+            return RedirectResponse(url="/dashboard/portfolio")
         return templates.TemplateResponse("admin.html", {"request": request, "PLATFORM_NAME": PLATFORM_NAME, "ASSET_VERSION": _asset_version()})
     except Exception:
         return _html_page(request, "index.html")
