@@ -50,7 +50,8 @@ file, which Railway replaces with its own "Variables" tab):
 alphabot-backend/
 ├── main.py              ← routes: auth, brokers, bots, admin
 ├── database.py          ← SQLite models (User, Bot, Trade)
-├── auth.py               ← password hashing, sessions, email sending
+├── auth.py               ← password hashing, sessions
+├── email_service.py      ← Resend transactional email
 ├── brokers.py             ← Alpaca + OKX unified interface
 ├── bot_engine.py          ← the bot "brain" (Claude decision + order placement)
 ├── templates/
@@ -75,7 +76,7 @@ of lines that are hard to debug later. Each file does one job.
 
 **Real and working as written:**
 - User signup/login with hashed passwords and session cookies
-- Email verification gate (codes sent via your SMTP settings)
+- Email verification gate (codes sent via Resend — set `RESEND_API_KEY`)
 - SQLite database that persists users, bots, and trade history
 - Broker switching (Alpaca ↔ OKX) with per-user stored credentials
 - `/bots/{id}/run-cycle` — asks Claude for a decision, places a real
@@ -108,7 +109,7 @@ cp .env.example .env
 
 Fill in every value in `.env` — see the comments in that file. At
 minimum you need `JWT_SECRET`, `ADMIN_EMAILS`, and `ANTHROPIC_API_KEY`
-to start the server at all; SMTP and broker keys can be added later.
+to start the server at all; `RESEND_API_KEY` and broker keys can be added later.
 
 ```bash
 uvicorn main:app --reload --port 8000

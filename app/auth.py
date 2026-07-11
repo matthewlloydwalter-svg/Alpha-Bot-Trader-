@@ -1,22 +1,33 @@
 import os
 import random
-import smtplib
 import logging
 import bcrypt
 from datetime import datetime, timedelta
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from jose import jwt, JWTError
-from app.config import (
-    SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM,
-    SMTP_USE_SSL, SMTP_USE_TLS,
-)
 
 logger = logging.getLogger("AlphaBotix Trading")
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.database import User, get_db
+from app.email_service import EmailError, send_verification_email as _send_verification_email
+
+# Re-export so existing `from app.auth import EmailError, send_verification_email` keeps working.
+__all__ = [
+    "EmailError",
+    "send_verification_email",
+    "get_current_user",
+    "hash_password",
+    "verify_password",
+    "is_user_admin",
+    "create_session_token",
+    "decode_session_token",
+    "generate_verification_code",
+    "PLATFORM_NAME",
+    "ADMIN_EMAILS",
+    "JWT_SECRET",
+]
+
 
 def get_current_user(request: Request, db: Session = Depends(get_db)):
     token = request.cookies.get("session_token")
@@ -71,75 +82,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
-class EmailError(Exception):
-    """Raised with a human-readable reason when an email cannot be sent."""
-    pass
-
-
 def send_verification_email(to_email: str, code: str) -> bool:
-    """
-    Send the verification code. Raises EmailError with a SPECIFIC reason on
-    failure so the API can surface what actually went wrong (the old code
-    swallowed everything into one opaque message).
-
-    Gmail notes:
-      - Use an *App Password* (16 chars), not your normal password, with 2FA on.
-      - Host smtp.gmail.com, port 587 (STARTTLS) or 465 (implicit SSL).
-    """
-    if not SMTP_USER or not SMTP_PASSWORD:
-        raise EmailError(
-            "Email is not configured on the server. Set SMTP_HOST, SMTP_PORT, "
-            "SMTP_USER and SMTP_PASSWORD (Gmail App Password) in your environment/Railway variables."
-        )
-
-    host = SMTP_HOST or "smtp.gmail.com"
-    try:
-        port = int(SMTP_PORT) if SMTP_PORT else 587
-    except (TypeError, ValueError):
-        port = 587
-
-    msg = MIMEMultipart()
-    msg["From"] = SMTP_FROM or SMTP_USER
-    msg["To"] = to_email
-    msg["Subject"] = f"[{PLATFORM_NAME}] Your verification code"
-    msg.attach(MIMEText(
-        f"Your {PLATFORM_NAME} verification code is: {code}\n\n"
-        "If you did not request this, you can ignore this email.",
-        "plain",
-    ))
-
-    try:
-        if SMTP_USE_SSL or port == 465:
-            # Implicit TLS (common for port 465).
-            with smtplib.SMTP_SSL(host, port, timeout=20) as server:
-                server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(SMTP_FROM or SMTP_USER, [to_email], msg.as_string())
-        else:
-            # STARTTLS (587 and most others). Some providers require explicit TLS.
-            with smtplib.SMTP(host, port, timeout=20) as server:
-                server.ehlo()
-                if SMTP_USE_TLS or port == 587:
-                    server.starttls()
-                    server.ehlo()
-                server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(SMTP_FROM or SMTP_USER, [to_email], msg.as_string())
-        logger.info("Verification email sent to %s via %s:%s", to_email, host, port)
-        return True
-    except smtplib.SMTPAuthenticationError as e:
-        logger.error("SMTP auth failed: %s", e)
-        raise EmailError(
-            "SMTP authentication failed. For Gmail you must use a 16-character App Password "
-            "(Google Account → Security → App passwords) with 2-Step Verification enabled — "
-            "your normal Gmail password will not work."
-        )
-    except smtplib.SMTPConnectError as e:
-        logger.error("Mail server connection refused (%s:%s): %s", host, port, e)
-        raise EmailError(
-            f"The mail server {host}:{port} refused the connection. On Railway, this is often caused by network egress restrictions or a blocked SMTP port."
-        )
-    except (smtplib.SMTPException, OSError) as e:
-        logger.error("Mail delivery failed (%s:%s): %s", host, port, e)
-        raise EmailError(f"Could not reach the mail server {host}:{port} — {e}")
+    """Send the verification code via Resend (see app.email_service)."""
+    return _send_verification_email(to_email, code, platform_name=PLATFORM_NAME)
 
 def is_user_admin(email: str) -> bool:
     return email.strip().lower() in ADMIN_EMAILS

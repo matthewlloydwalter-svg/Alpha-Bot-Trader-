@@ -20,11 +20,13 @@ below cover only non-obvious caveats for this environment.
   ADMIN_EMAILS=admin@alphabot.dev
   PLATFORM_NAME=AlphaBotix Trading
   ENGINE_ENABLED=1
+  RESEND_API_KEY=
   ```
   Postgres is used in production; SQLite is fully supported for local dev (the code branches on
   the URL scheme). The SQLite file `alphabot.db` is created automatically on first run.
-- Broker keys (Alpaca/OKX) and SMTP are **optional** for dev. Without them: signup/login, bot
-  CRUD, and OKX crypto market data all work; Alpaca equity data and email verification do not.
+- Broker keys (Alpaca/OKX) and `RESEND_API_KEY` are **optional** for dev. Without them:
+  signup/login, bot CRUD, and OKX crypto market data all work; Alpaca equity data and
+  email verification do not. From address: `AlphaBotix Trading <updates@alphabotixtrading.com>`.
 
 ### Running
 - Dev server: `. venv/bin/activate && uvicorn main:app --reload --port 8000` (serves UI + API
