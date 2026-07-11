@@ -274,6 +274,37 @@ _MIGRATIONS = {
 }
 
 
+def _sqlite_make_bots_ticker_nullable(conn) -> None:
+    """
+    SQLite cannot ALTER COLUMN to drop NOT NULL. Legacy DBs created before
+    autonomous bots still have bots.ticker NOT NULL, which 500s on create
+    (ticker=None) and when the engine clears ticker after a close.
+    Rebuild the table in place when needed.
+    """
+    info = conn.execute(text("PRAGMA table_info(bots)")).fetchall()
+    # PRAGMA table_info: (cid, name, type, notnull, dflt_value, pk)
+    ticker = next((row for row in info if row[1] == "ticker"), None)
+    if not ticker or int(ticker[3] or 0) == 0:
+        return
+
+    logger.info("[MIGRATION] Rebuilding bots table so ticker can be NULL (SQLite)")
+    col_names = [row[1] for row in info]
+
+    conn.execute(text("PRAGMA foreign_keys=OFF"))
+    conn.execute(text("ALTER TABLE bots RENAME TO bots__ticker_null_mig"))
+    # Recreate from the current SQLAlchemy model (ticker is nullable).
+    Bot.__table__.create(bind=conn)
+    new_cols = {c.name for c in Bot.__table__.columns}
+    copy_cols = [c for c in col_names if c in new_cols]
+    copy_csv = ", ".join(copy_cols)
+    conn.execute(text(
+        f"INSERT INTO bots ({copy_csv}) SELECT {copy_csv} FROM bots__ticker_null_mig"
+    ))
+    conn.execute(text("DROP TABLE bots__ticker_null_mig"))
+    conn.execute(text("PRAGMA foreign_keys=ON"))
+    logger.info("[MIGRATION] bots.ticker is now NULL-able")
+
+
 def _run_additive_migrations():
     """Add any missing columns to existing tables (Postgres/SQLite safe)."""
     try:
@@ -289,15 +320,16 @@ def _run_additive_migrations():
                         logger.info("[MIGRATION] Adding %s.%s", table, col)
                         conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} {ddl}'))
 
-            # Fully-autonomous bots need a NULLable ticker. SQLite can't ALTER a
-            # constraint in place (and recreates aren't worth it for dev DBs),
-            # so only relax this on Postgres where it matters for Railway.
-            if "bots" in existing_tables and not _is_sqlite:
-                try:
-                    conn.execute(text('ALTER TABLE bots ALTER COLUMN ticker DROP NOT NULL'))
-                    logger.info("[MIGRATION] Relaxed bots.ticker NOT NULL constraint")
-                except Exception as e:
-                    logger.debug("ticker NOT NULL relax skipped: %s", e)
+            # Fully-autonomous bots need a NULLable ticker.
+            if "bots" in existing_tables:
+                if _is_sqlite:
+                    _sqlite_make_bots_ticker_nullable(conn)
+                else:
+                    try:
+                        conn.execute(text('ALTER TABLE bots ALTER COLUMN ticker DROP NOT NULL'))
+                        logger.info("[MIGRATION] Relaxed bots.ticker NOT NULL constraint")
+                    except Exception as e:
+                        logger.debug("ticker NOT NULL relax skipped: %s", e)
     except Exception as e:
         logger.warning("Additive migration skipped: %s", e)
 

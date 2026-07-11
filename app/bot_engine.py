@@ -238,7 +238,9 @@ def _get_alpaca_account_context(owner: User, broker: str) -> dict:
     try:
         info = get_account_info(broker=broker, paper=_paper(owner), **_creds(owner, broker))
         if info.get("error"):
-            return {"account_type": "cash", "equity": None, "non_marginable_buying_power": None}
+            # Lookup failed (bad keys / broker down) — do not assume cash and
+            # block bot create; treat as unknown/margin so GFV checks are skipped.
+            return {"account_type": "margin", "equity": None, "non_marginable_buying_power": None, "multiplier": None}
         equity = info.get("equity")
         non_marginable = info.get("non_marginable_buying_power")
         multiplier = info.get("multiplier")
