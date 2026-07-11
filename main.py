@@ -305,7 +305,19 @@ def health():
 
 
 @app.get("/", response_class=HTMLResponse)
-def index_pane(request: Request):
+def landing_pane(request: Request):
+    """Public marketing / business identity page (Stripe-accessible, no login wall)."""
+    return _html_page(
+        request,
+        "landing.html",
+        YEAR=datetime.now(timezone.utc).year,
+    )
+
+
+@app.get("/app", response_class=HTMLResponse)
+@app.get("/dashboard", response_class=HTMLResponse)
+def app_pane(request: Request):
+    """Authenticated trading application (login / dashboard UI)."""
     return _html_page(request, "index.html")
 
 @app.get("/terms", response_class=HTMLResponse)
