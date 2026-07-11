@@ -316,8 +316,10 @@ def landing_pane(request: Request):
 
 @app.get("/app", response_class=HTMLResponse)
 @app.get("/dashboard", response_class=HTMLResponse)
+@app.get("/login", response_class=HTMLResponse)
+@app.get("/signup", response_class=HTMLResponse)
 def app_pane(request: Request):
-    """Authenticated trading application (login / dashboard UI)."""
+    """Trading application + auth screens (login / signup / dashboard)."""
     return _html_page(request, "index.html")
 
 @app.get("/terms", response_class=HTMLResponse)

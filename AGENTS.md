@@ -37,7 +37,8 @@ below cover only non-obvious caveats for this environment.
 - Dev server: `. venv/bin/activate && uvicorn main:app --reload --port 8000` (serves UI + API
   at http://127.0.0.1:8000; interactive API docs at `/docs`).
 - Public landing page is `/` (`templates/landing.html`). The trading app / login UI is at
-  `/app` (alias `/dashboard`). Legal pages: `/terms`, `/privacy`. Health: `/health`.
+  `/app` (aliases `/dashboard`, `/login`, `/signup`). Legal pages: `/terms`, `/privacy`.
+  Health: `/health`.
 - On startup an **always-on APScheduler background engine** launches (see `app/scheduler.py`):
   it polls market data every 30s and evaluates running bots every 60s. The first OKX poll fetches
   live BTC/ETH/SOL candles with no keys required. Set `ENGINE_ENABLED=0` to disable it.

@@ -1846,7 +1846,15 @@ function renderNews() {
 }
 
 (async function boot() {
-  try { USER = await api("/auth/me"); await enterApp(); } catch (_) { toggleAuthMode(true); }
+  try {
+    USER = await api("/auth/me");
+    await enterApp();
+  } catch (_) {
+    // Landing CTAs use /login and /signup — open the matching auth card.
+    const path = (location.pathname || "").replace(/\/+$/, "");
+    const showLogin = !path.endsWith("/signup");
+    toggleAuthMode(showLogin);
+  }
 })();
 
 function togglePassword(inputId, robotId, evt) {
