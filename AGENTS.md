@@ -41,8 +41,8 @@ below cover only non-obvious caveats for this environment.
   `/dashboard/portfolio`; also `/dashboard/markets`, `/bots`, `/news`, `/history`,
   `/assets`, `/account`). Legacy `/app` redirects to `/dashboard/portfolio`.
   Legal pages: `/terms`, `/privacy`. Health: `/health`.
-  AdSense loads only on the app shell (`index.html`), not the landing page.
-- On startup an **always-on APScheduler background engine** launches (see `app/scheduler.py`):
+  AdSense client script is in the `<head>` of every HTML page (landing, app,
+  legal, admin) so Google can auto-place ads sitewide.- On startup an **always-on APScheduler background engine** launches (see `app/scheduler.py`):
   it polls market data every 30s and evaluates running bots every 60s. The first OKX poll fetches
   live BTC/ETH/SOL candles with no keys required. Set `ENGINE_ENABLED=0` to disable it.
 - The Alpaca watchlist poller is silently skipped unless `ALPACA_DATA_KEY` / `ALPACA_DATA_SECRET`
