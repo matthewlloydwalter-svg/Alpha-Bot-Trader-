@@ -34,7 +34,7 @@ admin explicitly hits Approve (`/admin/ai/approve`) — Deny discards.
 | `ENGINE_ENABLED` | `1` | Master switch for the background engine. |
 | `MARKET_POLL_INTERVAL` | `30` | Seconds between market-data polls. |
 | `BOT_SCAN_INTERVAL` | `60` | Seconds between bot evaluation cycles. |
-| `MARKET_WATCHLIST_LIMIT` | `0` (all) | Symbols/broker polled even without a bot. `0` = entire Markets universe (100+). |
+| `MARKET_WATCHLIST_LIMIT` | `40` | Symbols/broker polled even without a bot. `0` = entire Markets universe. |
 | `ALPACA_DATA_KEY` / `ALPACA_DATA_SECRET` | — | Server keys to poll the Alpaca watchlist. |
 | `BOT_CAPITAL_ROTATION` | `0` | Allow a bot to liquidate another bot's position. |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | — | LLM provider for the Admin AI assistant. |

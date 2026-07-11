@@ -57,7 +57,7 @@
                   <div class="field">
                     <label for="reg-password">Password</label>
                     <div class="input-icon-wrap">
-                      <input type="password" id="reg-password" required placeholder="Minimum 6 characters">
+                      <input type="password" id="reg-password" required minlength="8" placeholder="Minimum 8 characters">
                       <img src="/static/images/hide-password.png" id="robot-reg" onclick="togglePassword('reg-password', 'robot-reg', event)">
                     </div>
                   </div>
@@ -68,10 +68,12 @@
                       <img src="/static/images/hide-password.png" id="robot-reg-confirm" onclick="togglePassword('reg-confirm', 'robot-reg-confirm', event)">
                     </div>
                   </div>
-                  <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--t2);cursor:pointer;line-height:1.6">
-                    <input type="checkbox" id="reg-tos" style="width:auto;margin-top:3px;accent-color:var(--blue);flex-shrink:0" required>
-                    <span>I agree to the <a href="#" onclick="openTosModal(event)" style="color:var(--blue)">Terms of Service</a>.</span>
-                  </label>
+            <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--t2);cursor:pointer;line-height:1.6">
+              <input type="checkbox" id="reg-tos" style="width:auto;margin-top:3px;accent-color:var(--blue);flex-shrink:0" required>
+              <span>I agree to the <a href="/terms" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--blue)">Terms of Service</a>
+                and <a href="/privacy" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--blue)">Privacy Policy</a>
+                (including advertising / data-sale disclosures and opt-out rights).</span>
+            </label>
                   <button type="submit" class="btn btn-primary" style="width:100%;margin-top:6px">Create Account</button>
                 </div>
               </form>
@@ -450,7 +452,7 @@
                 <button class="mode-btn" id="mode-paper" onclick="setTradingMode('paper')">📄 Paper (simulated)</button>
                 <button class="mode-btn" id="mode-live" onclick="setTradingMode('live')">⚡ Live (real money)</button>
               </div>
-              <div style="font-size:11px;color:var(--t3)">Live mode is currently unlocked for everyone (email verification not required for now).</div>
+              <div style="font-size:11px;color:var(--t3)">Live mode requires a verified email and saved Live broker API keys. Paper mode is available immediately.</div>
             </div>
 
             <div class="card">

@@ -24,11 +24,13 @@ from app.auth import (
     generate_verification_code, send_verification_email, is_user_admin, PLATFORM_NAME,
     get_current_user, EmailError
 )
-from app.config import SESSION_COOKIE_SECURE
+from app.config import SESSION_COOKIE_SECURE, FRONTEND_ORIGINS, DOCS_ENABLED, APP_ENV
 from app.brokers import get_account_info, get_spot_price, get_position_snapshot, BrokerError
 from app.market_data import get_market_analysis, resolve_chart_preset, CHART_PRESETS
 from app.markets_universe import MARKET_UNIVERSE
-from app.credentials import resolve_credentials, has_credentials, keys_payload
+from app.credentials import resolve_credentials, has_credentials, keys_payload, seal_secret
+from app.rate_limit import limit_auth, limit_verification
+from app.ads_sanitize import sanitize_ad_snippet
 from app import bot_engine  # Imported bot engine to wire up the run-cycle logic
 from app import market_store, ai_assistant
 from app.realtime import bus
@@ -54,13 +56,20 @@ async def lifespan(app: FastAPI):
         engine_scheduler.shutdown_scheduler()
 
 
-app = FastAPI(title=f"{PLATFORM_NAME} Engine Core", lifespan=lifespan)
+_docs_url = "/docs" if DOCS_ENABLED else None
+_redoc_url = "/redoc" if DOCS_ENABLED else None
+app = FastAPI(
+    title=f"{PLATFORM_NAME} Engine Core",
+    lifespan=lifespan,
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=FRONTEND_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -100,6 +109,9 @@ init_db()
 class AuthModel(BaseModel):
     email: str
     password: str
+    agreed_to_tos: bool = False
+    confirm_password: Optional[str] = None
+
 
 class VerificationChallengeModel(BaseModel):
     code: str
@@ -114,6 +126,14 @@ class OKXKeysModel(BaseModel):
     secret_key: str
     passphrase: str
     mode: Optional[str] = "paper"   # "paper" or "live"
+
+def _keep_or_seal(new_val: str, old_val: str | None) -> str | None:
+    """Keep existing secret if the client sent a blank/masked value; else seal."""
+    v = (new_val or "").strip()
+    if (not v) or ("•" in v) or v.lower().startswith("(saved"):
+        return old_val
+    return seal_secret(v)
+
 
 def _cookie_kwargs(request: Request | None = None) -> dict:
     secure = SESSION_COOKIE_SECURE
@@ -160,20 +180,32 @@ def index_pane(request: Request):
     return _html_page(request, "index.html")
 
 @app.get("/terms", response_class=HTMLResponse)
-def terms_pane():
-    return HTMLResponse(
-        f"<html><head><title>{PLATFORM_NAME} — Terms of Service</title>"
-        "<style>body{font-family:system-ui;max-width:760px;margin:40px auto;padding:0 20px;"
-        "background:#0d0f14;color:#e8eaf0;line-height:1.7}h1{color:#4d9fff}</style></head>"
-        f"<body><h1>{PLATFORM_NAME} — Terms of Service</h1>"
-        "<p>This platform provides automated trading tools for educational and "
-        "informational purposes. Trading involves substantial risk of loss. You are "
-        "solely responsible for your broker credentials, capital, and trading decisions. "
-        "Paper trading is strongly recommended before deploying live capital.</p>"
-        "<p>By creating an account you acknowledge that the operators are not liable "
-        "for trading losses, and that automated strategies (including stop-losses and "
-        "capital rotation) may not execute as intended during market disruptions.</p>"
-        "</body></html>"
+def terms_pane(request: Request):
+    return templates.TemplateResponse(
+        "legal.html",
+        {
+            "request": request,
+            "PLATFORM_NAME": PLATFORM_NAME,
+            "ASSET_VERSION": _asset_version(),
+            "PAGE": "terms",
+            "PAGE_TITLE": "Terms of Service",
+            "YEAR": datetime.now(timezone.utc).year,
+        },
+    )
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy_pane(request: Request):
+    return templates.TemplateResponse(
+        "legal.html",
+        {
+            "request": request,
+            "PLATFORM_NAME": PLATFORM_NAME,
+            "ASSET_VERSION": _asset_version(),
+            "PAGE": "privacy",
+            "PAGE_TITLE": "Privacy Policy",
+            "YEAR": datetime.now(timezone.utc).year,
+        },
     )
 
 
@@ -189,7 +221,16 @@ def admin_pane(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/auth/signup")
 def register_endpoint(body: AuthModel, response: Response, request: Request, db: Session = Depends(get_db)):
+    limit_auth(request)
     normalized_email = body.email.strip().lower()
+    if not normalized_email or "@" not in normalized_email:
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    if not body.agreed_to_tos:
+        raise HTTPException(status_code=400, detail="You must agree to the Terms of Service and Privacy Policy.")
+    if len(body.password or "") < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    if body.confirm_password is not None and body.confirm_password != body.password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
     existing = db.query(User).filter(User.email == normalized_email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered in system databases.")
@@ -210,6 +251,7 @@ def register_endpoint(body: AuthModel, response: Response, request: Request, db:
 
 @app.post("/auth/login")
 def login_endpoint(body: AuthModel, response: Response, request: Request, db: Session = Depends(get_db)):
+    limit_auth(request)
     normalized_email = body.email.strip().lower()
     user = db.query(User).filter(User.email == normalized_email).first()
     if not user or not verify_password(body.password, user.hashed_password):
@@ -248,7 +290,8 @@ def logout_endpoint(response: Response, request: Request):
     return {"success": True}
 
 @app.post("/auth/trigger-verification")
-def trigger_verification(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+def trigger_verification(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    limit_verification(request)
     code = generate_verification_code()
     u.verification_code = code
     db.commit()
@@ -284,12 +327,18 @@ def save_alpaca_keys(body: AlpacaKeysModel, u: User = Depends(get_current_user_f
     mode = (body.mode or "paper").lower()
     if mode not in ("paper", "live"):
         raise HTTPException(status_code=400, detail="mode must be 'paper' or 'live'.")
-    key, secret = body.api_key.strip(), body.secret_key.strip()
     if mode == "paper":
+        key = _keep_or_seal(body.api_key, u.alpaca_key_paper or u.alpaca_key)
+        secret = _keep_or_seal(body.secret_key, u.alpaca_secret_paper or u.alpaca_secret)
+        if not key or not secret:
+            raise HTTPException(status_code=400, detail="Enter both Alpaca paper API key and secret.")
         u.alpaca_key_paper, u.alpaca_secret_paper = key, secret
-        # Keep legacy columns in sync so existing flows stay consistent.
         u.alpaca_key, u.alpaca_secret = key, secret
     else:
+        key = _keep_or_seal(body.api_key, u.alpaca_key_live)
+        secret = _keep_or_seal(body.secret_key, u.alpaca_secret_live)
+        if not key or not secret:
+            raise HTTPException(status_code=400, detail="Enter both Alpaca live API key and secret.")
         u.alpaca_key_live, u.alpaca_secret_live = key, secret
     db.commit()
     logger.info("[KEYS] Saved Alpaca %s keys for user %s", mode, u.id)
@@ -300,11 +349,20 @@ def save_okx_keys(body: OKXKeysModel, u: User = Depends(get_current_user_from_co
     mode = (body.mode or "paper").lower()
     if mode not in ("paper", "live"):
         raise HTTPException(status_code=400, detail="mode must be 'paper' or 'live'.")
-    key, secret, passphrase = body.api_key.strip(), body.secret_key.strip(), body.passphrase.strip()
     if mode == "paper":
+        key = _keep_or_seal(body.api_key, u.okx_key_paper or u.okx_key)
+        secret = _keep_or_seal(body.secret_key, u.okx_secret_paper or u.okx_secret)
+        passphrase = _keep_or_seal(body.passphrase, u.okx_pass_paper or u.okx_pass)
+        if not key or not secret or not passphrase:
+            raise HTTPException(status_code=400, detail="Enter all OKX paper fields.")
         u.okx_key_paper, u.okx_secret_paper, u.okx_pass_paper = key, secret, passphrase
         u.okx_key, u.okx_secret, u.okx_pass = key, secret, passphrase
     else:
+        key = _keep_or_seal(body.api_key, u.okx_key_live)
+        secret = _keep_or_seal(body.secret_key, u.okx_secret_live)
+        passphrase = _keep_or_seal(body.passphrase, u.okx_pass_live)
+        if not key or not secret or not passphrase:
+            raise HTTPException(status_code=400, detail="Enter all OKX live fields.")
         u.okx_key_live, u.okx_secret_live, u.okx_pass_live = key, secret, passphrase
     db.commit()
     logger.info("[KEYS] Saved OKX %s keys for user %s", mode, u.id)
@@ -313,10 +371,9 @@ def save_okx_keys(body: OKXKeysModel, u: User = Depends(get_current_user_from_co
 @app.get("/broker/keys")
 def get_broker_keys(u: User = Depends(get_current_user_from_cookie)):
     """
-    Return the user's stored keys per exchange/mode so the Account UI can
-    auto-populate the boxes. Only ever returns the requesting user's own keys.
+    Return masked key status for the Account UI. Full secrets are never echoed back.
     """
-    return keys_payload(u)
+    return keys_payload(u, mask=True)
 
 @app.post("/broker/trading-mode")
 async def set_trading_mode(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
@@ -324,6 +381,18 @@ async def set_trading_mode(request: Request, u: User = Depends(get_current_user_
     mode = data.get("mode", "paper")
     if mode not in ["paper", "live"]:
         raise HTTPException(status_code=400, detail="Invalid mode. Use 'paper' or 'live'.")
+    if mode == "live":
+        if not u.email_verified:
+            raise HTTPException(
+                status_code=403,
+                detail="Verify your email before enabling Live trading (Account → Send Verification Code).",
+            )
+        broker = (u.active_broker or "alpaca").lower()
+        if not has_credentials(u, broker, paper=False):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Save valid Live {broker.upper()} API keys in Account before enabling Live trading.",
+            )
     u.trading_mode = mode
     db.commit()
     return {"trading_mode": u.trading_mode}
@@ -415,9 +484,13 @@ class AdSnippetModel(BaseModel):
 
 @app.get("/ads/snippet")
 def get_ad_snippet(db: Session = Depends(get_db)):
-    """Public read of the ad network HTML/JS snippet for dashboard sidebars."""
+    """Public read of the sanitized ad network HTML/JS snippet for dashboard sidebars."""
     row = ensure_site_settings(db)
-    return {"ad_network_snippet": row.ad_network_snippet or ""}
+    raw = row.ad_network_snippet or ""
+    try:
+        return {"ad_network_snippet": sanitize_ad_snippet(raw)}
+    except ValueError:
+        return {"ad_network_snippet": ""}
 
 
 @app.get("/admin/ads")
@@ -429,10 +502,15 @@ def admin_get_ads(request: Request, db: Session = Depends(get_db)):
 
 @app.put("/admin/ads")
 def admin_put_ads(body: AdSnippetModel, request: Request, db: Session = Depends(get_db)):
-    """Admin-only update of the raw ad network snippet injected into sidebars."""
+    """Admin-only update of the ad network snippet injected into sidebars."""
     _require_admin(request, db)
+    raw = body.ad_network_snippet if body.ad_network_snippet is not None else ""
+    try:
+        cleaned = sanitize_ad_snippet(raw)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     row = ensure_site_settings(db)
-    row.ad_network_snippet = body.ad_network_snippet if body.ad_network_snippet is not None else ""
+    row.ad_network_snippet = cleaned
     db.add(row)
     db.commit()
     db.refresh(row)
