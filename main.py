@@ -408,11 +408,6 @@ def current_user_endpoint(u: User = Depends(get_current_user_from_cookie), db: S
         "bot_count": bot_count,
         "bot_limit": limit,  # null = unlimited
     }
-        "trading_mode": u.trading_mode or "paper",
-        "active_broker": u.active_broker or "alpaca",
-        "total_deposited": u.total_deposited or 0.0,
-        "total_withdrawn": u.total_withdrawn or 0.0,
-    }
 
 @app.post("/auth/logout")
 def logout_endpoint(response: Response, request: Request):
