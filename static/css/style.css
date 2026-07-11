@@ -763,7 +763,7 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 #view-bots.tab-stage    { background-image:url("/static/images/bots-background1.png"); }
 #view-news.tab-stage    { background-image:url("/static/images/news-background1.png"); }
 #view-history.tab-stage { background-image:url("/static/images/history-background1.png"); }
-#view-assets.tab-stage  { background-image:url("/static/images/assests-background1.png"); }
+#view-assets.tab-stage  { background-image:url("/static/images/assets-background1.png"); }
 #view-account.tab-stage { background-image:url("/static/images/account-background1.png"); }
 
 /* Glass cards over tab backgrounds stay readable (same treatment as Portfolio holo cards) */
