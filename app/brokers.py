@@ -186,6 +186,8 @@ def get_okx_client(api_key: str, secret_key: str, passphrase: str, paper: bool) 
 
 
 def okx_account_info(exchange: ccxt.okx) -> dict:
+    if exchange is None:
+        return {"error": "API keys not set"}
     try:
         balance = exchange.fetch_balance()
         total = balance.get("total", {})

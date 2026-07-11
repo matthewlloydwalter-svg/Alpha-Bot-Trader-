@@ -65,9 +65,25 @@ def _collect_targets() -> dict[tuple[str, str], dict]:
             if owner is None:
                 continue
             owners[b.owner_id] = owner
-            paper = (owner.trading_mode or "paper") == "paper"
+            paper = ((b.mode or owner.trading_mode or "paper").lower() == "paper")
             creds = resolve_credentials(owner, broker, paper)
-            targets[(broker, b.ticker.upper())] = {"creds": creds, "paper": paper}
+            # Scattershot bots store comma-joined tickers — poll each leg.
+            symbols = []
+            raw = (b.ticker or "").upper().strip()
+            if raw:
+                symbols.extend([p.strip() for p in raw.split(",") if p.strip()])
+            if (b.low_balance_strategy or "").lower() == "scattershot" and b.strategy_state:
+                try:
+                    import json
+                    state = json.loads(b.strategy_state)
+                    for leg in (state.get("legs") or []):
+                        sym = (leg.get("ticker") or "").upper().strip()
+                        if sym:
+                            symbols.append(sym)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    pass
+            for sym in dict.fromkeys(symbols):  # preserve order, dedupe
+                targets[(broker, sym)] = {"creds": creds, "paper": paper}
 
         # Watchlist fallback for assets without a bot.
         for broker, cfg in MARKET_UNIVERSE.items():

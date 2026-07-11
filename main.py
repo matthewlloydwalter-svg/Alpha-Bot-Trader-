@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from sse_starlette.sse import EventSourceResponse
 
 load_dotenv()
@@ -242,7 +243,11 @@ def register_endpoint(body: AuthModel, response: Response, request: Request, db:
         email_verified=False
     )
     db.add(new_user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Email already registered in system databases.")
     db.refresh(new_user)
     
     token = create_session_token(new_user.id, new_user.email)
@@ -916,8 +921,12 @@ def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_curr
     bot_names = {b.id: b.name for b in bots}
 
     # funds_allocated = capital currently deployed in open bot positions (this mode)
+    mode_bots = [
+        b for b in bots
+        if (b.mode or u.trading_mode or "paper").lower() == active_mode
+    ]
     funds_allocated = sum(
-        float(b.funds_allocated or 0.0) for b in bots if b.in_position
+        float(b.funds_allocated or 0.0) for b in mode_bots if b.in_position
     ) if include_open else 0.0
 
     trades = (db.query(Trade)
@@ -981,9 +990,11 @@ def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_curr
     # Only counts for the currently-live mode (see include_open above).
     unrealized = 0.0
     if include_open:
-        for b in bots:
+        for b in mode_bots:
             if b.in_position and b.avg_entry_price and b.shares_held:
-                q = market_store.get_quote(db, b.broker or "alpaca", b.ticker or "")
+                # Scattershot may store comma-joined tickers; skip unusable marks.
+                ticker = (b.ticker or "").split(",")[0].strip()
+                q = market_store.get_quote(db, b.broker or "alpaca", ticker) if ticker else None
                 mark = float(q.price) if (q and q.price) else float(b.avg_entry_price)
                 unrealized += (mark - float(b.avg_entry_price)) * float(b.shares_held)
 
@@ -1131,9 +1142,11 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
     # real money so this is safe.
     available = _broker_available_funds(u)
     if available is not None:
+        mode_now = (u.trading_mode or "paper").lower()
         already_allocated = sum(
             float(b.funds_allocated or 0.0)
             for b in db.query(Bot).filter(Bot.owner_id == u.id).all()
+            if (b.mode or mode_now).lower() == mode_now
         )
         if funds > (available - already_allocated) + 1e-6:
             raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
@@ -1265,9 +1278,11 @@ async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_
     # Same guardrail as bot creation: only enforce when keys are present.
     available = _broker_available_funds(u)
     if available is not None:
+        bot_mode = (bot.mode or u.trading_mode or "paper").lower()
         others_allocated = sum(
             float(b.funds_allocated or 0.0)
             for b in db.query(Bot).filter(Bot.owner_id == u.id, Bot.id != bot_id).all()
+            if (b.mode or u.trading_mode or "paper").lower() == bot_mode
         )
         if new_funds > (available - others_allocated) + 1e-6:
             raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)

@@ -78,6 +78,11 @@ function esc(str) {
   return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
 
+/** Safe single-quoted JS string literal for inline onclick handlers. */
+function escJs(str) {
+  return JSON.stringify(str == null ? "" : String(str));
+}
+
 function toggleAuthMode(showLogin) {
   document.getElementById("login-card").classList.toggle("hidden", !showLogin);
   document.getElementById("register-card").classList.toggle("hidden", showLogin);
@@ -134,7 +139,10 @@ async function enterApp() {
   document.getElementById("main-app").classList.remove("hidden");
   document.getElementById("user-email-display").textContent = USER.email;
   
-  if (USER.is_admin) document.getElementById("admin-nav-btn").classList.remove("hidden");
+  if (USER.is_admin) {
+    document.getElementById("admin-nav-btn").classList.remove("hidden");
+    document.getElementById("admin-topbar-badge")?.classList.remove("hidden");
+  }
   
   setupTabs();
   renderModeUI();
@@ -359,6 +367,8 @@ async function setBroker(broker) {
     const data = await api("/broker/switch", { method: "POST", body: JSON.stringify({ broker }) });
     USER.active_broker = data.active_broker;
     renderBrokerUI();
+    syncScattershotOption();
+    renderMarketOverlay();
     toast(`Switched to ${broker}`, "success");
   } catch (e) { toast(e, "error"); }
 }
@@ -601,7 +611,7 @@ function togglePortfolioDetails() {
       try { renderPortfolioMainChart(); } catch (_) {}
       try {
         (PF_DATA && PF_DATA.bots || []).forEach(b => {
-          const el = document.getElementById(`mini-chart-${b.id}`);
+          const el = document.getElementById(`mini-bot-chart-${b.id}`);
           if (el && el.childNodes.length) { /* already drawn */ }
         });
       } catch (_) {}
@@ -682,7 +692,8 @@ function setPortfolioTimeframe(tf) {
 function renderMarketOverlay() {
   const ov = document.getElementById("pf-market-overlay");
   if (!ov) return;
-  const closed = isMarketClosed();
+  // US equities session status does not apply to 24/7 OKX crypto.
+  const closed = isMarketClosed() && !(USER && USER.active_broker === "okx");
   ov.classList.toggle("hidden", !closed);
   if (closed) {
     const sub = document.getElementById("pf-market-overlay-sub");
@@ -932,10 +943,42 @@ function _attachLowBalanceHover() {
 try { _attachLowBalanceHover(); } catch (e) { /* non-fatal */ }
 
 function showCreateBotModal() {
+  syncScattershotOption();
   updateLowBalanceStrategyHint();
   document.getElementById("modal-bot").classList.remove("hidden");
 }
 function hideCreateBotModal() { document.getElementById("modal-bot").classList.add("hidden"); }
+
+function resetCreateBotForm() {
+  setBotMode("auto");
+  const name = document.getElementById("b-name");
+  const funds = document.getElementById("b-funds");
+  const ticker = document.getElementById("b-ticker");
+  const buy = document.getElementById("b-buy");
+  const sell = document.getElementById("b-sell");
+  const strategy = document.getElementById("b-low-balance-strategy");
+  if (name) name.value = "";
+  if (funds) funds.value = "";
+  if (ticker) ticker.value = "";
+  if (buy) buy.value = "";
+  if (sell) sell.value = "";
+  if (strategy) strategy.value = "standard";
+  updateLowBalanceStrategyHint();
+}
+
+function syncScattershotOption() {
+  const el = document.getElementById("b-low-balance-strategy");
+  if (!el) return;
+  const opt = el.querySelector('option[value="scattershot"]');
+  if (!opt) return;
+  const okx = !!(USER && USER.active_broker === "okx");
+  opt.disabled = okx;
+  opt.hidden = okx;
+  if (okx && el.value === "scattershot") {
+    el.value = "standard";
+    updateLowBalanceStrategyHint();
+  }
+}
 
 async function createBot() {
   const name = document.getElementById("b-name").value.trim();
@@ -962,8 +1005,10 @@ async function createBot() {
         is_auto: BOT_MODE === "auto", buy_limit, sell_limit
       })
     });
+    const launchedAuto = BOT_MODE === "auto";
     hideCreateBotModal();
-    toast(BOT_MODE === "auto" ? "Autonomous bot launched — it will scan all markets" : "Bot launched", "success");
+    resetCreateBotForm();
+    toast(launchedAuto ? "Autonomous bot launched — it will scan all markets" : "Bot launched", "success");
     await loadBots();
   } catch (e) { toast(e, "error"); }
 }
@@ -1043,8 +1088,9 @@ function renderBots() {
     const swingNote = (b.low_balance_strategy === "swing_trader" && b.in_position && typeof b.swing_hold_days === "number")
       ? `<span class="badge badge-blue" title="Minimum 3-day swing hold">Day ${b.swing_hold_days}</span>`
       : "";
-    const chartBtn = b.ticker
-      ? `<button class="btn btn-sm" onclick="openMarketDashboard('${esc(b.broker||'alpaca')}','${esc(b.ticker)}')">📈 Chart</button>`
+    const chartTicker = b.ticker ? String(b.ticker).split(",")[0].trim() : "";
+    const chartBtn = chartTicker
+      ? `<button class="btn btn-sm" onclick="openMarketDashboard(${escJs(b.broker||'alpaca')},${escJs(chartTicker)})">📈 Chart</button>`
       : "";
     // Manual Sell — only meaningful while the bot is actually holding a position.
     const sellAllBtn = b.in_position
@@ -1182,7 +1228,7 @@ function renderMarkets() {
     return;
   }
   tbody.innerHTML = items.map(m => `
-    <tr class="market-row" onclick="openMarketDashboard('${MARKETS_EXCHANGE}','${esc(m.symbol)}')">
+    <tr class="market-row" onclick="openMarketDashboard(${escJs(MARKETS_EXCHANGE)},${escJs(m.symbol)})">
       <td>${esc(m.display || m.symbol)}</td>
       <td style="color:var(--t1)">${esc(m.name || "")}</td>
       <td>${cls}</td>
@@ -1556,6 +1602,7 @@ function prefillBotFromDashboard() {
   closeMarketDashboard();
   document.querySelector('.nav-tab[data-tab="bots"]')?.click();
   showCreateBotModal();
+  setBotMode("manual");
   const t = document.getElementById("b-ticker");
   if (t) t.value = DASH_STATE.symbol;
   const n = document.getElementById("b-name");
@@ -1625,12 +1672,18 @@ function renderNews() {
     btn.style.borderColor = on ? "var(--blue)" : "";
     btn.style.color = on ? "var(--blue)" : "";
   });
-  list.innerHTML = filtered.map(n => `
-    <div class="card" style="cursor:pointer" onclick="window.open('${esc(n.link)}')">
+  list.innerHTML = filtered.map(n => {
+    const link = String(n.link || "");
+    const safe = /^https?:\/\//i.test(link) ? link : "";
+    const openAttr = safe
+      ? `onclick="window.open(${escJs(safe)},'_blank','noopener,noreferrer')"`
+      : "";
+    return `
+    <div class="card" style="cursor:${safe ? "pointer" : "default"}" ${openAttr}>
       <div style="font-weight:600;margin-bottom:6px">${esc(n.title)}</div>
-      <div style="font-size:11px;color:var(--t3)">${n.pubDate}</div>
-    </div>
-  `).join("");
+      <div style="font-size:11px;color:var(--t3)">${esc(n.pubDate || "")}</div>
+    </div>`;
+  }).join("");
 }
 
 (async function boot() {
