@@ -50,7 +50,8 @@ below cover only non-obvious caveats for this environment.
   `mode=subscription` line items). Portal: `POST /billing/portal`.
   Webhooks: `POST /webhooks/stripe` (alias `/billing/webhook`). Success page:
   `/checkout/success?session_id={CHECKOUT_SESSION_ID}`.
-  Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and `PUBLIC_BASE_URL` in prod.
+  Set `STRIPE_API_KEY` (or `STRIPE_SECRET_KEY`), `STRIPE_WEBHOOK_SECRET`, and
+  `PUBLIC_BASE_URL` in prod.
 - On startup an **always-on APScheduler background engine** launches (see `app/scheduler.py`):
   it polls market data every 30s and evaluates running bots every 60s. The first OKX poll fetches
   live BTC/ETH/SOL candles with no keys required. Set `ENGINE_ENABLED=0` to disable it.

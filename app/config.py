@@ -28,7 +28,12 @@ except ValueError:
     FREE_BOT_LIMIT = 1
 
 # Stripe billing (Checkout + webhooks). Required for /upgrade-plans checkout.
-STRIPE_SECRET_KEY = (os.getenv("STRIPE_SECRET_KEY") or "").strip()
+# Prefer STRIPE_API_KEY; STRIPE_SECRET_KEY is accepted as a backward-compatible alias.
+STRIPE_API_KEY = (
+    (os.getenv("STRIPE_API_KEY") or "").strip()
+    or (os.getenv("STRIPE_SECRET_KEY") or "").strip()
+)
+STRIPE_SECRET_KEY = STRIPE_API_KEY  # alias used throughout the codebase
 STRIPE_WEBHOOK_SECRET = (os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip()
 STRIPE_PUBLISHABLE_KEY = (os.getenv("STRIPE_PUBLISHABLE_KEY") or "").strip()
 # Absolute public site origin used in Stripe success/cancel URLs (no trailing slash).

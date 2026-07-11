@@ -59,7 +59,7 @@ def stripe_configured() -> bool:
 def _client():
     if not STRIPE_SECRET_KEY:
         raise BillingError(
-            "Stripe is not configured. Set STRIPE_SECRET_KEY on the server.",
+            "Stripe is not configured. Set STRIPE_API_KEY (or STRIPE_SECRET_KEY) on the server.",
             status_code=503,
         )
     stripe = _stripe()
