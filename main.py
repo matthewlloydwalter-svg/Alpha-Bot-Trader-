@@ -400,15 +400,18 @@ def dashboard_section(section: str, request: Request):
 @app.get("/upgrade-plans", response_class=HTMLResponse)
 def upgrade_plans_pane(request: Request, db: Session = Depends(get_db)):
     """Logged-in subscription upgrade page with Stripe Checkout CTAs."""
+    import json as _json
     try:
         user = get_current_user_from_cookie(request, db)
     except Exception:
         return RedirectResponse(url="/login", status_code=303)
+    plans = public_plan_payload()
     return _html_page(
         request,
         "upgrade_plans.html",
         YEAR=datetime.now(timezone.utc).year,
-        PLANS=public_plan_payload(),
+        PLANS=plans,
+        PLANS_JSON=_json.dumps(plans),
         CURRENT_PLAN=normalize_plan(getattr(user, "subscription_plan", None)),
         CURRENT_PLAN_NAME=plan_display_name(
             getattr(user, "subscription_plan", None),
