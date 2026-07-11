@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upgrade Plans — {{ PLATFORM_NAME }}</title>
+<meta name="robots" content="noindex,nofollow">
+<link rel="stylesheet" href="/static/css/style.css?v={{ ASSET_VERSION }}">
+<link rel="stylesheet" href="/static/css/pricing.css?v={{ ASSET_VERSION }}">
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2688407250698963"
+     crossorigin="anonymous"></script>
+</head>
+<body class="upgrade-page">
+  <div class="topbar">
+    <div class="topbar-left">
+      <img src="/static/images/alphabot-trading-logo.png" alt="{{ PLATFORM_NAME }} logo" class="brand-logo">
+      <span class="logo-text">{{ PLATFORM_NAME }}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="color:var(--t2);font-size:12px">{{ USER_EMAIL }}</span>
+      <a class="btn btn-sm btn-ghost" href="/dashboard/account">Back to Account</a>
+    </div>
+  </div>
+
+  <main class="upgrade-wrap">
+    <header class="upgrade-hero">
+      <h1>Upgrade your plan</h1>
+      <p>
+        Current plan: <strong id="current-plan-label">{{ CURRENT_PLAN_NAME }}</strong>.
+        Choose a tier and billing period, then continue to secure Stripe Checkout.
+      </p>
+      <div id="upgrade-flash" class="upgrade-flash hidden" role="status"></div>
+    </header>
+
+    <section class="pricing-block" id="upgrade-pricing" data-interval="month" aria-label="Subscription plans">
+      <div class="billing-toggle-row">
+        <div class="billing-toggle" role="group" aria-label="Billing period">
+          <button type="button" data-interval="week" aria-pressed="false">Weekly</button>
+          <button type="button" data-interval="month" class="active" aria-pressed="true">Monthly</button>
+          <button type="button" data-interval="year" aria-pressed="false">Annually</button>
+        </div>
+        <span class="save-badge" aria-hidden="true">Save 20%</span>
+      </div>
+
+      <div class="tiers">
+        {% for plan in PLANS %}
+        <article class="tier{% if plan.featured %} featured{% endif %}{% if plan.key == CURRENT_PLAN %} current{% endif %}" data-plan="{{ plan.key }}">
+          <h3>{{ plan.name }}</h3>
+          <div class="price">
+            <span class="price-amount">{{ plan.display.month.amount }}</span><small class="price-period">{{ plan.display.month.period }}</small>
+          </div>
+          <p class="bots-label">{{ plan.bots_label }}</p>
+          {% if plan.free %}
+            {% if plan.key == CURRENT_PLAN %}
+              <button type="button" class="btn btn-ghost upgrade-btn" disabled>Current plan</button>
+            {% else %}
+              <button type="button" class="btn btn-ghost upgrade-btn" disabled>Included free</button>
+            {% endif %}
+          {% elif plan.key == CURRENT_PLAN %}
+            <button type="button" class="btn btn-ghost upgrade-btn" disabled
+              data-plan="{{ plan.key }}"
+              data-price-week="{{ plan.price_ids.week or '' }}"
+              data-price-month="{{ plan.price_ids.month or '' }}"
+              data-price-year="{{ plan.price_ids.year or '' }}">Current plan</button>
+          {% else %}
+            <button type="button" class="btn btn-primary upgrade-btn"
+              data-plan="{{ plan.key }}"
+              data-price-week="{{ plan.price_ids.week or '' }}"
+              data-price-month="{{ plan.price_ids.month or '' }}"
+              data-price-year="{{ plan.price_ids.year or '' }}">Upgrade</button>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
+
+      {% if not STRIPE_CONFIGURED %}
+      <p class="upgrade-note warn">
+        Stripe is not configured on this server yet (`STRIPE_SECRET_KEY`). Upgrade buttons will show an error until it is set.
+      </p>
+      {% else %}
+      <p class="upgrade-note">
+        Payments are processed securely by Stripe. You can change plans anytime; prorations apply when switching paid tiers.
+      </p>
+      {% endif %}
+    </section>
+  </main>
+
+  <script>
+    window.__PLANS__ = {{ PLANS_JSON | safe }};
+  </script>
+  <script src="/static/js/pricing-toggle.js?v={{ ASSET_VERSION }}"></script>
+  <script>
+    (function () {
+      const root = document.getElementById("upgrade-pricing");
+      initPricingToggle(root, window.__PLANS__ || []);
+
+      const flash = document.getElementById("upgrade-flash");
+      function showFlash(msg, ok) {
+        if (!flash) return;
+        flash.textContent = msg;
+        flash.classList.remove("hidden", "ok", "err");
+        flash.classList.add(ok ? "ok" : "err");
+      }
+
+      const params = new URLSearchParams(location.search);
+      if (params.get("success") === "1") {
+        showFlash("Payment received — syncing your plan…", true);
+        const sid = params.get("session_id") || "";
+        if (sid) {
+          fetch("/billing/checkout/confirm?session_id=" + encodeURIComponent(sid), { credentials: "include" })
+            .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
+            .then(({ ok, d }) => {
+              if (ok && d.subscription_plan_name) {
+                const label = document.getElementById("current-plan-label");
+                if (label) label.textContent = d.subscription_plan_name;
+                showFlash("You're now on " + d.subscription_plan_name + ".", true);
+              } else {
+                showFlash("Checkout completed. If your plan does not update shortly, refresh this page.", true);
+              }
+            })
+            .catch(() => showFlash("Checkout completed. Refresh if your plan label is still outdated.", true));
+        }
+      } else if (params.get("upgraded") === "1") {
+        showFlash("Your subscription was updated.", true);
+      } else if (params.get("canceled") === "1") {
+        showFlash("Checkout canceled — no charges were made.", false);
+      }
+
+      root.querySelectorAll(".upgrade-btn[data-plan]").forEach((btn) => {
+        if (btn.disabled) return;
+        btn.addEventListener("click", async () => {
+          const plan = btn.getAttribute("data-plan");
+          const interval = root.dataset.interval || "month";
+          btn.disabled = true;
+          const prev = btn.textContent;
+          btn.textContent = "Redirecting…";
+          try {
+            const resp = await fetch("/billing/checkout", {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ plan, interval }),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(data.detail || "Checkout failed");
+            if (!data.url) throw new Error("No Checkout URL returned");
+            location.href = data.url;
+          } catch (err) {
+            showFlash(err.message || String(err), false);
+            btn.disabled = false;
+            btn.textContent = prev;
+          }
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

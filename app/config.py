@@ -20,12 +20,21 @@ _IS_PROD = IS_PROD  # backward-compatible alias
 # Admin AI disk writes — off in production unless explicitly enabled.
 ADMIN_AI_WRITES = _env_flag("ADMIN_AI_WRITES", "0")
 
-# Free-tier bot cap for non-admins. 0 = unlimited (current default).
-# Stripe tiers can override this later via a subscription_tier column.
+# Free-tier bot cap fallback for non-admins when subscription_plan is starter.
+# Plan tiers: Starter 1 | Growth 5 | Pro 10 | Enterprise unlimited. Admins unlimited.
 try:
-    FREE_BOT_LIMIT = int(os.getenv("FREE_BOT_LIMIT", "0") or 0)
+    FREE_BOT_LIMIT = int(os.getenv("FREE_BOT_LIMIT", "1") or 1)
 except ValueError:
-    FREE_BOT_LIMIT = 0
+    FREE_BOT_LIMIT = 1
+
+# Stripe billing (Checkout + webhooks). Required for /upgrade-plans checkout.
+STRIPE_SECRET_KEY = (os.getenv("STRIPE_SECRET_KEY") or "").strip()
+STRIPE_WEBHOOK_SECRET = (os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip()
+STRIPE_PUBLISHABLE_KEY = (os.getenv("STRIPE_PUBLISHABLE_KEY") or "").strip()
+# Absolute public site origin used in Stripe success/cancel URLs (no trailing slash).
+PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or os.getenv("FRONTEND_ORIGIN") or "").strip().rstrip(",")
+if "," in PUBLIC_BASE_URL:
+    PUBLIC_BASE_URL = PUBLIC_BASE_URL.split(",")[0].strip()
 
 # Comma-separated browser origins allowed for credentialed CORS.
 _raw_origins = (os.getenv("FRONTEND_ORIGIN") or "").strip()

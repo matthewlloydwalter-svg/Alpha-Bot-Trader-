@@ -179,13 +179,27 @@
     margin-top: 8px; color: #dce7f8; font-size: 14px; max-width: 56ch;
     text-shadow: 0 1px 10px rgba(0,0,0,0.45);
   }
-  .soon {
-    display: inline-block; margin-left: 10px; vertical-align: middle;
-    font-family: Outfit, sans-serif; font-size: 11px; font-weight: 700;
-    letter-spacing: 0.06em; text-transform: uppercase;
-    color: #d7e7ff; border: 1px solid rgba(158, 193, 255, 0.45);
-    background: rgba(47, 134, 255, 0.12); border-radius: 999px; padding: 4px 9px;
+  .billing-toggle-row {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    margin: 0 0 14px;
   }
+  .billing-toggle {
+    display: inline-flex; border: 1px solid var(--line); border-radius: 999px;
+    overflow: hidden; background: rgba(5, 10, 22, 0.28);
+  }
+  .billing-toggle button {
+    appearance: none; border: 0; background: transparent; color: #c5d4ea;
+    font: inherit; font-size: 12px; font-weight: 700; padding: 9px 14px; cursor: pointer;
+  }
+  .billing-toggle button.active {
+    background: rgba(59, 143, 255, 0.28); color: #fff;
+  }
+  .save-badge {
+    display: none; font-size: 11px; font-weight: 800; letter-spacing: 0.04em;
+    text-transform: uppercase; color: #0b1a0f; background: #27d39a;
+    border-radius: 999px; padding: 5px 10px;
+  }
+  .save-badge.visible { display: inline-flex; }
   .tiers {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -214,8 +228,8 @@
     font-size: 26px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; color: #fff;
     text-shadow: 0 2px 12px rgba(0,0,0,0.5);
   }
-  .price small { font-size: 12px; font-weight: 500; color: #d5e2f5; }
-  .tier p {
+  .price small, .price-period { font-size: 12px; font-weight: 500; color: #d5e2f5; }
+  .tier p, .tier .bots-label {
     color: #dce7f8; font-size: 13px; margin-top: auto;
     text-shadow: 0 1px 8px rgba(0,0,0,0.4);
   }
@@ -336,39 +350,46 @@
             </div>
           </div>
 
-          <section class="pricing" id="pricing" aria-label="Pricing">
+          <section class="pricing" id="pricing" data-interval="month" aria-label="Pricing">
             <div class="section-head">
-              <h2>Pricing <span class="soon">Coming Soon</span></h2>
+              <h2>Pricing</h2>
               <p>
-                Planned subscription tiers for bot capacity. Billing will be handled through Stripe.
-                Exact availability and checkout will open when subscriptions launch.
+                Start free with 1 bot. Upgrade anytime after you sign in — billing is handled securely through Stripe.
               </p>
             </div>
+            <div class="billing-toggle-row">
+              <div class="billing-toggle" role="group" aria-label="Billing period">
+                <button type="button" data-interval="week" aria-pressed="false">Weekly</button>
+                <button type="button" data-interval="month" class="active" aria-pressed="true">Monthly</button>
+                <button type="button" data-interval="year" aria-pressed="false">Annually</button>
+              </div>
+              <span class="save-badge" aria-hidden="true">Save 20%</span>
+            </div>
             <div class="tiers">
-              <article class="tier">
+              <article class="tier" data-plan="starter">
                 <h3>Starter</h3>
-                <div class="price">Free</div>
-                <p>1 Bot</p>
+                <div class="price"><span class="price-amount">Free</span><small class="price-period"></small></div>
+                <p class="bots-label">1 Bot</p>
               </article>
-              <article class="tier featured">
+              <article class="tier featured" data-plan="growth">
                 <h3>Growth</h3>
-                <div class="price">$19<small>/month</small></div>
-                <p>Up to 5 Bots</p>
+                <div class="price"><span class="price-amount">$19</span><small class="price-period">/month</small></div>
+                <p class="bots-label">Up to 5 Bots</p>
               </article>
-              <article class="tier">
+              <article class="tier" data-plan="pro">
                 <h3>Pro</h3>
-                <div class="price">$49<small>/month</small></div>
-                <p>Up to 10 Bots</p>
+                <div class="price"><span class="price-amount">$49</span><small class="price-period">/month</small></div>
+                <p class="bots-label">Up to 10 Bots</p>
               </article>
-              <article class="tier">
+              <article class="tier" data-plan="enterprise">
                 <h3>Enterprise</h3>
-                <div class="price">$99<small>/month</small></div>
-                <p>Unlimited Bots</p>
+                <div class="price"><span class="price-amount">$99</span><small class="price-period">/month</small></div>
+                <p class="bots-label">Unlimited Bots</p>
               </article>
             </div>
             <p class="note">
-              Subscriptions grant access to AlphaBotix Trading software. Trading capital stays in your linked
-              brokerage account. Markets involve risk of loss.
+              Pricing cards are informational. Create a free Starter account to get started, then upgrade from
+              your dashboard. Trading capital stays in your linked brokerage account. Markets involve risk of loss.
             </p>
           </section>
         </div>
@@ -415,5 +436,12 @@
       </div>
     </footer>
   </div>
+  <script>
+    window.__PLANS__ = {{ PLANS_JSON | safe }};
+  </script>
+  <script src="/static/js/pricing-toggle.js?v={{ ASSET_VERSION }}"></script>
+  <script>
+    initPricingToggle(document.getElementById("pricing"), window.__PLANS__ || []);
+  </script>
 </body>
 </html>

@@ -29,7 +29,15 @@ from app.auth import (
 from app.config import (
     SESSION_COOKIE_SECURE, FRONTEND_ORIGINS, DOCS_ENABLED, APP_ENV, IS_PROD,
     ADMIN_AI_WRITES, FREE_BOT_LIMIT, RESEND_API_KEY,
+    STRIPE_SECRET_KEY, PUBLIC_BASE_URL,
 )
+from app.plans import (
+    DEFAULT_PLAN, normalize_plan, plan_display_name, bot_limit_for_plan,
+    public_plan_payload, INTERVALS,
+)
+from app import stripe_billing
+from app.stripe_billing import BillingError
+
 from app.brokers import get_account_info, get_spot_price, get_position_snapshot, BrokerError
 from app.market_data import get_market_analysis, resolve_chart_preset, CHART_PRESETS
 from app.markets_universe import MARKET_UNIVERSE
@@ -256,12 +264,18 @@ def _bump_session_version(user: User) -> None:
 def _user_bot_limit(user: User) -> Optional[int]:
     """
     Max bots this user may create. None = unlimited.
-    Admins are always unlimited. FREE_BOT_LIMIT=0 means unlimited for everyone
-    (current public default). Stripe tiers can map onto this later.
+    Admins are always unlimited. Paid plans map via subscription_plan;
+    Starter uses FREE_BOT_LIMIT (default 1).
     """
     if user.is_admin or is_user_admin(user.email or ""):
         return None
-    return FREE_BOT_LIMIT if FREE_BOT_LIMIT > 0 else None
+    plan = normalize_plan(getattr(user, "subscription_plan", None))
+    if plan != "starter":
+        return bot_limit_for_plan(plan, is_admin=False)
+    # Starter / free: honor FREE_BOT_LIMIT (0 would mean unlimited — prefer 1).
+    if FREE_BOT_LIMIT <= 0:
+        return 1
+    return FREE_BOT_LIMIT
 
 
 def _enforce_bot_create_limit(user: User, db: Session) -> None:
@@ -270,13 +284,38 @@ def _enforce_bot_create_limit(user: User, db: Session) -> None:
         return
     count = db.query(Bot).filter(Bot.owner_id == user.id).count()
     if count >= limit:
+        plan_name = plan_display_name(getattr(user, "subscription_plan", None))
         raise HTTPException(
             status_code=403,
             detail=(
-                f"Free accounts can run up to {limit} bot"
+                f"{plan_name} accounts can run up to {limit} bot"
                 f"{'s' if limit != 1 else ''}. Upgrade your plan to create more."
             ),
         )
+
+
+def _user_plan_payload(user: User) -> dict:
+    is_admin = bool(user.is_admin or is_user_admin(user.email or ""))
+    plan = normalize_plan(getattr(user, "subscription_plan", None))
+    return {
+        "subscription_plan": plan,
+        "subscription_plan_name": plan_display_name(plan, is_admin=is_admin),
+        "subscription_interval": getattr(user, "subscription_interval", None),
+        "subscription_status": getattr(user, "subscription_status", None),
+        "can_upgrade": (not is_admin) and plan != "enterprise",
+    }
+
+
+def _request_public_base(request: Request) -> str:
+    configured = (PUBLIC_BASE_URL or "").strip()
+    if configured:
+        return configured.rstrip("/")
+    # Prefer proxy headers on Railway / reverse proxies.
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "https").split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+    if host:
+        return f"{proto}://{host}".rstrip("/")
+    return str(request.base_url).rstrip("/")
 
 def _html_page(request: Request, template_name: str = "index.html", **extra):
     """Render an HTML template with cache-busting asset version always set."""
@@ -307,10 +346,13 @@ def health():
 @app.get("/", response_class=HTMLResponse)
 def landing_pane(request: Request):
     """Public marketing / business identity page (Stripe-accessible, no login wall)."""
+    import json as _json
     return _html_page(
         request,
         "landing.html",
         YEAR=datetime.now(timezone.utc).year,
+        PLANS=public_plan_payload(),
+        PLANS_JSON=_json.dumps(public_plan_payload()),
     )
 
 
@@ -353,6 +395,148 @@ def dashboard_section(section: str, request: Request):
     if key in ("stocks", "crypto"):
         return RedirectResponse(url="/dashboard/markets", status_code=307)
     return _html_page(request, "index.html")
+
+
+@app.get("/upgrade-plans", response_class=HTMLResponse)
+def upgrade_plans_pane(request: Request, db: Session = Depends(get_db)):
+    """Logged-in subscription upgrade page with Stripe Checkout CTAs."""
+    try:
+        user = get_current_user_from_cookie(request, db)
+    except Exception:
+        return RedirectResponse(url="/login", status_code=303)
+    return _html_page(
+        request,
+        "upgrade_plans.html",
+        YEAR=datetime.now(timezone.utc).year,
+        PLANS=public_plan_payload(),
+        CURRENT_PLAN=normalize_plan(getattr(user, "subscription_plan", None)),
+        CURRENT_PLAN_NAME=plan_display_name(
+            getattr(user, "subscription_plan", None),
+            is_admin=bool(user.is_admin or is_user_admin(user.email or "")),
+        ),
+        CAN_UPGRADE=_user_plan_payload(user)["can_upgrade"],
+        USER_EMAIL=user.email,
+        STRIPE_CONFIGURED=bool(STRIPE_SECRET_KEY),
+    )
+
+
+@app.get("/api/plans")
+def api_plans():
+    """Public plan catalog for pricing UIs."""
+    return {"plans": public_plan_payload(), "intervals": list(INTERVALS)}
+
+
+class CheckoutModel(BaseModel):
+    plan: str
+    interval: str = "month"
+
+
+@app.post("/billing/checkout")
+def billing_checkout(
+    body: CheckoutModel,
+    request: Request,
+    u: User = Depends(get_current_user_from_cookie),
+    db: Session = Depends(get_db),
+):
+    """Create a Stripe Checkout session (or in-place upgrade) for the selected plan."""
+    if u.is_admin or is_user_admin(u.email or ""):
+        raise HTTPException(status_code=400, detail="Admin accounts already have unlimited access.")
+    plan = normalize_plan(body.plan)
+    interval = (body.interval or "month").strip().lower()
+    if interval not in INTERVALS:
+        raise HTTPException(status_code=400, detail="Interval must be week, month, or year.")
+    if plan == "starter":
+        raise HTTPException(status_code=400, detail="Starter is free — no checkout required.")
+    try:
+        # Ensure customer id is persisted if created.
+        result = stripe_billing.start_checkout_or_upgrade(
+            u,
+            plan,
+            interval,
+            public_base_url=_request_public_base(request),
+        )
+        db.add(u)
+        db.commit()
+        return result
+    except BillingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    except Exception as exc:
+        logger.exception("Stripe checkout failed")
+        raise HTTPException(status_code=502, detail=f"Stripe checkout failed: {exc}")
+
+
+@app.get("/billing/checkout/confirm")
+def billing_confirm_checkout(
+    session_id: str = "",
+    u: User = Depends(get_current_user_from_cookie),
+    db: Session = Depends(get_db),
+):
+    """Optional post-Checkout sync when webhooks are delayed."""
+    sid = (session_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id required")
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
+    try:
+        import stripe
+        stripe.api_key = STRIPE_SECRET_KEY
+        session = stripe.checkout.Session.retrieve(sid)
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Stripe package not installed")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not load Checkout session: {exc}")
+    if str(session.get("client_reference_id") or "") not in {"", str(u.id)}:
+        # Still allow if metadata user_id matches.
+        meta = session.get("metadata") or {}
+        if str(meta.get("user_id") or "") != str(u.id):
+            raise HTTPException(status_code=403, detail="Checkout session does not belong to this account.")
+    if session.get("payment_status") in {"paid", "no_payment_required"} or session.get("status") == "complete":
+        stripe_billing.sync_user_from_checkout_session(u, session)
+        db.add(u)
+        db.commit()
+    return {"ok": True, **_user_plan_payload(u)}
+
+
+@app.post("/billing/webhook")
+async def billing_webhook(request: Request, db: Session = Depends(get_db)):
+    """Stripe webhook — keeps subscription_plan in sync."""
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature") or ""
+    try:
+        event = stripe_billing.construct_webhook_event(payload, sig)
+    except BillingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    etype = event.get("type")
+    data = (event.get("data") or {}).get("object") or {}
+
+    user = None
+    if etype == "checkout.session.completed":
+        uid = (data.get("metadata") or {}).get("user_id") or data.get("client_reference_id")
+        if uid:
+            user = db.query(User).filter(User.id == int(uid)).first()
+        if user:
+            stripe_billing.sync_user_from_checkout_session(user, data)
+    elif etype in {
+        "customer.subscription.updated",
+        "customer.subscription.created",
+        "customer.subscription.deleted",
+    }:
+        uid = (data.get("metadata") or {}).get("user_id")
+        sub_id = data.get("id")
+        if uid:
+            user = db.query(User).filter(User.id == int(uid)).first()
+        if not user and sub_id:
+            user = db.query(User).filter(User.stripe_subscription_id == sub_id).first()
+        if not user and data.get("customer"):
+            user = db.query(User).filter(User.stripe_customer_id == data.get("customer")).first()
+        if user:
+            stripe_billing.sync_user_from_subscription(user, data)
+
+    if user is not None:
+        db.add(user)
+        db.commit()
+    return {"received": True}
 
 
 @app.get("/terms", response_class=HTMLResponse)
@@ -415,7 +599,8 @@ def register_endpoint(body: AuthModel, response: Response, request: Request, db:
         email=normalized_email,
         hashed_password=hash_password(body.password),
         is_admin=is_user_admin(normalized_email),
-        email_verified=False
+        email_verified=False,
+        subscription_plan=DEFAULT_PLAN,
     )
     db.add(new_user)
     try:
@@ -426,7 +611,16 @@ def register_endpoint(body: AuthModel, response: Response, request: Request, db:
     db.refresh(new_user)
     
     _issue_session(response, request, new_user)
-    return {"id": new_user.id, "email": new_user.email, "is_admin": new_user.is_admin, "email_verified": new_user.email_verified}
+    payload = {
+        "id": new_user.id,
+        "email": new_user.email,
+        "is_admin": new_user.is_admin,
+        "email_verified": new_user.email_verified,
+        **_user_plan_payload(new_user),
+        "bot_count": 0,
+        "bot_limit": _user_bot_limit(new_user),
+    }
+    return payload
 
 @app.post("/auth/login")
 def login_endpoint(body: AuthModel, response: Response, request: Request, db: Session = Depends(get_db)):
@@ -447,6 +641,9 @@ def login_endpoint(body: AuthModel, response: Response, request: Request, db: Se
         "active_broker": user.active_broker or "alpaca",
         "total_deposited": user.total_deposited or 0.0,
         "total_withdrawn": user.total_withdrawn or 0.0,
+        **_user_plan_payload(user),
+        "bot_count": db.query(Bot).filter(Bot.owner_id == user.id).count(),
+        "bot_limit": _user_bot_limit(user),
     }
 
 @app.get("/auth/me")
@@ -464,6 +661,7 @@ def current_user_endpoint(u: User = Depends(get_current_user_from_cookie), db: S
         "total_withdrawn": u.total_withdrawn or 0.0,
         "bot_count": bot_count,
         "bot_limit": limit,  # null = unlimited
+        **_user_plan_payload(u),
     }
 
 @app.post("/auth/logout")

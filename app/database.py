@@ -90,6 +90,14 @@ class User(Base):
     okx_secret_live = Column(String, nullable=True)
     okx_pass_live = Column(String, nullable=True)
 
+    # ── Subscription / Stripe ──
+    # starter | growth | pro | enterprise  (admins bypass limits regardless)
+    subscription_plan = Column(String, default="starter", nullable=False)
+    subscription_interval = Column(String, nullable=True)  # week | month | year
+    subscription_status = Column(String, nullable=True)  # active | canceled | …
+    stripe_customer_id = Column(String, nullable=True)
+    stripe_subscription_id = Column(String, nullable=True)
+
     bots = relationship("Bot", back_populates="owner")
     trades = relationship("Trade", back_populates="owner")
     logs = relationship("ActivityLog", back_populates="owner") # Added relationship
@@ -273,6 +281,11 @@ _MIGRATIONS = {
         "okx_key_live": "VARCHAR",
         "okx_secret_live": "VARCHAR",
         "okx_pass_live": "VARCHAR",
+        "subscription_plan": "VARCHAR DEFAULT 'starter'",
+        "subscription_interval": "VARCHAR",
+        "subscription_status": "VARCHAR",
+        "stripe_customer_id": "VARCHAR",
+        "stripe_subscription_id": "VARCHAR",
     },
 }
 
@@ -366,6 +379,21 @@ def _backfill_integrity():
                 # switch / redeploy. New bots set mode at creation; leave existing
                 # rows alone (paper is the safe default for legacy rows).
                 pass
+
+            if "users" in tables:
+                cols = {c["name"] for c in inspector.get_columns("users")}
+                if "subscription_plan" in cols:
+                    updated = conn.execute(text(
+                        "UPDATE users SET subscription_plan = 'starter' "
+                        "WHERE subscription_plan IS NULL OR subscription_plan = ''"
+                    ))
+                    # rowcount not always available; log best-effort
+                    try:
+                        n = updated.rowcount
+                        if n:
+                            logger.info("[BACKFILL] Set starter plan on %d user(s)", n)
+                    except Exception:
+                        pass
 
             if "trades" in tables and "bots" in tables:
                 conn.execute(text(

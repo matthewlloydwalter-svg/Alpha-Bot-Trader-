@@ -112,7 +112,8 @@
       <span id="broker-badge" class="badge badge-blue">Alpaca</span>
       <span class="badge badge-purple hidden" id="admin-topbar-badge">★ Admin</span>
     </div>
-    <div style="display:flex;align-items:center;gap:10px">
+    <div class="topbar-right" style="display:flex;align-items:center;gap:10px">
+      <a id="upgrade-topbar-btn" class="btn btn-sm btn-upgrade hidden" href="/upgrade-plans">Upgrade</a>
       <span id="user-email-display" style="color:var(--t2);font-size:12px"></span>
       <button class="btn btn-sm btn-ghost" onclick="handleLogoutClick()">Sign Out</button>
     </div>
@@ -438,6 +439,12 @@
             <div class="pf-summary-metric">
               <div class="holo-lbl">Signed in as</div>
               <div class="holo-total-value" id="account-header-email" style="font-size:18px;word-break:break-all">—</div>
+              <div id="account-plan-line" style="margin-top:8px;font-size:13px;color:var(--t2)">
+                Current Plan: <strong id="account-plan-name" style="color:var(--t1)">—</strong>
+              </div>
+              <div style="margin-top:10px">
+                <a id="account-upgrade-btn" class="btn btn-sm btn-upgrade hidden" href="/upgrade-plans">Upgrade My Plan</a>
+              </div>
             </div>
           </div>
           <div class="pf-sticky-footer">

@@ -358,6 +358,7 @@ async function enterApp() {
   document.getElementById("auth-screen").classList.add("hidden");
   document.getElementById("main-app").classList.remove("hidden");
   document.getElementById("user-email-display").textContent = USER.email;
+  updatePlanUI();
   
   if (USER.is_admin) {
     document.getElementById("admin-nav-btn").classList.remove("hidden");
@@ -528,6 +529,8 @@ async function refreshUserData() {
     const acctEmail = document.getElementById("account-header-email");
     if (acctEmail) acctEmail.textContent = USER.email || "—";
 
+    updatePlanUI();
+
     const vText = document.getElementById("verification-text");
     const vBtn = document.getElementById("verify-email-btn");
     if (USER.email_verified) {
@@ -541,6 +544,21 @@ async function refreshUserData() {
       vBtn.classList.remove("hidden");
     }
   } catch (e) { toast("Session sync failed.", "error"); }
+}
+
+function updatePlanUI() {
+  if (!USER) return;
+  const planName = USER.subscription_plan_name || "Starter";
+  const canUpgrade = !!USER.can_upgrade;
+
+  const planEl = document.getElementById("account-plan-name");
+  if (planEl) planEl.textContent = planName;
+
+  const topBtn = document.getElementById("upgrade-topbar-btn");
+  if (topBtn) topBtn.classList.toggle("hidden", !canUpgrade);
+
+  const acctBtn = document.getElementById("account-upgrade-btn");
+  if (acctBtn) acctBtn.classList.toggle("hidden", !canUpgrade);
 }
 
 /* --- BROKER & MODE CONFIG --- */
