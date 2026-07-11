@@ -86,6 +86,134 @@ function escJs(str) {
 function toggleAuthMode(showLogin) {
   document.getElementById("login-card").classList.toggle("hidden", !showLogin);
   document.getElementById("register-card").classList.toggle("hidden", showLogin);
+  closeForgotPassword();
+}
+
+/* --- Forgot password (Resend verification → new password) --- */
+let FORGOT_RESET_TOKEN = null;
+
+function openForgotPassword(e) {
+  if (e) e.preventDefault();
+  FORGOT_RESET_TOKEN = null;
+  const emailPrefill = (document.getElementById("login-email")?.value || "").trim();
+  const emailInput = document.getElementById("forgot-email");
+  if (emailInput) emailInput.value = emailPrefill;
+  const codeInput = document.getElementById("forgot-code");
+  if (codeInput) codeInput.value = "";
+  const pw = document.getElementById("forgot-password");
+  const conf = document.getElementById("forgot-confirm");
+  if (pw) { pw.value = ""; pw.type = "password"; }
+  if (conf) { conf.value = ""; conf.type = "password"; }
+  const r1 = document.getElementById("robot-forgot");
+  const r2 = document.getElementById("robot-forgot-confirm");
+  if (r1) r1.src = "/static/images/hide-password.png";
+  if (r2) r2.src = "/static/images/hide-password.png";
+  showForgotStep("request");
+  document.getElementById("forgot-modal").classList.remove("hidden");
+}
+
+function closeForgotPassword() {
+  const modal = document.getElementById("forgot-modal");
+  if (modal) modal.classList.add("hidden");
+  FORGOT_RESET_TOKEN = null;
+}
+
+function showForgotStep(step) {
+  const map = {
+    request: "forgot-step-request",
+    verify: "forgot-step-verify",
+    reset: "forgot-step-reset",
+  };
+  Object.entries(map).forEach(([key, id]) => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle("hidden", key !== step);
+  });
+}
+
+function forgotPasswordBackToRequest() {
+  FORGOT_RESET_TOKEN = null;
+  showForgotStep("request");
+}
+
+async function sendForgotPasswordCode() {
+  const email = (document.getElementById("forgot-email")?.value || "").trim();
+  if (!email || !email.includes("@")) return toast("Enter a valid email address", "error");
+  const btn = document.getElementById("forgot-send-btn");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api("/auth/password-reset/request", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+    if (res && res.email_not_configured) {
+      toast(res.detail || "Email is not configured on this server.", "error");
+      return;
+    }
+    const display = document.getElementById("forgot-email-display");
+    if (display) display.textContent = email;
+    const codeInput = document.getElementById("forgot-code");
+    if (codeInput) codeInput.value = "";
+    showForgotStep("verify");
+    toast("If an account exists for that email, a verification code has been sent.", "success");
+  } catch (e) {
+    toast(e, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function verifyForgotPasswordCode() {
+  const email = (document.getElementById("forgot-email")?.value || "").trim();
+  const code = (document.getElementById("forgot-code")?.value || "").trim();
+  if (!code) return toast("Enter the verification code from your email", "error");
+  const btn = document.getElementById("forgot-verify-btn");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api("/auth/password-reset/verify", {
+      method: "POST",
+      body: JSON.stringify({ email, code }),
+    });
+    FORGOT_RESET_TOKEN = res.reset_token;
+    if (!FORGOT_RESET_TOKEN) throw new Error("Reset session could not be created.");
+    showForgotStep("reset");
+    toast("Email verified — choose a new password.", "success");
+  } catch (e) {
+    toast(e, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function confirmForgotPassword(e) {
+  e.preventDefault();
+  const password = document.getElementById("forgot-password")?.value || "";
+  const confirm = document.getElementById("forgot-confirm")?.value || "";
+  if (password.length < 8) return toast("Password must be at least 8 characters", "error");
+  if (password !== confirm) return toast("Passwords do not match", "error");
+  if (!FORGOT_RESET_TOKEN) return toast("Reset session expired. Request a new verification code.", "error");
+
+  const btn = document.getElementById("forgot-reset-btn");
+  if (btn) btn.disabled = true;
+  try {
+    await api("/auth/password-reset/confirm", {
+      method: "POST",
+      body: JSON.stringify({
+        reset_token: FORGOT_RESET_TOKEN,
+        password,
+        confirm_password: confirm,
+      }),
+    });
+    const email = (document.getElementById("forgot-email")?.value || "").trim();
+    closeForgotPassword();
+    toggleAuthMode(true);
+    const loginEmail = document.getElementById("login-email");
+    if (loginEmail && email) loginEmail.value = email;
+    toast("Password updated. Sign in with your new password.", "success");
+  } catch (err) {
+    toast(err, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function handleLogin(e) {

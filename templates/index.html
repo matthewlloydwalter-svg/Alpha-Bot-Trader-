@@ -43,6 +43,9 @@
                   <button type="submit" class="btn btn-primary" style="width:100%;margin-top:6px">Sign In</button>
                 </div>
               </form>
+              <div style="text-align:center;margin-top:12px;font-size:13px">
+                <a href="#" onclick="openForgotPassword(event)" style="color:var(--blue);text-decoration:none">Forgot password?</a>
+              </div>
               <div style="text-align:center;margin-top:16px;font-size:13px;color:var(--t2)">
                 Don't have an account? <a href="#" onclick="toggleAuthMode(false)" style="color:var(--blue);text-decoration:none">Create one</a>
               </div>
@@ -548,6 +551,76 @@
     <div style="display:flex;justify-content:flex-end;gap:10px">
       <button class="btn" onclick="closeVerificationModal()">Cancel</button>
       <button class="btn btn-primary" id="confirm-verify-btn" onclick="submitVerificationCode()">Confirm Token</button>
+    </div>
+  </div>
+</div>
+
+<div id="forgot-modal" class="modal-bg hidden">
+  <div class="modal">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div class="slbl" style="margin:0">Reset password</div>
+      <button class="btn btn-ghost btn-sm" onclick="closeForgotPassword()" style="font-size:18px;padding:4px 8px">✕</button>
+    </div>
+
+    <!-- Step 1: explain + send code -->
+    <div id="forgot-step-request">
+      <p style="color:var(--t2);margin-bottom:14px;font-size:13px;line-height:1.55">
+        To reset your password, you need to verify your email. We’ll send a 6-digit
+        code to your inbox using the same secure email process as account verification.
+      </p>
+      <label class="field">Email Address
+        <input type="email" id="forgot-email" required placeholder="you@example.com" autocomplete="email">
+      </label>
+      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px">
+        <button type="button" class="btn" onclick="closeForgotPassword()">Cancel</button>
+        <button type="button" class="btn btn-primary" id="forgot-send-btn" onclick="sendForgotPasswordCode()">Send verification email</button>
+      </div>
+    </div>
+
+    <!-- Step 2: enter code -->
+    <div id="forgot-step-verify" class="hidden">
+      <p style="color:var(--t2);margin-bottom:14px;font-size:13px;line-height:1.55">
+        Enter the 6-digit verification code we sent to
+        <strong id="forgot-email-display" style="color:var(--t1)"></strong>.
+      </p>
+      <input type="text" id="forgot-code" placeholder="000000" maxlength="6" inputmode="numeric" autocomplete="one-time-code"
+             style="text-align:center;font-size:20px;letter-spacing:4px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="forgotPasswordBackToRequest()">← Back</button>
+        <div style="display:flex;gap:10px;margin-left:auto">
+          <button type="button" class="btn" onclick="closeForgotPassword()">Cancel</button>
+          <button type="button" class="btn btn-primary" id="forgot-verify-btn" onclick="verifyForgotPasswordCode()">Verify code</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: new password (create-account style, no email) -->
+    <div id="forgot-step-reset" class="hidden">
+      <p style="color:var(--t2);margin-bottom:14px;font-size:13px;line-height:1.55">
+        Email verified. Choose a new password for your account.
+      </p>
+      <form onsubmit="confirmForgotPassword(event)">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <div class="field">
+            <label for="forgot-password">New password</label>
+            <div class="input-icon-wrap">
+              <input type="password" id="forgot-password" required minlength="8" placeholder="Minimum 8 characters" autocomplete="new-password">
+              <img src="/static/images/hide-password.png" id="robot-forgot" onclick="togglePassword('forgot-password', 'robot-forgot', event)" alt="Show or hide password">
+            </div>
+          </div>
+          <div class="field">
+            <label for="forgot-confirm">Confirm new password</label>
+            <div class="input-icon-wrap">
+              <input type="password" id="forgot-confirm" required placeholder="Confirm password" autocomplete="new-password">
+              <img src="/static/images/hide-password.png" id="robot-forgot-confirm" onclick="togglePassword('forgot-confirm', 'robot-forgot-confirm', event)" alt="Show or hide password">
+            </div>
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:10px">
+            <button type="button" class="btn" onclick="closeForgotPassword()">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="forgot-reset-btn">Update password</button>
+          </div>
+        </div>
+      </form>
     </div>
   </div>
 </div>

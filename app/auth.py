@@ -10,18 +10,25 @@ logger = logging.getLogger("AlphaBotix Trading")
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.database import User, get_db
-from app.email_service import EmailError, send_verification_email as _send_verification_email
+from app.email_service import (
+    EmailError,
+    send_verification_email as _send_verification_email,
+    send_password_reset_email as _send_password_reset_email,
+)
 
 # Re-export so existing `from app.auth import EmailError, send_verification_email` keeps working.
 __all__ = [
     "EmailError",
     "send_verification_email",
+    "send_password_reset_email",
     "get_current_user",
     "hash_password",
     "verify_password",
     "is_user_admin",
     "create_session_token",
     "decode_session_token",
+    "create_password_reset_token",
+    "decode_password_reset_token",
     "generate_verification_code",
     "PLATFORM_NAME",
     "ADMIN_EMAILS",
@@ -112,6 +119,11 @@ def send_verification_email(to_email: str, code: str) -> bool:
     """Send the verification code via Resend (see app.email_service)."""
     return _send_verification_email(to_email, code, platform_name=PLATFORM_NAME)
 
+
+def send_password_reset_email(to_email: str, code: str) -> bool:
+    """Send a password-reset code via the same Resend configuration."""
+    return _send_password_reset_email(to_email, code, platform_name=PLATFORM_NAME)
+
 def is_user_admin(email: str) -> bool:
     return email.strip().lower() in ADMIN_EMAILS
 
@@ -128,6 +140,27 @@ def decode_session_token(token: str):
         return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
     except JWTError:
         return None
+
+
+PASSWORD_RESET_EXPIRE_MINUTES = 15
+
+
+def create_password_reset_token(user_id: int, email: str) -> str:
+    """Short-lived token issued only after a correct email verification code."""
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "purpose": "password_reset",
+        "exp": datetime.utcnow() + timedelta(minutes=PASSWORD_RESET_EXPIRE_MINUTES),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def decode_password_reset_token(token: str):
+    payload = decode_session_token(token)
+    if not payload or payload.get("purpose") != "password_reset":
+        return None
+    return payload
 
 def generate_verification_code() -> str:
     return str(random.randint(100000, 999999))

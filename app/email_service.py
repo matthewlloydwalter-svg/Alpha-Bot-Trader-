@@ -108,3 +108,22 @@ def send_verification_email(to_email: str, code: str, platform_name: str = "Alph
     )
     send_email(to_email, subject, html=html, text=text)
     return True
+
+
+def send_password_reset_email(to_email: str, code: str, platform_name: str = "AlphaBotix Trading") -> bool:
+    """Send a password-reset verification code via the same Resend path."""
+    subject = f"[{platform_name}] Password reset code"
+    text = (
+        f"Your {platform_name} password reset code is: {code}\n\n"
+        "Enter this code on the reset form to choose a new password.\n"
+        "If you did not request a password reset, you can ignore this email."
+    )
+    html = (
+        f"<p>Your <strong>{platform_name}</strong> password reset code is:</p>"
+        f"<p style=\"font-size:24px;letter-spacing:4px;font-weight:700\">{code}</p>"
+        f"<p style=\"color:#666;font-size:13px\">Enter this code on the reset form to "
+        f"choose a new password. If you did not request a password reset, you can "
+        f"ignore this email.</p>"
+    )
+    send_email(to_email, subject, html=html, text=text)
+    return True
