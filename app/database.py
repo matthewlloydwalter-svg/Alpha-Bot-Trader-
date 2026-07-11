@@ -97,6 +97,8 @@ class User(Base):
     subscription_status = Column(String, nullable=True)  # active | canceled | …
     stripe_customer_id = Column(String, nullable=True)
     stripe_subscription_id = Column(String, nullable=True)
+    # End of the current paid period (from Stripe current_period_end).
+    subscription_current_period_end = Column(DateTime, nullable=True)
 
     bots = relationship("Bot", back_populates="owner")
     trades = relationship("Trade", back_populates="owner")
@@ -286,6 +288,7 @@ _MIGRATIONS = {
         "subscription_status": "VARCHAR",
         "stripe_customer_id": "VARCHAR",
         "stripe_subscription_id": "VARCHAR",
+        "subscription_current_period_end": "TIMESTAMP",
     },
 }
 

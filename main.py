@@ -297,12 +297,15 @@ def _enforce_bot_create_limit(user: User, db: Session) -> None:
 def _user_plan_payload(user: User) -> dict:
     is_admin = bool(user.is_admin or is_user_admin(user.email or ""))
     plan = normalize_plan(getattr(user, "subscription_plan", None))
+    end = getattr(user, "subscription_current_period_end", None)
     return {
         "subscription_plan": plan,
         "subscription_plan_name": plan_display_name(plan, is_admin=is_admin),
         "subscription_interval": getattr(user, "subscription_interval", None),
         "subscription_status": getattr(user, "subscription_status", None),
+        "subscription_current_period_end": end.isoformat() + "Z" if end else None,
         "can_upgrade": (not is_admin) and plan != "enterprise",
+        "has_stripe_customer": bool(getattr(user, "stripe_customer_id", None)),
     }
 
 
@@ -418,8 +421,61 @@ def upgrade_plans_pane(request: Request, db: Session = Depends(get_db)):
             is_admin=bool(user.is_admin or is_user_admin(user.email or "")),
         ),
         CAN_UPGRADE=_user_plan_payload(user)["can_upgrade"],
+        HAS_STRIPE_CUSTOMER=bool(getattr(user, "stripe_customer_id", None)),
         USER_EMAIL=user.email,
         STRIPE_CONFIGURED=bool(STRIPE_SECRET_KEY),
+    )
+
+
+@app.get("/checkout/success", response_class=HTMLResponse)
+def checkout_success_pane(request: Request, db: Session = Depends(get_db), session_id: str = ""):
+    """
+    Post-Checkout landing. Confirms the session server-side (when possible),
+    then shows status and links back into the app.
+    """
+    try:
+        user = get_current_user_from_cookie(request, db)
+    except Exception:
+        return RedirectResponse(url="/login", status_code=303)
+
+    confirmed = False
+    error = ""
+    sid = (session_id or request.query_params.get("session_id") or "").strip()
+    if sid and STRIPE_SECRET_KEY:
+        try:
+            import stripe
+            stripe.api_key = STRIPE_SECRET_KEY
+            session = stripe.checkout.Session.retrieve(sid)
+            meta = session.get("metadata") or {}
+            owns = (
+                str(session.get("client_reference_id") or "") == str(user.id)
+                or str(meta.get("user_id") or "") == str(user.id)
+            )
+            if not owns:
+                error = "This Checkout session does not belong to your account."
+            elif session.get("payment_status") in {"paid", "no_payment_required"} or session.get("status") == "complete":
+                stripe_billing.sync_user_from_checkout_session(user, session)
+                db.add(user)
+                db.commit()
+                db.refresh(user)
+                confirmed = True
+            else:
+                error = "Payment is still processing. Your plan will update when Stripe confirms."
+        except Exception as exc:
+            logger.warning("checkout success confirm failed: %s", exc)
+            error = "Could not confirm Checkout yet. If you were charged, access will unlock via webhook shortly."
+
+    return _html_page(
+        request,
+        "checkout_success.html",
+        YEAR=datetime.now(timezone.utc).year,
+        CONFIRMED=confirmed,
+        ERROR=error,
+        PLAN_NAME=plan_display_name(
+            getattr(user, "subscription_plan", None),
+            is_admin=bool(user.is_admin or is_user_admin(user.email or "")),
+        ),
+        USER_EMAIL=user.email,
     )
 
 
@@ -430,8 +486,12 @@ def api_plans():
 
 
 class CheckoutModel(BaseModel):
-    plan: str
-    interval: str = "month"
+    """Client may send only a price_id or lookup_key — never amounts."""
+    price_id: Optional[str] = None
+    lookup_key: Optional[str] = None
+    # Backward-compatible fields: server maps them to an allowlisted price_id.
+    plan: Optional[str] = None
+    interval: Optional[str] = None
 
 
 @app.post("/billing/checkout")
@@ -441,21 +501,31 @@ def billing_checkout(
     u: User = Depends(get_current_user_from_cookie),
     db: Session = Depends(get_db),
 ):
-    """Create a Stripe Checkout session (or in-place upgrade) for the selected plan."""
+    """
+    Create a Stripe Checkout Session (mode=subscription).
+    Server builds line_items from an allowlisted price_id / lookup_key.
+    Returns {"url": "..."} — frontend redirects the browser to that URL.
+    """
     if u.is_admin or is_user_admin(u.email or ""):
         raise HTTPException(status_code=400, detail="Admin accounts already have unlimited access.")
-    plan = normalize_plan(body.plan)
-    interval = (body.interval or "month").strip().lower()
-    if interval not in INTERVALS:
-        raise HTTPException(status_code=400, detail="Interval must be week, month, or year.")
-    if plan == "starter":
-        raise HTTPException(status_code=400, detail="Starter is free — no checkout required.")
+
+    price_id = (body.price_id or "").strip() or None
+    lookup_key = (body.lookup_key or "").strip() or None
+    if not price_id and not lookup_key and body.plan:
+        # Legacy UI: map plan+interval → allowlisted price_id on the server.
+        from app.plans import price_id_for
+        interval = (body.interval or "month").strip().lower()
+        if interval not in INTERVALS:
+            raise HTTPException(status_code=400, detail="Interval must be week, month, or year.")
+        price_id = price_id_for(normalize_plan(body.plan), interval)
+        if not price_id:
+            raise HTTPException(status_code=400, detail="Starter is free — no checkout required.")
+
     try:
-        # Ensure customer id is persisted if created.
-        result = stripe_billing.start_checkout_or_upgrade(
+        result = stripe_billing.create_checkout_session(
             u,
-            plan,
-            interval,
+            price_id=price_id,
+            lookup_key=lookup_key,
             public_base_url=_request_public_base(request),
         )
         db.add(u)
@@ -466,6 +536,28 @@ def billing_checkout(
     except Exception as exc:
         logger.exception("Stripe checkout failed")
         raise HTTPException(status_code=502, detail=f"Stripe checkout failed: {exc}")
+
+
+@app.post("/billing/portal")
+def billing_portal(
+    request: Request,
+    u: User = Depends(get_current_user_from_cookie),
+    db: Session = Depends(get_db),
+):
+    """Create a Stripe Customer Billing Portal session and return its URL."""
+    try:
+        result = stripe_billing.create_billing_portal_session(
+            u,
+            public_base_url=_request_public_base(request),
+        )
+        db.add(u)
+        db.commit()
+        return result
+    except BillingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    except Exception as exc:
+        logger.exception("Stripe billing portal failed")
+        raise HTTPException(status_code=502, detail=f"Stripe portal failed: {exc}")
 
 
 @app.get("/billing/checkout/confirm")
@@ -489,7 +581,6 @@ def billing_confirm_checkout(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not load Checkout session: {exc}")
     if str(session.get("client_reference_id") or "") not in {"", str(u.id)}:
-        # Still allow if metadata user_id matches.
         meta = session.get("metadata") or {}
         if str(meta.get("user_id") or "") != str(u.id):
             raise HTTPException(status_code=403, detail="Checkout session does not belong to this account.")
@@ -500,9 +591,8 @@ def billing_confirm_checkout(
     return {"ok": True, **_user_plan_payload(u)}
 
 
-@app.post("/billing/webhook")
-async def billing_webhook(request: Request, db: Session = Depends(get_db)):
-    """Stripe webhook — keeps subscription_plan in sync."""
+async def _handle_stripe_webhook(request: Request, db: Session):
+    """Shared Stripe webhook handler (signature-verified)."""
     payload = await request.body()
     sig = request.headers.get("stripe-signature") or ""
     try:
@@ -512,34 +602,33 @@ async def billing_webhook(request: Request, db: Session = Depends(get_db)):
 
     etype = event.get("type")
     data = (event.get("data") or {}).get("object") or {}
+    user = stripe_billing.find_user_for_stripe_object(db, data, User)
 
-    user = None
-    if etype == "checkout.session.completed":
-        uid = (data.get("metadata") or {}).get("user_id") or data.get("client_reference_id")
-        if uid:
-            user = db.query(User).filter(User.id == int(uid)).first()
-        if user:
-            stripe_billing.sync_user_from_checkout_session(user, data)
+    if etype == "checkout.session.completed" and user:
+        stripe_billing.sync_user_from_checkout_session(user, data)
     elif etype in {
         "customer.subscription.updated",
         "customer.subscription.created",
         "customer.subscription.deleted",
-    }:
-        uid = (data.get("metadata") or {}).get("user_id")
-        sub_id = data.get("id")
-        if uid:
-            user = db.query(User).filter(User.id == int(uid)).first()
-        if not user and sub_id:
-            user = db.query(User).filter(User.stripe_subscription_id == sub_id).first()
-        if not user and data.get("customer"):
-            user = db.query(User).filter(User.stripe_customer_id == data.get("customer")).first()
-        if user:
-            stripe_billing.sync_user_from_subscription(user, data)
+    } and user:
+        stripe_billing.sync_user_from_subscription(user, data)
 
     if user is not None:
         db.add(user)
         db.commit()
     return {"received": True}
+
+
+@app.post("/webhooks/stripe")
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+    """Stripe webhook endpoint (preferred path)."""
+    return await _handle_stripe_webhook(request, db)
+
+
+@app.post("/billing/webhook")
+async def billing_webhook(request: Request, db: Session = Depends(get_db)):
+    """Alias of /webhooks/stripe for existing Stripe dashboard configs."""
+    return await _handle_stripe_webhook(request, db)
 
 
 @app.get("/terms", response_class=HTMLResponse)

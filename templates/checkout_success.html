@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checkout — {{ PLATFORM_NAME }}</title>
+<meta name="robots" content="noindex,nofollow">
+<link rel="stylesheet" href="/static/css/style.css?v={{ ASSET_VERSION }}">
+<link rel="stylesheet" href="/static/css/pricing.css?v={{ ASSET_VERSION }}">
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2688407250698963"
+     crossorigin="anonymous"></script>
+</head>
+<body class="upgrade-page">
+  <div class="topbar">
+    <div class="topbar-left">
+      <img src="/static/images/alphabot-trading-logo.png" alt="{{ PLATFORM_NAME }} logo" class="brand-logo">
+      <span class="logo-text">{{ PLATFORM_NAME }}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="color:var(--t2);font-size:12px">{{ USER_EMAIL }}</span>
+      <a class="btn btn-sm btn-ghost" href="/dashboard/portfolio">Dashboard</a>
+    </div>
+  </div>
+
+  <main class="upgrade-wrap">
+    <header class="upgrade-hero">
+      {% if CONFIRMED %}
+        <h1>You're all set</h1>
+        <p>
+          Payment confirmed. Your account is now on
+          <strong>{{ PLAN_NAME }}</strong> with status <strong>active</strong>.
+        </p>
+        <div class="upgrade-flash ok" role="status">Subscription unlocked — you can create bots up to your plan limit.</div>
+      {% elif ERROR %}
+        <h1>Thanks — almost there</h1>
+        <p>{{ ERROR }}</p>
+        <div class="upgrade-flash err" role="status">{{ ERROR }}</div>
+      {% else %}
+        <h1>Thanks for upgrading</h1>
+        <p>
+          If Stripe has finished processing, your plan will show as
+          <strong>{{ PLAN_NAME }}</strong>. You can return to the dashboard anytime.
+        </p>
+      {% endif %}
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px">
+        <a class="btn btn-primary" href="/dashboard/bots">Go to Bots</a>
+        <a class="btn btn-ghost" href="/upgrade-plans">View plans</a>
+        <a class="btn btn-ghost" href="/dashboard/account">Account</a>
+      </div>
+    </header>
+  </main>
+</body>
+</html>

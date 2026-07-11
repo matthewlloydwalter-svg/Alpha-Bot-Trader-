@@ -46,6 +46,10 @@ below cover only non-obvious caveats for this environment.
   legal, admin) so Google can auto-place ads sitewide.
 - New signups start on the **Starter** plan (1 bot). Admins are unlimited. Paid
   tiers map to Growth 5 / Pro 10 / Enterprise 25 bots via Stripe on `/upgrade-plans`.
+  Checkout: `POST /billing/checkout` with `{price_id}` only (server builds
+  `mode=subscription` line items). Portal: `POST /billing/portal`.
+  Webhooks: `POST /webhooks/stripe` (alias `/billing/webhook`). Success page:
+  `/checkout/success?session_id={CHECKOUT_SESSION_ID}`.
   Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and `PUBLIC_BASE_URL` in prod.
 - On startup an **always-on APScheduler background engine** launches (see `app/scheduler.py`):
   it polls market data every 30s and evaluates running bots every 60s. The first OKX poll fetches

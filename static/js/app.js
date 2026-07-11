@@ -561,6 +561,16 @@ function updatePlanUI() {
   if (acctBtn) acctBtn.classList.toggle("hidden", !canUpgrade);
 }
 
+async function openBillingPortal() {
+  try {
+    const data = await api("/billing/portal", { method: "POST", body: "{}" });
+    if (!data || !data.url) throw new Error("No portal URL returned");
+    location.href = data.url;
+  } catch (err) {
+    toast(err, "error");
+  }
+}
+
 /* --- BROKER & MODE CONFIG --- */
 function renderModeUI() {
   const m = USER.trading_mode || "paper";

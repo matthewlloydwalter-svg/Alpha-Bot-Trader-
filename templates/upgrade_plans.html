@@ -16,8 +16,9 @@
       <img src="/static/images/alphabot-trading-logo.png" alt="{{ PLATFORM_NAME }} logo" class="brand-logo">
       <span class="logo-text">{{ PLATFORM_NAME }}</span>
     </div>
-    <div style="display:flex;align-items:center;gap:10px">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="color:var(--t2);font-size:12px">{{ USER_EMAIL }}</span>
+      <button type="button" class="btn btn-sm btn-ghost" id="manage-billing-btn">Manage billing</button>
       <a class="btn btn-sm btn-ghost" href="/dashboard/account">Back to Account</a>
     </div>
   </div>
@@ -28,6 +29,7 @@
       <p>
         Current plan: <strong id="current-plan-label">{{ CURRENT_PLAN_NAME }}</strong>.
         Choose a tier and billing period, then continue to secure Stripe Checkout.
+        Amounts are never sent from the browser — only an allowlisted <code>price_id</code>.
       </p>
       <div id="upgrade-flash" class="upgrade-flash hidden" role="status"></div>
     </header>
@@ -79,7 +81,8 @@
       </p>
       {% else %}
       <p class="upgrade-note">
-        Payments are processed securely by Stripe. You can change plans anytime; prorations apply when switching paid tiers.
+        Payments are processed securely by Stripe Checkout. Use <strong>Manage billing</strong> to update payment
+        methods or cancel. Point webhooks at <code>/webhooks/stripe</code>.
       </p>
       {% endif %}
     </section>
@@ -103,43 +106,52 @@
       }
 
       const params = new URLSearchParams(location.search);
-      if (params.get("success") === "1") {
-        showFlash("Payment received — syncing your plan…", true);
-        const sid = params.get("session_id") || "";
-        if (sid) {
-          fetch("/billing/checkout/confirm?session_id=" + encodeURIComponent(sid), { credentials: "include" })
-            .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
-            .then(({ ok, d }) => {
-              if (ok && d.subscription_plan_name) {
-                const label = document.getElementById("current-plan-label");
-                if (label) label.textContent = d.subscription_plan_name;
-                showFlash("You're now on " + d.subscription_plan_name + ".", true);
-              } else {
-                showFlash("Checkout completed. If your plan does not update shortly, refresh this page.", true);
-              }
-            })
-            .catch(() => showFlash("Checkout completed. Refresh if your plan label is still outdated.", true));
-        }
-      } else if (params.get("upgraded") === "1") {
-        showFlash("Your subscription was updated.", true);
-      } else if (params.get("canceled") === "1") {
+      if (params.get("canceled") === "1") {
         showFlash("Checkout canceled — no charges were made.", false);
       }
+
+      document.getElementById("manage-billing-btn")?.addEventListener("click", async () => {
+        const btn = document.getElementById("manage-billing-btn");
+        btn.disabled = true;
+        try {
+          const resp = await fetch("/billing/portal", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(data.detail || "Could not open billing portal");
+          if (!data.url) throw new Error("No portal URL returned");
+          location.href = data.url;
+        } catch (err) {
+          showFlash(err.message || String(err), false);
+          btn.disabled = false;
+        }
+      });
 
       root.querySelectorAll(".upgrade-btn[data-plan]").forEach((btn) => {
         if (btn.disabled) return;
         btn.addEventListener("click", async () => {
-          const plan = btn.getAttribute("data-plan");
           const interval = root.dataset.interval || "month";
+          const priceId =
+            btn.dataset.priceId ||
+            btn.getAttribute("data-price-" + interval) ||
+            "";
+          if (!priceId) {
+            showFlash("No Stripe price is configured for this option.", false);
+            return;
+          }
           btn.disabled = true;
           const prev = btn.textContent;
           btn.textContent = "Redirecting…";
           try {
+            // Send only the allowlisted price_id — never amounts or line items.
             const resp = await fetch("/billing/checkout", {
               method: "POST",
               credentials: "include",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ plan, interval }),
+              body: JSON.stringify({ price_id: priceId }),
             });
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok) throw new Error(data.detail || "Checkout failed");
