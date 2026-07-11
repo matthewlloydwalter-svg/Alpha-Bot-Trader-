@@ -21,7 +21,7 @@ _IS_PROD = IS_PROD  # backward-compatible alias
 ADMIN_AI_WRITES = _env_flag("ADMIN_AI_WRITES", "0")
 
 # Free-tier bot cap fallback for non-admins when subscription_plan is starter.
-# Plan tiers: Starter 1 | Growth 5 | Pro 10 | Enterprise unlimited. Admins unlimited.
+# Plan tiers: Starter 1 | Growth 5 | Pro 10 | Enterprise 25. Admins unlimited.
 try:
     FREE_BOT_LIMIT = int(os.getenv("FREE_BOT_LIMIT", "1") or 1)
 except ValueError:

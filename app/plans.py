@@ -65,9 +65,9 @@ PLAN_CATALOG: dict[str, dict[str, Any]] = {
     "enterprise": {
         "key": "enterprise",
         "name": "Enterprise",
-        "bots": None,
-        "unlimited": True,
-        "bots_label": "Unlimited Bots",
+        "bots": 25,
+        "unlimited": False,
+        "bots_label": "Up to 25 Bots",
         "featured": False,
         "free": False,
         "display": {
