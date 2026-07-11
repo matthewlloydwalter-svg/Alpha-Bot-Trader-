@@ -49,11 +49,21 @@ def _assert_production_config() -> None:
     """Fail closed on missing launch-critical secrets in production."""
     if not IS_PROD:
         return
-    key_secret = (os.getenv("KEY_ENCRYPTION_SECRET") or "").strip()
+    # Match app.credentials: KEY_ENCRYPTION_SECRET if set, otherwise JWT_SECRET.
+    key_secret = (
+        (os.getenv("KEY_ENCRYPTION_SECRET") or "").strip()
+        or (os.getenv("JWT_SECRET") or "").strip()
+    )
     if len(key_secret) < 24:
         raise RuntimeError(
-            "KEY_ENCRYPTION_SECRET must be set to a unique secret of at least 24 "
-            "characters in production so broker API keys are encrypted at rest."
+            "Broker key encryption requires KEY_ENCRYPTION_SECRET or JWT_SECRET "
+            "of at least 24 characters in production. Set KEY_ENCRYPTION_SECRET "
+            "(preferred) or ensure JWT_SECRET is long enough."
+        )
+    if not (os.getenv("KEY_ENCRYPTION_SECRET") or "").strip():
+        logger.warning(
+            "[STARTUP] KEY_ENCRYPTION_SECRET unset — using JWT_SECRET for "
+            "broker key encryption. Prefer a dedicated KEY_ENCRYPTION_SECRET."
         )
     if not RESEND_API_KEY:
         raise RuntimeError(
