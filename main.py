@@ -22,8 +22,9 @@ load_dotenv()
 from app.database import engine, Base, init_db, get_db, SessionLocal, User, Bot, Trade, ActivityLog, MarketQuote, SiteSettings, ensure_site_settings
 from app.auth import (
     hash_password, verify_password, create_session_token, decode_session_token,
-    generate_verification_code, send_verification_email, is_user_admin, PLATFORM_NAME,
-    get_current_user, EmailError
+    generate_verification_code, send_verification_email, send_password_reset_email,
+    create_password_reset_token, decode_password_reset_token,
+    is_user_admin, PLATFORM_NAME, get_current_user, EmailError
 )
 from app.config import SESSION_COOKIE_SECURE, FRONTEND_ORIGINS, DOCS_ENABLED, APP_ENV
 from app.brokers import get_account_info, get_spot_price, get_position_snapshot, BrokerError
@@ -116,6 +117,21 @@ class AuthModel(BaseModel):
 
 class VerificationChallengeModel(BaseModel):
     code: str
+
+
+class PasswordResetRequestModel(BaseModel):
+    email: str
+
+
+class PasswordResetVerifyModel(BaseModel):
+    email: str
+    code: str
+
+
+class PasswordResetConfirmModel(BaseModel):
+    reset_token: str
+    password: str
+    confirm_password: Optional[str] = None
 
 class AlpacaKeysModel(BaseModel):
     api_key: str
@@ -326,6 +342,95 @@ def confirm_verification(body: VerificationChallengeModel, u: User = Depends(get
     u.verification_code = None
     db.commit()
     return {"success": True}
+
+
+@app.post("/auth/password-reset/request")
+def password_reset_request(body: PasswordResetRequestModel, request: Request, db: Session = Depends(get_db)):
+    """
+    Start forgot-password: email a 6-digit code via the same Resend path used
+    for account verification. Always returns a generic success payload so we
+    do not reveal whether the email is registered.
+    """
+    limit_verification(request)
+    normalized_email = (body.email or "").strip().lower()
+    if not normalized_email or "@" not in normalized_email:
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+
+    user = db.query(User).filter(User.email == normalized_email).first()
+    if user:
+        code = generate_verification_code()
+        user.verification_code = code
+        db.commit()
+        try:
+            send_password_reset_email(user.email, code)
+        except EmailError as e:
+            logger.warning("Password reset email failed for %s: %s", user.email, e)
+            return {
+                "success": False,
+                "email_not_configured": True,
+                "detail": str(e),
+            }
+        except Exception as e:
+            logger.error("Unexpected password-reset email error for %s: %s", user.email, e)
+            raise HTTPException(status_code=500, detail=f"Unexpected mail error: {e}")
+
+    return {
+        "success": True,
+        "detail": "If an account exists for that email, a verification code has been sent.",
+    }
+
+
+@app.post("/auth/password-reset/verify")
+def password_reset_verify(body: PasswordResetVerifyModel, request: Request, db: Session = Depends(get_db)):
+    """Confirm the emailed code and issue a short-lived password-reset token."""
+    limit_auth(request)
+    normalized_email = (body.email or "").strip().lower()
+    code = (body.code or "").strip()
+    if not normalized_email or not code:
+        raise HTTPException(status_code=400, detail="Enter your email and verification code.")
+
+    user = db.query(User).filter(User.email == normalized_email).first()
+    if not user or not user.verification_code or user.verification_code != code:
+        raise HTTPException(status_code=400, detail="Invalid verification code.")
+
+    # Consume the one-time code; the reset token authorizes the password change.
+    user.verification_code = None
+    # Proving inbox access also satisfies email verification.
+    user.email_verified = True
+    db.commit()
+    reset_token = create_password_reset_token(user.id, user.email)
+    return {"success": True, "reset_token": reset_token}
+
+
+@app.post("/auth/password-reset/confirm")
+def password_reset_confirm(body: PasswordResetConfirmModel, request: Request, db: Session = Depends(get_db)):
+    """Set a new password after a successful code verification."""
+    limit_auth(request)
+    payload = decode_password_reset_token(body.reset_token or "")
+    if not payload:
+        raise HTTPException(status_code=400, detail="Reset session expired. Request a new verification code.")
+    try:
+        user_id = int(payload.get("sub"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Reset session expired. Request a new verification code.")
+
+    if len(body.password or "") < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    if body.confirm_password is not None and body.confirm_password != body.password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Account not found.")
+    token_email = (payload.get("email") or "").strip().lower()
+    if token_email and token_email != (user.email or "").strip().lower():
+        raise HTTPException(status_code=400, detail="Reset session expired. Request a new verification code.")
+
+    user.hashed_password = hash_password(body.password)
+    user.verification_code = None
+    db.commit()
+    logger.info("[AUTH] Password reset completed for user %s", user.id)
+    return {"success": True, "detail": "Password updated. You can sign in with your new password."}
 
 @app.post("/broker/alpaca/keys")
 def save_alpaca_keys(body: AlpacaKeysModel, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):

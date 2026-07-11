@@ -283,7 +283,9 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
    so top:50% lands exactly in the middle of the input box */
 #robot-login,
 #robot-reg,
-#robot-reg-confirm {
+#robot-reg-confirm,
+#robot-forgot,
+#robot-forgot-confirm {
     position: absolute;
     right: 10px;
     top: 50%;
