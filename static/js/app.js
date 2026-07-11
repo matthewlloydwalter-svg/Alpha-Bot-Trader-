@@ -403,10 +403,10 @@ async function triggerEmailVerification() {
   btn.disabled = true; btn.textContent = "Sending...";
   try {
     const res = await api("/auth/trigger-verification", { method: "POST" });
-    if (res && res.smtp_not_configured) {
+    if (res && (res.email_not_configured || res.smtp_not_configured)) {
       const vText = document.getElementById("verification-text");
       if (vText) {
-        vText.textContent = "Email sending is not configured on this server yet. Verification is optional — you can still use the platform.";
+        vText.textContent = (res.detail) || "Email sending is not configured on this server yet (set RESEND_API_KEY). Verification is optional — you can still use the platform.";
         vText.style.color = "var(--amber, #f59e0b)";
       }
       toast("Email not configured on this server — verification is optional.", "");

@@ -256,9 +256,15 @@ def trigger_verification(u: User = Depends(get_current_user_from_cookie), db: Se
         send_verification_email(u.email, code)
     except EmailError as e:
         logger.warning("Verification email failed for %s: %s", u.email, e)
-        # Return 200 with smtp_not_configured so the frontend can show a
+        # Return 200 with email_not_configured so the frontend can show a
         # helpful inline message rather than a red error toast.
-        return {"success": False, "smtp_not_configured": True, "detail": str(e)}
+        # smtp_not_configured kept as a legacy alias for older frontends.
+        return {
+            "success": False,
+            "email_not_configured": True,
+            "smtp_not_configured": True,
+            "detail": str(e),
+        }
     except Exception as e:
         logger.error("Unexpected email error for %s: %s", u.email, e)
         raise HTTPException(status_code=500, detail=f"Unexpected mail error: {e}")
