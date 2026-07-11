@@ -1013,18 +1013,43 @@ async function loadBrokerAccount() {
   el.innerHTML = header + '<span style="color:var(--t3)">Fetching live balance from broker…</span>';
   try {
     const data = await api("/broker/account");
-    el.innerHTML = header + Object.entries(data).map(([k, v]) =>
-      `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px">
-        <span style="color:var(--t2)">${k.replace(/_/g," ")}</span>
-        <span style="font-weight:500">${typeof v === "number" ? "$" + Number(v).toLocaleString() : v}</span>
-      </div>`
-    ).join("");
+    let rowsHtml = "";
+    let headerCash = null;
+    if (data && data.balances && typeof data.balances === "object" && !Array.isArray(data.balances)) {
+      // OKX (and similar) return { balances: { USDT: n, ... } }
+      const entries = Object.entries(data.balances).filter(([, v]) => v != null && Number(v) !== 0);
+      rowsHtml = entries.length
+        ? entries.map(([k, v]) => {
+            const num = Number(v);
+            const display = Number.isFinite(num)
+              ? num.toLocaleString(undefined, { maximumFractionDigits: 8 })
+              : esc(String(v));
+            return `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px">
+              <span style="color:var(--t2)">${esc(k)}</span>
+              <span style="font-weight:500">${display}</span>
+            </div>`;
+          }).join("")
+        : `<div style="color:var(--t2);font-size:13px">No balances reported.</div>`;
+      const usdt = data.balances.USDT ?? data.balances.USD ?? data.balances.USDC;
+      if (usdt != null && Number.isFinite(Number(usdt))) headerCash = Number(usdt);
+    } else {
+      rowsHtml = Object.entries(data || {})
+        .filter(([k, v]) => k !== "error" && (typeof v === "number" || typeof v === "string"))
+        .map(([k, v]) =>
+          `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px">
+            <span style="color:var(--t2)">${esc(k.replace(/_/g, " "))}</span>
+            <span style="font-weight:500">${typeof v === "number" ? "$" + Number(v).toLocaleString() : esc(String(v))}</span>
+          </div>`
+        ).join("");
+      headerCash = data.cash ?? data.buying_power ?? data.equity ?? data.balance;
+      if (headerCash != null) headerCash = Number(headerCash);
+    }
+    el.innerHTML = header + (rowsHtml || `<div style="color:var(--t2);font-size:13px">No account fields returned.</div>`);
     const cashEl = document.getElementById("assets-header-cash");
     if (cashEl) {
-      const cash = data.cash ?? data.buying_power ?? data.equity ?? data.balance;
-      cashEl.textContent = (typeof cash === "number")
-        ? "$" + Number(cash).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-        : (cash != null ? String(cash) : "—");
+      cashEl.textContent = (typeof headerCash === "number" && Number.isFinite(headerCash))
+        ? "$" + headerCash.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : "—";
     }
   } catch (e) { el.innerHTML = header + `<span style="color:var(--red)">⚠ ${e.message}</span>`; }
 }
@@ -1071,6 +1096,7 @@ function _attachLowBalanceHover() {
 try { _attachLowBalanceHover(); } catch (e) { /* non-fatal */ }
 
 function showCreateBotModal() {
+  resetCreateBotForm();
   syncScattershotOption();
   updateLowBalanceStrategyHint();
   document.getElementById("modal-bot").classList.remove("hidden");
@@ -1749,7 +1775,7 @@ async function loadTradeHistory() {
       const qtyStr = qty === 0 ? "0" : qty.toLocaleString(undefined, { maximumFractionDigits: 8 });
       return `
       <tr>
-        <td style="color:var(--t2)">${new Date(t.created_at).toLocaleString()}</td>
+        <td style="color:var(--t2)">${new Date(/Z|[+-]\d{2}:?\d{2}$/.test(t.created_at) ? t.created_at : t.created_at + "Z").toLocaleString()}</td>
         <td style="font-weight:600">${esc(t.bot_name || "—")}</td>
         <td style="font-weight:600">${esc(t.ticker)}</td>
         <td><span class="badge ${t.side === 'buy' ? 'badge-green' : 'badge-red'}">${esc(t.side.toUpperCase())}</span></td>

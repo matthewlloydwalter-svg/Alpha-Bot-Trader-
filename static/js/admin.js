@@ -1,6 +1,6 @@
 async function loadAdminData() {
     try {
-        const statsRes = await fetch('/admin/stats');
+        const statsRes = await fetch('/admin/stats', { credentials: "include" });
         if (!statsRes.ok) throw new Error('Failed to retrieve system status.');
         const stats = await statsRes.json();
 
@@ -17,9 +17,12 @@ async function loadAdminData() {
             `;
         }
 
-        const usersRes = await fetch('/admin/users');
+        const usersRes = await fetch('/admin/users', { credentials: "include" });
         if (!usersRes.ok) throw new Error('Failed to retrieve active database rows.');
         const users = await usersRes.json();
+
+        const esc = (str) => String(str == null ? "" : str)
+            .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 
         const listContainer = document.getElementById('users-list');
         if (listContainer) {
@@ -35,7 +38,7 @@ async function loadAdminData() {
                     <tbody>
                         ${users.map(u => `
                             <tr style="border-bottom: 1px solid var(--border);">
-                                <td style="padding: 8px; font-weight:600;">${u.email}</td>
+                                <td style="padding: 8px; font-weight:600;">${esc(u.email)}</td>
                                 <td style="padding: 8px;">${u.is_admin ? 'Platform Admin' : 'Standard Account'}</td>
                                 <td style="padding: 8px; color: ${u.email_verified ? 'var(--green)' : 'var(--amber)'}">
                                     ${u.email_verified ? 'Verified' : 'Pending Verification'}

@@ -487,6 +487,20 @@ def _close_scattershot_basket(db: Session, owner: User, bot: Bot, reason: str) -
     state = _load_strategy_state(bot)
     legs = list(state.get("legs") or [])
     if not legs:
+        # Clear stuck basket flags so sell/delete don't no-op forever.
+        if bot.in_position or bot.shares_held or bot.strategy_state:
+            bot.in_position = False
+            bot.shares_held = 0
+            bot.avg_entry_price = None
+            bot.peak_price = None
+            bot.stop_price = None
+            bot.take_profit_price = None
+            bot.position_opened_at = None
+            _save_strategy_state(bot, None)
+            if bot.auto_select:
+                bot.ticker = None
+            bot.last_pattern_summary = "Scattershot basket already flat (no legs to close)."
+            db.commit()
         return {"action": "FLAT", "reason": "No scattershot legs to close."}
 
     total_gain = 0.0
@@ -670,6 +684,40 @@ def _run_scattershot_cycle(db: Session, bot: Bot) -> dict:
     legs = state.get("legs") or []
     session_day = state.get("session_date")
 
+    # Corrupt/partial state: marked in position but no legs to manage — attempt
+    # broker liquidations from the joined ticker (if any), then clear local state
+    # so we never open a duplicate basket on top of orphan holdings.
+    if bot.in_position and not legs:
+        symbols = [p.strip() for p in (bot.ticker or "").split(",") if p.strip()]
+        for sym in symbols:
+            try:
+                _liquidate(owner, bot.broker, sym, bot=bot)
+                _log(db, owner.id, f"[SCATTER-SHOT] Reconcile liquidate {sym}.", "WARNING")
+            except Exception as e:
+                _log(db, owner.id, f"[SCATTER-SHOT] Reconcile liquidate {sym} failed: {e}", "ERROR")
+        bot.in_position = False
+        bot.shares_held = 0
+        bot.avg_entry_price = None
+        bot.peak_price = None
+        bot.stop_price = None
+        bot.take_profit_price = None
+        bot.position_opened_at = None
+        _save_strategy_state(bot, None)
+        if bot.auto_select:
+            bot.ticker = None
+        bot.last_pattern_summary = (
+            "Scattershot reconciled — cleared stuck in-position state"
+            + (f" (attempted {', '.join(symbols)})" if symbols else "")
+            + "."
+        )
+        db.commit()
+        _emit_portfolio(owner.id)
+        return {
+            "action": "SELL" if symbols else "FLAT",
+            "reason": "Reconciled scattershot without leg state.",
+            "symbols": symbols,
+        }
+
     if legs:
         if session_day and session_day != session_date_et():
             closed = _close_scattershot_basket(db, owner, bot, reason="stale overnight basket")
@@ -820,7 +868,13 @@ def _attempt_capital_rotation(db: Session, owner: User, candidate_bot: Bot,
     open_bots = [
         b for b in db.query(Bot).filter(
             Bot.owner_id == owner.id, Bot.in_position == True  # noqa: E712
-        ).all() if b.id != candidate_bot.id and b.avg_entry_price
+        ).all()
+        if b.id != candidate_bot.id
+        and b.avg_entry_price
+        # Scattershot baskets need the multi-leg closer; never rotate them via
+        # single-symbol liquidation (comma-joined ticker breaks the broker call).
+        and _strategy_name(b) != "scattershot"
+        and "," not in (b.ticker or "")
     ]
     if not open_bots:
         _log(db, owner.id, "[ROTATION] No open positions available to rotate capital from.")
@@ -1312,7 +1366,7 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
     # Capital availability + (optional) rotation. By default a bot will NEVER
     # liquidate another bot's position — it simply waits. Cross-bot rotation is
     # opt-in via BOT_CAPITAL_ROTATION to prevent identity-confusing behaviour.
-    buying_power = _get_buying_power(owner, bot.broker or "alpaca")
+    buying_power = _get_buying_power(owner, bot.broker or "alpaca", bot=bot)
     if buying_power is not None and buying_power < notional:
         if not CAPITAL_ROTATION_ENABLED:
             db.commit()

@@ -137,9 +137,13 @@ def create_session_token(user_id: int, email: str) -> str:
 
 def decode_session_token(token: str):
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
     except JWTError:
         return None
+    # Password-reset JWTs share the signing key but must never authenticate a session.
+    if isinstance(payload, dict) and payload.get("purpose") == "password_reset":
+        return None
+    return payload
 
 
 PASSWORD_RESET_EXPIRE_MINUTES = 15
@@ -157,7 +161,10 @@ def create_password_reset_token(user_id: int, email: str) -> str:
 
 
 def decode_password_reset_token(token: str):
-    payload = decode_session_token(token)
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except JWTError:
+        return None
     if not payload or payload.get("purpose") != "password_reset":
         return None
     return payload

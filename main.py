@@ -349,7 +349,9 @@ def trigger_verification(request: Request, u: User = Depends(get_current_user_fr
 
 @app.post("/auth/confirm-verification")
 def confirm_verification(body: VerificationChallengeModel, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
-    if not u.verification_code or u.verification_code != body.code.strip():
+    stored = (u.verification_code or "").strip()
+    # Password-reset codes are namespaced so they cannot confirm email verify.
+    if not stored or stored.startswith("rp:") or stored != body.code.strip():
         raise HTTPException(status_code=400, detail="Invalid challenge matching hash sequence provided.")
     u.email_verified = True
     u.verification_code = None
@@ -372,7 +374,9 @@ def password_reset_request(body: PasswordResetRequestModel, request: Request, db
     user = db.query(User).filter(User.email == normalized_email).first()
     if user:
         code = generate_verification_code()
-        user.verification_code = code
+        # Namespace so an in-flight email-verify code is not overwritten ambiguously
+        # and reset codes cannot be reused on /auth/confirm-verification.
+        user.verification_code = f"rp:{code}"
         db.commit()
         try:
             send_password_reset_email(user.email, code)
@@ -396,14 +400,15 @@ def password_reset_request(body: PasswordResetRequestModel, request: Request, db
 @app.post("/auth/password-reset/verify")
 def password_reset_verify(body: PasswordResetVerifyModel, request: Request, db: Session = Depends(get_db)):
     """Confirm the emailed code and issue a short-lived password-reset token."""
-    limit_auth(request)
+    limit_verification(request)
     normalized_email = (body.email or "").strip().lower()
     code = (body.code or "").strip()
     if not normalized_email or not code:
         raise HTTPException(status_code=400, detail="Enter your email and verification code.")
 
     user = db.query(User).filter(User.email == normalized_email).first()
-    if not user or not user.verification_code or user.verification_code != code:
+    expected = f"rp:{code}"
+    if not user or not user.verification_code or user.verification_code != expected:
         raise HTTPException(status_code=400, detail="Invalid verification code.")
 
     # Consume the one-time code; the reset token authorizes the password change.
@@ -1148,18 +1153,20 @@ INSUFFICIENT_FUNDS_MSG = (
 )
 
 
-def _broker_available_funds(user: User) -> Optional[float]:
+def _broker_available_funds(
+    user: User,
+    broker: Optional[str] = None,
+    mode: Optional[str] = None,
+) -> Optional[float]:
     """
-    Verified, allocatable cash from the user's *active* broker session (Alpaca
-    or OKX, paper or live per their current Trading Mode). This is the single
-    source of truth for what can be allocated to a Box.
+    Verified, allocatable cash for a broker + paper/live mode.
 
-    Returns the available cash as a float, or ``None`` when it cannot be
-    verified (no/invalid keys, broker unreachable, no quote-currency balance) —
-    callers treat ``None`` as "no verified funds" and block the allocation.
+    Defaults to the user's active broker / trading mode when omitted.
+    Returns ``None`` when cash cannot be verified (no/invalid keys, etc.) —
+    callers treat ``None`` as "skip the allocation guardrail".
     """
-    broker = (user.active_broker or "alpaca").lower()
-    paper = (user.trading_mode or "paper") == "paper"
+    broker = (broker or user.active_broker or "alpaca").lower()
+    paper = ((mode or user.trading_mode or "paper").lower() == "paper")
     creds = resolve_credentials(user, broker, paper)
     try:
         info = get_account_info(broker=broker, paper=paper, **creds)
@@ -1258,18 +1265,19 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
     # When keys aren't set yet (common in paper mode / new accounts), skip the
     # check and let the user create bots freely — paper trading doesn't risk
     # real money so this is safe.
-    available = _broker_available_funds(u)
+    broker_selected = (data.get("broker") or (u.active_broker or "alpaca")).lower()
+    mode_now = (u.trading_mode or "paper").lower()
+    available = _broker_available_funds(u, broker=broker_selected, mode=mode_now)
     if available is not None:
-        mode_now = (u.trading_mode or "paper").lower()
         already_allocated = sum(
             float(b.funds_allocated or 0.0)
             for b in db.query(Bot).filter(Bot.owner_id == u.id).all()
             if (b.mode or mode_now).lower() == mode_now
+            and (b.broker or u.active_broker or "alpaca").lower() == broker_selected
         )
         if funds > (available - already_allocated) + 1e-6:
             raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
 
-    broker_selected = (data.get("broker") or (u.active_broker or "alpaca")).lower()
     _validate_cash_account_strategy_allocation(u, broker_selected, strategy, funds)
 
     new_bot = Bot(
@@ -1394,19 +1402,21 @@ async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_
         raise HTTPException(status_code=400, detail="Allocated funds must be greater than zero.")
 
     # Same guardrail as bot creation: only enforce when keys are present.
-    available = _broker_available_funds(u)
+    bot_broker = (bot.broker or u.active_broker or "alpaca").lower()
+    bot_mode = (bot.mode or u.trading_mode or "paper").lower()
+    available = _broker_available_funds(u, broker=bot_broker, mode=bot_mode)
     if available is not None:
-        bot_mode = (bot.mode or u.trading_mode or "paper").lower()
         others_allocated = sum(
             float(b.funds_allocated or 0.0)
             for b in db.query(Bot).filter(Bot.owner_id == u.id, Bot.id != bot_id).all()
             if (b.mode or u.trading_mode or "paper").lower() == bot_mode
+            and (b.broker or u.active_broker or "alpaca").lower() == bot_broker
         )
         if new_funds > (available - others_allocated) + 1e-6:
             raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
 
     strategy = (bot.low_balance_strategy or "standard").lower()
-    _validate_cash_account_strategy_allocation(u, bot.broker or "alpaca", strategy, new_funds)
+    _validate_cash_account_strategy_allocation(u, bot_broker, strategy, new_funds)
 
     previous = float(bot.funds_allocated or 0.0)
     bot.funds_allocated = new_funds

@@ -358,12 +358,11 @@ def _backfill_integrity():
                     logger.info("[BACKFILL] Assigned UUIDs to %d legacy bot(s)", len(rows))
 
             if "bots" in tables and "users" in tables:
-                # Backfill bot.mode from owner's trading_mode for pre-existing bots
-                conn.execute(text(
-                    "UPDATE bots SET mode = ("
-                    "  SELECT u.trading_mode FROM users u WHERE u.id = bots.owner_id"
-                    ") WHERE mode = 'paper' AND owner_id IS NOT NULL"
-                ))
+                # Do NOT rewrite bots.mode from owner.trading_mode on every startup.
+                # That forced intentional paper bots into live after an account mode
+                # switch / redeploy. New bots set mode at creation; leave existing
+                # rows alone (paper is the safe default for legacy rows).
+                pass
 
             if "trades" in tables and "bots" in tables:
                 conn.execute(text(
