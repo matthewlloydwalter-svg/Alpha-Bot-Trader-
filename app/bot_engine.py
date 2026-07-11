@@ -548,7 +548,13 @@ def _open_scattershot_basket(db: Session, owner: User, bot: Bot) -> dict:
         if not price or price <= 0:
             continue
         notional = SCATTERSHOT_LEG_NOTIONAL
-        order = _execute(owner, bot.broker, "buy", sym, notional=notional)
+        try:
+            order = _execute(owner, bot.broker, "buy", sym, notional=notional)
+        except BrokerError as e:
+            _log(db, owner.id, f"[SCATTER-SHOT] BUY {sym} failed: {e}")
+            continue
+        if order.get("simulated") and not _paper(owner):
+            continue
         qty = round(notional / price, 8)
         legs.append({
             "ticker": sym,
@@ -656,16 +662,21 @@ def _run_scattershot_cycle(db: Session, bot: Bot) -> dict:
 # ────────────────────────────────────────────────────────────────────
 def _execute(owner: User, broker: str, side: str, symbol: str,
              qty: float = None, notional: float = None) -> dict:
+    paper = _paper(owner)
     try:
         order = place_order(
             broker=broker, side=side, symbol=symbol, qty=qty, notional=notional,
-            paper=_paper(owner), **_creds(owner, broker),
+            paper=paper, **_creds(owner, broker),
         )
         order["simulated"] = False
         return order
     except BrokerError as e:
-        # No/invalid keys → record a simulated fill so the strategy + ledger
-        # remain observable in paper mode without crashing the cycle.
+        # Live mode: never invent a fill — DB would diverge from the broker.
+        if not paper:
+            logger.error("[LIVE] %s %s %s FAILED (no simulated fill): %s", side, symbol, broker, e)
+            raise
+        # Paper mode only: record a simulated fill so strategies stay observable
+        # without broker keys during local/dev use.
         logger.warning("[SIM] %s %s %s simulated (broker said: %s)", side, symbol, broker, e)
         return {"order_id": f"SIM-{datetime.utcnow().timestamp():.0f}",
                 "status": "simulated", "symbol": symbol, "side": side, "simulated": True}
@@ -1296,7 +1307,16 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
             pass
 
     # Execute the entry.
-    order = _execute(owner, bot.broker, "buy", bot.ticker, notional=notional)
+    try:
+        order = _execute(owner, bot.broker, "buy", bot.ticker, notional=notional)
+    except BrokerError as e:
+        bot.last_pattern_summary = f"Live/broker order failed: {e}"
+        db.commit()
+        result.update({"action": "WAIT", "reason": f"Order failed: {e}"})
+        return result
+    if order.get("simulated") and not _paper(owner):
+        result.update({"action": "WAIT", "reason": "Live broker order failed; no position opened."})
+        return result
     # Always derive and persist the exact share quantity — never leave a buy
     # with a null qty (the bug that rendered '0' in the History ledger).
     qty = round(notional / price, 8) if price else 0.0

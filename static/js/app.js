@@ -102,7 +102,8 @@ async function handleRegister(e) {
   const agreed = document.getElementById("reg-tos").checked;
 
   if (password !== confirm) return toast("Passwords do not match", "error");
-  if (!agreed) return toast("You must agree to the Terms of Service", "error");
+  if (password.length < 8) return toast("Password must be at least 8 characters", "error");
+  if (!agreed) return toast("You must agree to the Terms of Service and Privacy Policy", "error");
 
   try {
     USER = await api("/auth/signup", {
@@ -117,6 +118,10 @@ async function handleRegister(e) {
 function openTosModal(e) {
   if (e) e.preventDefault();
   window.open('/terms', '_blank');
+}
+function openPrivacyModal(e) {
+  if (e) e.preventDefault();
+  window.open('/privacy', '_blank');
 }
 
 async function handleLogoutClick() {
@@ -265,9 +270,9 @@ async function refreshUserData() {
       vText.style.color = "var(--green)";
       vBtn.classList.add("hidden");
     } else {
-      // NOTE: email verification is currently OPTIONAL — live trading is unlocked.
-      vText.textContent = "Email not verified (optional for now — live trading is unlocked).";
-      vText.style.color = "var(--t2)";
+      // NOTE: Live trading requires verified email + live broker keys (enforced by API).
+      vText.textContent = "Email not verified — required before enabling Live trading.";
+      vText.style.color = "var(--amber, #f59e0b)";
       vBtn.classList.remove("hidden");
     }
   } catch (e) { toast("Session sync failed.", "error"); }
@@ -362,9 +367,13 @@ async function handleSaveAlpacaKeys(mode) {
   const api_key = document.getElementById(`alpaca-${mode}-key`).value.trim();
   const secret_key = document.getElementById(`alpaca-${mode}-secret`).value.trim();
   if (!api_key || !secret_key) return toast(`Enter both ${mode} Alpaca keys`, "error");
+  if (api_key.includes("•") || secret_key.includes("•")) {
+    return toast("Masked keys can't be re-saved. Paste your full API key and secret to update.", "error");
+  }
   try {
     await api("/broker/alpaca/keys", { method: "POST", body: JSON.stringify({ api_key, secret_key, mode }) });
     toast(`Alpaca ${mode} keys saved.`, "success");
+    await loadBrokerKeys();
   } catch (e) { toast(e, "error"); }
 }
 
@@ -373,9 +382,13 @@ async function handleSaveOkxKeys(mode) {
   const secret_key = document.getElementById(`okx-${mode}-secret`).value.trim();
   const passphrase = document.getElementById(`okx-${mode}-pass`).value.trim();
   if (!api_key || !secret_key || !passphrase) return toast(`Enter all ${mode} OKX fields`, "error");
+  if (api_key.includes("•") || secret_key.includes("•") || passphrase.includes("•")) {
+    return toast("Masked keys can't be re-saved. Paste full OKX credentials to update.", "error");
+  }
   try {
     await api("/broker/okx/keys", { method: "POST", body: JSON.stringify({ api_key, secret_key, passphrase, mode }) });
     toast(`OKX ${mode} keys saved.`, "success");
+    await loadBrokerKeys();
   } catch (e) { toast(e, "error"); }
 }
 

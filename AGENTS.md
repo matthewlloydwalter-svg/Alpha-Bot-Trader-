@@ -27,6 +27,11 @@ below cover only non-obvious caveats for this environment.
 - Broker keys (Alpaca/OKX) and `RESEND_API_KEY` are **optional** for dev. Without them:
   signup/login, bot CRUD, and OKX crypto market data all work; Alpaca equity data and
   email verification do not. From address: `AlphaBotix Trading <updates@alphabotixtrading.com>`.
+- **Live trading** requires verified email + saved Live broker keys (enforced by
+  `POST /broker/trading-mode`). Simulated broker fills are paper-only.
+- Production should set a strong `JWT_SECRET` (≥24 chars). Weak/missing secrets fail closed
+  when `ENV=production` or Railway is detected. Set `FRONTEND_ORIGIN` for CORS if needed;
+  `/docs` is disabled in production unless `DOCS_ENABLED=1`.
 
 ### Running
 - Dev server: `. venv/bin/activate && uvicorn main:app --reload --port 8000` (serves UI + API

@@ -53,7 +53,33 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
 PLATFORM_NAME = os.getenv("PLATFORM_NAME", "AlphaBotix Trading")
 ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
 
-JWT_SECRET = os.getenv("JWT_SECRET", "super-secure-fallback-secret-key-12345!")
+_raw_jwt = (os.getenv("JWT_SECRET") or "").strip()
+_WEAK_JWT_DEFAULTS = {
+    "",
+    "super-secure-fallback-secret-key-12345!",
+    "dev-local-secret-key-change-me",
+    "change-me",
+    "secret",
+}
+_ENV = (os.getenv("ENV") or os.getenv("APP_ENV") or "development").strip().lower()
+_ALLOW_WEAK_JWT = (os.getenv("ALLOW_WEAK_JWT") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+if _raw_jwt in _WEAK_JWT_DEFAULTS or len(_raw_jwt) < 24:
+    if _ENV in {"production", "prod", "railway"} or (
+        not _ALLOW_WEAK_JWT and _ENV not in {"development", "dev", "test", "local"}
+    ):
+        raise RuntimeError(
+            "JWT_SECRET is missing or too weak for production. "
+            "Set a unique secret of at least 24 characters in the environment."
+        )
+    # Local/dev only: keep a deterministic fallback so the app can boot.
+    JWT_SECRET = _raw_jwt or "super-secure-fallback-secret-key-12345!"
+    import logging as _logging
+    _logging.getLogger("AlphaBotix Trading").warning(
+        "JWT_SECRET is weak or unset — acceptable for local dev only."
+    )
+else:
+    JWT_SECRET = _raw_jwt
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 24
 

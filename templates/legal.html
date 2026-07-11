@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ PLATFORM_NAME }} — {{ PAGE_TITLE }}</title>
+<link rel="stylesheet" href="/static/css/style.css?v={{ ASSET_VERSION }}">
+<style>
+  .legal-page{max-width:820px;margin:0 auto;padding:32px 20px 64px;color:#e8eaf0;line-height:1.75}
+  .legal-page h1{font-size:28px;font-weight:800;letter-spacing:-.4px;margin:0 0 8px;color:#fff}
+  .legal-page .legal-meta{font-size:13px;color:#8b91a8;margin-bottom:28px}
+  .legal-page h2{font-size:18px;font-weight:700;margin:28px 0 10px;color:#4d9fff}
+  .legal-page h3{font-size:15px;font-weight:700;margin:18px 0 8px;color:#e8eaf0}
+  .legal-page p,.legal-page li{font-size:14px;color:#c5cad8}
+  .legal-page ul{padding-left:1.25rem;margin:8px 0 14px}
+  .legal-page li{margin:6px 0}
+  .legal-page a{color:#4d9fff}
+  .legal-nav{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:24px;padding-bottom:14px;border-bottom:1px solid #2a2f3d}
+  .legal-nav a{font-size:13px;font-weight:600;text-decoration:none}
+  .legal-callout{background:rgba(77,159,255,.08);border:1px solid rgba(77,159,255,.25);border-radius:10px;padding:14px 16px;margin:16px 0;font-size:13px;color:#c5cad8}
+  .legal-warn{background:rgba(255,77,106,.08);border:1px solid rgba(255,77,106,.3);border-radius:10px;padding:14px 16px;margin:16px 0;font-size:13px;color:#f3c6cd}
+  .legal-footer{margin-top:40px;padding-top:16px;border-top:1px solid #2a2f3d;font-size:12px;color:#555d78}
+</style>
+</head>
+<body style="background:#0d0f14;min-height:100vh">
+  <div class="legal-page">
+    <div class="legal-nav">
+      <a href="/">← Back to {{ PLATFORM_NAME }}</a>
+      <a href="/terms">Terms of Service</a>
+      <a href="/privacy">Privacy Policy</a>
+    </div>
+    {% if PAGE == "terms" %}
+    <h1>Terms of Service</h1>
+    <div class="legal-meta">Effective date: July 11, 2026 · Last updated: July 11, 2026<br>
+      Operator: AlphaBotix Trading (“Company,” “we,” “us,” or “our”)</div>
+
+    <div class="legal-warn"><strong>Risk warning.</strong> Trading securities, cryptocurrencies, and other financial instruments involves a substantial risk of loss and is not suitable for every investor. Past performance does not guarantee future results. You may lose some or all of the capital you deploy. Nothing on this platform is investment, legal, tax, or financial advice.</div>
+
+    <h2>1. Acceptance of these Terms</h2>
+    <p>By creating an account, accessing, or using the {{ PLATFORM_NAME }} website, application, APIs, bots, dashboards, or related services (collectively, the “Service”), you agree to be bound by these Terms of Service (the “Terms”) and our <a href="/privacy">Privacy Policy</a>. If you do not agree, do not use the Service.</p>
+    <p>You represent that you are at least 18 years old (or the age of majority in your jurisdiction) and have the legal capacity to enter into these Terms.</p>
+
+    <h2>2. Nature of the Service</h2>
+    <p>{{ PLATFORM_NAME }} provides software tools that can help you view market data, configure automated trading strategies (“bots”), and transmit instructions to third-party brokerage or exchange accounts that <strong>you</strong> connect (including Alpaca, OKX, and similar providers).</p>
+    <ul>
+      <li>We are <strong>not</strong> a broker-dealer, exchange, investment adviser, commodity trading advisor, bank, or money transmitter.</li>
+      <li>We do <strong>not</strong> hold your funds or securities. Capital remains with your chosen broker/exchange under their separate agreements.</li>
+      <li>We do <strong>not</strong> guarantee execution, pricing, uptime, latency, fill quality, or strategy performance.</li>
+      <li>“Paper” mode is for simulation/education. “Live” mode may place real orders with real money once you enable it and supply valid credentials.</li>
+    </ul>
+
+    <h2>3. Account registration &amp; security</h2>
+    <p>You agree to provide accurate registration information, safeguard your password, and notify us promptly of unauthorized access. You are responsible for all activity under your account. We may require email verification before certain features (including Live trading) are available.</p>
+    <p>You must not share accounts, attempt to bypass security controls, scrape the Service abusively, reverse engineer the Service (except to the extent permitted by law), or use the Service for unlawful activity (including market manipulation, sanctions evasion, or fraud).</p>
+
+    <h2>4. Broker credentials &amp; third-party services</h2>
+    <p>If you connect broker or exchange API keys, you authorize the Service to use those credentials to retrieve account data and submit orders according to your bot and account settings. You are solely responsible for:</p>
+    <ul>
+      <li>the accuracy and permissions of keys you provide;</li>
+      <li>complying with your broker’s terms, risk disclosures, and applicable law;</li>
+      <li>monitoring positions, balances, margin, settlement, and buying power;</li>
+      <li>revoking keys if you stop using the Service.</li>
+    </ul>
+    <p>Third-party outages, rejected orders, partial fills, market halts, corporate actions, network failures, and similar events are outside our control. Features such as stop-losses, take-profits, trailing stops, and capital rotation may not trigger or may execute differently than expected.</p>
+
+    <h2>5. Live trading eligibility</h2>
+    <p>Live trading may be restricted until you (a) verify your email address, and (b) save valid Live-mode broker credentials for your active exchange. Enabling Live mode constitutes your acknowledgment that bots may place irreversible live orders.</p>
+
+    <h2>6. No advice; no fiduciary relationship</h2>
+    <p>Content, signals, charts, news summaries, pattern labels, AI outputs, and bot configurations are informational and educational only. We do not recommend any security, crypto asset, or strategy. No fiduciary, advisory, or agency relationship is created by your use of the Service.</p>
+
+    <h2>7. Fees</h2>
+    <p>Use of the Service may be free, freemium, or paid as we communicate from time to time. Brokerage commissions, exchange fees, spreads, and financing charges are charged by your broker/exchange, not by us (unless separately disclosed).</p>
+
+    <h2>8. Advertising</h2>
+    <p>The Service may display third-party advertising, including Google AdSense. Ads are provided by third parties and may use cookies or similar technologies as described in our Privacy Policy. We are not responsible for advertiser content or destinations.</p>
+
+    <h2>9. Intellectual property</h2>
+    <p>The Service, including software, branding, UI, and documentation, is owned by the Company or its licensors and is protected by intellectual property laws. You receive a limited, revocable, non-exclusive, non-transferable license to use the Service for your personal or internal business purposes in accordance with these Terms.</p>
+
+    <h2>10. Disclaimers</h2>
+    <p>THE SERVICE IS PROVIDED “AS IS” AND “AS AVAILABLE,” WITHOUT WARRANTIES OF ANY KIND, WHETHER EXPRESS, IMPLIED, OR STATUTORY, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. WE DO NOT WARRANT THAT THE SERVICE WILL BE UNINTERRUPTED, ERROR-FREE, SECURE, OR FREE OF HARMFUL COMPONENTS.</p>
+
+    <h2>11. Limitation of liability</h2>
+    <p>TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE COMPANY AND ITS OFFICERS, DIRECTORS, EMPLOYEES, CONTRACTORS, AND AFFILIATES SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR ANY LOSS OF PROFITS, DATA, GOODWILL, TRADING OPPORTUNITY, OR CAPITAL, ARISING OUT OF OR RELATED TO THE SERVICE OR THESE TERMS, WHETHER BASED IN CONTRACT, TORT, STRICT LIABILITY, OR OTHERWISE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.</p>
+    <p>OUR TOTAL LIABILITY FOR ANY CLAIM ARISING OUT OF THE SERVICE SHALL NOT EXCEED THE GREATER OF (A) THE AMOUNTS YOU PAID US FOR THE SERVICE IN THE THREE (3) MONTHS BEFORE THE CLAIM, OR (B) ONE HUNDRED U.S. DOLLARS (US&nbsp;$100).</p>
+    <p>Some jurisdictions do not allow certain limitations; in those cases, our liability is limited to the fullest extent permitted.</p>
+
+    <h2>12. Indemnification</h2>
+    <p>You agree to defend, indemnify, and hold harmless the Company and its affiliates from and against any claims, losses, liabilities, damages, costs, and expenses (including reasonable attorneys’ fees) arising out of or related to: (a) your use of the Service; (b) your trading activity or broker accounts; (c) your content or API keys; (d) your violation of these Terms or applicable law; or (e) disputes with third parties (including brokers, exchanges, and other users).</p>
+
+    <h2>13. Suspension &amp; termination</h2>
+    <p>We may suspend or terminate access to the Service at any time, with or without notice, for any reason, including suspected abuse, legal risk, or non-payment. You may stop using the Service at any time and should revoke broker API keys when you leave.</p>
+
+    <h2>14. Governing law &amp; disputes</h2>
+    <p>These Terms are governed by the laws of the State of Delaware, USA, without regard to conflict-of-law principles, unless mandatory consumer protections in your place of residence provide otherwise. Exclusive venue for disputes shall be the state or federal courts located in Delaware, except where prohibited. You and we waive jury trial to the extent permitted by law. Informal resolution: before filing a claim, you agree to contact us and attempt good-faith resolution for 30 days.</p>
+
+    <h2>15. Changes</h2>
+    <p>We may update these Terms from time to time. Material changes will be indicated by updating the “Last updated” date and, where appropriate, additional notice. Continued use after changes become effective constitutes acceptance.</p>
+
+    <h2>16. Miscellaneous</h2>
+    <p>These Terms and the Privacy Policy are the entire agreement between you and us regarding the Service. If any provision is unenforceable, the remainder remains in effect. Failure to enforce a provision is not a waiver. You may not assign these Terms without our consent; we may assign them in connection with a merger, acquisition, or sale of assets. Headings are for convenience only.</p>
+
+    <h2>17. Contact</h2>
+    <p>Questions about these Terms: <a href="mailto:legal@alphabotixtrading.com">legal@alphabotixtrading.com</a>.</p>
+
+    {% elif PAGE == "privacy" %}
+    <h1>Privacy Policy</h1>
+    <div class="legal-meta">Effective date: July 11, 2026 · Last updated: July 11, 2026<br>
+      Operator: AlphaBotix Trading (“Company,” “we,” “us,” or “our”)</div>
+
+    <div class="legal-callout">This Privacy Policy explains how we collect, use, disclose, and protect information when you use {{ PLATFORM_NAME }}. It also describes your choices, including advertising consent / opt-out controls provided through Google AdSense and related Google privacy tools.</div>
+
+    <h2>1. Scope</h2>
+    <p>This Policy applies to our website, application, and related services (the “Service”). It does not apply to third-party brokers, exchanges, advertisers, or sites linked from the Service—those parties have their own policies.</p>
+
+    <h2>2. Information we collect</h2>
+    <h3>2.1 Information you provide</h3>
+    <ul>
+      <li>Account data (such as email address and password credentials—passwords are stored hashed).</li>
+      <li>Broker/exchange API credentials you choose to save (stored secured on our systems).</li>
+      <li>Support communications and preferences you submit.</li>
+      <li>Records of Terms acceptance and similar compliance acknowledgments.</li>
+    </ul>
+    <h3>2.2 Information collected automatically</h3>
+    <ul>
+      <li>Usage and device data (pages viewed, approximate location derived from IP, browser type, timestamps).</li>
+      <li>Log and diagnostic data for security, fraud prevention, and reliability.</li>
+      <li>Cookies, pixels, and similar technologies used by us and advertising partners.</li>
+    </ul>
+    <h3>2.3 Information from partners</h3>
+    <ul>
+      <li>Advertising partners (including Google) may provide aggregated or pseudonymous advertising signals.</li>
+      <li>Market-data and broker APIs return account/trading information you authorize us to retrieve.</li>
+    </ul>
+
+    <h2>3. How we use information</h2>
+    <ul>
+      <li>Provide, operate, secure, and improve the Service;</li>
+      <li>Authenticate users, prevent abuse, and enforce our Terms;</li>
+      <li>Send transactional messages (e.g., verification codes);</li>
+      <li>Personalize content and measure performance;</li>
+      <li>Display advertising and measure ad performance;</li>
+      <li>Comply with law and protect rights, safety, and property;</li>
+      <li>For other purposes disclosed at collection or with your consent.</li>
+    </ul>
+
+    <h2>4. Advertising, cookies &amp; Google AdSense</h2>
+    <p>We use Google AdSense and may use related Google advertising / consent products (such as Funding Choices / Privacy &amp; Messaging). These tools may show a consent or privacy popup when required by law or Google policy.</p>
+    <p>Google and other ad partners may collect or receive information about your visits to this and other sites (including through cookies and similar technologies) to deliver, personalize, and measure ads.</p>
+    <p>You can learn more and manage Google ad settings here: <a href="https://adssettings.google.com" target="_blank" rel="noopener">adssettings.google.com</a> and review Google’s policies at <a href="https://policies.google.com/technologies/ads" target="_blank" rel="noopener">policies.google.com/technologies/ads</a>.</p>
+
+    <h2>5. Sale / sharing of personal information &amp; your opt-out</h2>
+    <div class="legal-callout"><strong>Important.</strong> Depending on applicable law (including certain U.S. state privacy laws), some advertising and analytics disclosures may be considered a “sale,” “share,” or targeted advertising use of personal information.</div>
+    <p><strong>We may sell, share, or otherwise disclose personal information</strong> (such as online identifiers, device/browser data, approximate location, and advertising interaction data) to advertising partners, analytics providers, and data partners for commercial purposes including cross-context behavioral advertising—<strong>unless you opt out</strong>.</p>
+    <p><strong>How to opt out:</strong></p>
+    <ul>
+      <li><strong>Google AdSense / consent popup:</strong> If you are shown a Google-provided consent, privacy, or “Do Not Sell/Share” style message on our site, use those controls to decline or limit sale/share/targeted ads. Your choices in that popup will be honored as an opt-out for the advertising technologies covered by that message, to the extent required by law and supported by the vendor tools.</li>
+      <li><strong>Google Ad Settings / browser controls:</strong> Adjust ad personalization at <a href="https://adssettings.google.com" target="_blank" rel="noopener">adssettings.google.com</a>, use Global Privacy Control (GPC) where legally recognized, and/or block/limit cookies in your browser.</li>
+      <li><strong>Email request:</strong> You may also email <a href="mailto:privacy@alphabotixtrading.com">privacy@alphabotixtrading.com</a> with the subject line “Privacy Opt-Out” and sufficient information for us to identify your account or browser session.</li>
+    </ul>
+    <p>We do not knowingly sell the personal information of consumers we know are under 16 years of age.</p>
+    <p>We do <strong>not</strong> intentionally sell your broker API secrets or account passwords as a commercial data product. Those credentials are used to operate the Service you request. However, advertising technologies on the site are separate from credential storage and may still process advertising identifiers unless you opt out as described above.</p>
+
+    <h2>6. Other disclosures</h2>
+    <p>We may disclose information to service providers who assist us (hosting, email delivery, security, analytics), to professional advisors, in connection with a corporate transaction (merger, financing, or sale), to comply with legal process, or to protect rights and safety.</p>
+
+    <h2>7. Retention</h2>
+    <p>We retain information for as long as needed to provide the Service, comply with legal obligations, resolve disputes, and enforce agreements. Retention periods vary by data type and context.</p>
+
+    <h2>8. Security</h2>
+    <p>We implement technical and organizational measures designed to protect information (including encrypted transport where appropriate and hashed passwords). No method of transmission or storage is 100% secure; you use the Service at your own risk.</p>
+
+    <h2>9. International users</h2>
+    <p>We may process information in the United States and other countries. If you access the Service from outside the U.S., you understand information may be transferred to jurisdictions with different data-protection rules.</p>
+
+    <h2>10. Your privacy rights</h2>
+    <p>Depending on your location, you may have rights to access, correct, delete, or export personal information, or to appeal a denial of a privacy request. To exercise rights, email <a href="mailto:privacy@alphabotixtrading.com">privacy@alphabotixtrading.com</a>. We may need to verify your identity. Authorized agents may submit requests where permitted by law.</p>
+    <p>We will not discriminate against you for exercising privacy rights afforded by law.</p>
+
+    <h2>11. Children’s privacy</h2>
+    <p>The Service is not directed to children under 13 (or under 16 where required). We do not knowingly collect personal information from children. If you believe a child provided information, contact us and we will take appropriate steps to delete it.</p>
+
+    <h2>12. Changes</h2>
+    <p>We may update this Policy from time to time. The “Last updated” date will change when we do. Continued use after an update means you accept the revised Policy.</p>
+
+    <h2>13. Contact</h2>
+    <p>Privacy questions or requests: <a href="mailto:privacy@alphabotixtrading.com">privacy@alphabotixtrading.com</a><br>
+      Legal: <a href="mailto:legal@alphabotixtrading.com">legal@alphabotixtrading.com</a></p>
+    {% endif %}
+
+    <div class="legal-footer">
+      © {{ YEAR }} AlphaBotix Trading. These documents are provided for platform use and do not constitute legal advice to you. Consult your own counsel for advice specific to your situation.
+    </div>
+  </div>
+</body>
+</html>

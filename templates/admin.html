@@ -44,9 +44,9 @@
     <div class="card" id="ad-network-card">
       <div class="slbl">Ad Network Configuration</div>
       <div class="info-banner" style="margin-bottom:12px">
-        Paste raw ad-network HTML/JS (e.g. Google AdSense or vertical banner markup).
-        The same snippet is injected into the left and right dashboard sidebars.
-        Leave empty to hide ads (sidebars stay transparent).
+        Paste AdSense / trusted ad-network HTML only (Google script hosts are allowlisted).
+        Arbitrary scripts are stripped on save for security. The same snippet is injected into
+        the left and right dashboard sidebars. Leave empty to hide ads.
       </div>
       <label class="field" for="ad-network-snippet">Ad network snippet
         <textarea id="ad-network-snippet" rows="12"

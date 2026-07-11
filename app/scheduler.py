@@ -36,8 +36,7 @@ logger = logging.getLogger("alphabot.scheduler")
 
 MARKET_POLL_INTERVAL = int(os.getenv("MARKET_POLL_INTERVAL", "15"))   # seconds
 BOT_SCAN_INTERVAL = int(os.getenv("BOT_SCAN_INTERVAL", "15"))         # seconds
-# 0 = poll the entire MARKET_UNIVERSE for each broker (100+ symbols).
-WATCHLIST_LIMIT = int(os.getenv("MARKET_WATCHLIST_LIMIT", "0"))
+WATCHLIST_LIMIT = int(os.getenv("MARKET_WATCHLIST_LIMIT", "40"))  # symbols/broker; 0 = entire universe
 POLL_TIMEFRAME = os.getenv("MARKET_POLL_TIMEFRAME", "1h")
 
 # Optional server-side data credentials so the watchlist (assets nobody has a
