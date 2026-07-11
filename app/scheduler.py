@@ -36,7 +36,8 @@ logger = logging.getLogger("alphabot.scheduler")
 
 MARKET_POLL_INTERVAL = int(os.getenv("MARKET_POLL_INTERVAL", "15"))   # seconds
 BOT_SCAN_INTERVAL = int(os.getenv("BOT_SCAN_INTERVAL", "15"))         # seconds
-WATCHLIST_LIMIT = int(os.getenv("MARKET_WATCHLIST_LIMIT", "20"))      # symbols/broker
+# 0 = poll the entire MARKET_UNIVERSE for each broker (100+ symbols).
+WATCHLIST_LIMIT = int(os.getenv("MARKET_WATCHLIST_LIMIT", "0"))
 POLL_TIMEFRAME = os.getenv("MARKET_POLL_TIMEFRAME", "1h")
 
 # Optional server-side data credentials so the watchlist (assets nobody has a
@@ -76,7 +77,10 @@ def _collect_targets() -> dict[tuple[str, str], dict]:
                 if not (_ENV_ALPACA_KEY and _ENV_ALPACA_SECRET):
                     continue  # cannot fetch Alpaca data without keys
                 base_creds = {"alpaca_key": _ENV_ALPACA_KEY, "alpaca_secret": _ENV_ALPACA_SECRET}
-            for item in cfg.get("items", [])[:WATCHLIST_LIMIT]:
+            items = cfg.get("items", [])
+            # 0 / negative = entire universe (Markets tab shows 100+ symbols).
+            watch = items if WATCHLIST_LIMIT <= 0 else items[:WATCHLIST_LIMIT]
+            for item in watch:
                 key = (broker, item["symbol"].upper())
                 targets.setdefault(key, {"creds": base_creds, "paper": True})
     finally:
