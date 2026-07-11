@@ -85,16 +85,29 @@ if not os.path.exists(TEMPLATES_DIR):
     os.makedirs(TEMPLATES_DIR)
 
 # Bust browser caches whenever static assets change (critical on Railway so
-# redeploys don't leave users on a stale app.js while HTML already updated).
+# redeploys don't leave users on a stale app.js / background image while HTML
+# already updated).
 def _asset_version() -> str:
-    paths = [
-        os.path.join(STATIC_DIR, "js", "app.js"),
-        os.path.join(STATIC_DIR, "css", "style.css"),
+    """Max mtime across static JS/CSS/images so image-only uploads bust caches."""
+    roots = [
+        os.path.join(STATIC_DIR, "js"),
+        os.path.join(STATIC_DIR, "css"),
+        os.path.join(STATIC_DIR, "images"),
     ]
-    mtimes = []
-    for p in paths:
+    mtimes: list[int] = []
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for name in filenames:
+                try:
+                    mtimes.append(int(os.path.getmtime(os.path.join(dirpath, name))))
+                except OSError:
+                    pass
+    # Also consider the top-level files historically versioned.
+    for rel in ("js/app.js", "css/style.css"):
         try:
-            mtimes.append(int(os.path.getmtime(p)))
+            mtimes.append(int(os.path.getmtime(os.path.join(STATIC_DIR, rel))))
         except OSError:
             pass
     return str(max(mtimes) if mtimes else int(datetime.now(timezone.utc).timestamp()))

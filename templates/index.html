@@ -5,6 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ PLATFORM_NAME }}</title>
 <link rel="stylesheet" href="/static/css/style.css?v={{ ASSET_VERSION }}">
+<!-- Cache-bust background images (CSS urls alone stay sticky in browsers). -->
+<style id="bg-cache-bust">
+  .portfolio-stage{background-image:url("/static/images/portfolio-background1.png?v={{ ASSET_VERSION }}");}
+  #view-stocks.tab-stage{background-image:url("/static/images/markets-background1.png?v={{ ASSET_VERSION }}");}
+  #view-bots.tab-stage{background-image:url("/static/images/bots-background1.png?v={{ ASSET_VERSION }}");}
+  #view-news.tab-stage{background-image:url("/static/images/news-background1.png?v={{ ASSET_VERSION }}");}
+  #view-history.tab-stage{background-image:url("/static/images/history-background1.png?v={{ ASSET_VERSION }}");}
+  #view-assets.tab-stage{background-image:url("/static/images/assets-background1.png?v={{ ASSET_VERSION }}");}
+  #view-account.tab-stage{background-image:url("/static/images/account-background1.png?v={{ ASSET_VERSION }}");}
+  .auth-stage{background-image:url("/static/images/signup-background1.png?v={{ ASSET_VERSION }}");}
+</style>
 <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2688407250698963"
      crossorigin="anonymous"></script>
 </head>
