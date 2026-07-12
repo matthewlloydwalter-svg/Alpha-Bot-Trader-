@@ -134,6 +134,10 @@ class Bot(Base):
     realized_pnl = Column(Float, default=0)
     funds_allocated = Column(Float, default=0.0)
     running = Column(Boolean, default=False)
+    # True when this bot was auto-paused because the account left its mode
+    # (Paper↔Live). Cleared on manual pause/start. Lets us resume on return
+    # without un-pausing bots the user stopped on purpose.
+    paused_by_mode_switch = Column(Boolean, default=False)
     low_balance_strategy = Column(String, nullable=True, default="standard")
     strategy_cooldown_until = Column(DateTime, nullable=True)
     strategy_state = Column(String, nullable=True)   # JSON blob for multi-leg / session state
@@ -228,6 +232,7 @@ _MIGRATIONS = {
         "trade_count": "INTEGER DEFAULT 0",
         "realized_pnl": "FLOAT DEFAULT 0",
         "running": "BOOLEAN DEFAULT FALSE",
+        "paused_by_mode_switch": "BOOLEAN DEFAULT FALSE",
         "low_balance_strategy": "VARCHAR DEFAULT 'standard'",
         "strategy_cooldown_until": "TIMESTAMP",
         "strategy_state": "TEXT",

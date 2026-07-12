@@ -857,8 +857,16 @@ async function setTradingMode(mode) {
       loadBrokerAccount();
     }
     const paused = Number(data.paused_count || 0);
-    if (paused > 0) {
+    const resumed = Number(data.resumed_count || 0);
+    if (paused > 0 && resumed > 0) {
+      toast(
+        `Switched to ${next}. Paused ${paused} bot${paused === 1 ? "" : "s"} from the other mode; resumed ${resumed}.`,
+        "success",
+      );
+    } else if (paused > 0) {
       toast(`Switched to ${next}. Paused ${paused} bot${paused === 1 ? "" : "s"} from the previous mode.`, "success");
+    } else if (resumed > 0) {
+      toast(`Switched to ${next}. Resumed ${resumed} bot${resumed === 1 ? "" : "s"}.`, "success");
     } else {
       toast(`Switched to ${next} trading`, "success");
     }
@@ -1557,7 +1565,12 @@ async function createBot() {
     const launchedAuto = BOT_MODE === "auto";
     hideCreateBotModal();
     resetCreateBotForm();
-    toast(launchedAuto ? "Autonomous bot launched — it will scan all markets" : "Bot launched", "success");
+    toast(
+      launchedAuto
+        ? "Bot created and running — it will scan all markets (use Pause anytime)"
+        : "Bot created and running (use Pause anytime)",
+      "success",
+    );
     if (USER) USER.bot_count = Number(USER.bot_count || 0) + 1;
     updateBotLimitUI();
     await refreshUserData();
