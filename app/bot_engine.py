@@ -34,7 +34,7 @@ import os
 import json
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -46,8 +46,16 @@ from app.credentials import resolve_credentials, has_credentials
 from app.market_hours import market_open_for_broker, is_open_entry_window, is_eod_exit_window, session_date_et, next_market_open
 from app.news_analysis import get_asset_sentiment
 from app.pattern_analysis import Analysis
+from app.config import IS_PROD
 
 logger = logging.getLogger("alphabot.engine")
+
+ALLOW_PAPER_SIMULATION = os.getenv("ALLOW_PAPER_SIMULATION", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _allow_paper_simulation() -> bool:
+    """Simulated fills are dev-only unless explicitly enabled."""
+    return ALLOW_PAPER_SIMULATION or not IS_PROD
 
 # ── Tunable strategy parameters ──────────────────────────────────────
 ENTRY_MIN_STRENGTH = float(os.getenv("BOT_ENTRY_MIN_STRENGTH", "0.38"))
@@ -90,6 +98,8 @@ def _market_collision_blocked(db: Session, owner: User, bot: Bot, ticker: str | 
     if not ticker:
         return False, None
     ticker = ticker.upper()
+    bot_broker = (bot.broker or owner.active_broker or "alpaca").lower()
+    bot_mode = _bot_trading_mode(owner, bot)
     conflicts = (
         db.query(Bot)
         .filter(
@@ -101,6 +111,10 @@ def _market_collision_blocked(db: Session, owner: User, bot: Bot, ticker: str | 
         .all()
     )
     for other in conflicts:
+        other_broker = (other.broker or owner.active_broker or "alpaca").lower()
+        other_mode = _bot_trading_mode(owner, other)
+        if other_broker != bot_broker or other_mode != bot_mode:
+            continue
         if ticker in _bot_held_tickers(other):
             if quality_score >= 1.0:
                 return False, None
@@ -210,9 +224,23 @@ def _get_buying_power(owner: User, broker: str, bot: Bot | None = None) -> float
     try:
         info = get_account_info(broker=broker, paper=_paper(owner, bot), **_creds(owner, broker, bot))
         if broker == "alpaca":
-            return float(info.get("buying_power", 0.0))
-        balances = info.get("balances", {})
-        return float(balances.get("USDT", balances.get("USD", 0.0)))
+            # Match allocation guardrails: prefer settled cash, fall back to buying power.
+            raw = info.get("cash")
+            if raw is None:
+                raw = info.get("buying_power")
+            return float(raw) if raw is not None else None
+        balances = info.get("balances", {}) or {}
+        total, found = 0.0, False
+        for k in ("USDT", "USD", "USDC"):
+            v = balances.get(k)
+            if v is None:
+                continue
+            try:
+                total += float(v)
+                found = True
+            except (TypeError, ValueError):
+                continue
+        return total if found else None
     except Exception as e:
         logger.warning("Buying power lookup failed (%s): %s", broker, e)
         return None
@@ -886,6 +914,10 @@ def _execute(owner: User, broker: str, side: str, symbol: str,
             raise
         # Paper mode only: record a simulated fill so strategies stay observable
         # without broker keys during local/dev use.
+        if not _allow_paper_simulation():
+            logger.error("[PAPER] %s %s %s FAILED (simulation disabled in production): %s",
+                         side, symbol, broker, e)
+            raise
         logger.warning("[SIM] %s %s %s simulated (broker said: %s)", side, symbol, broker, e)
         return {"order_id": f"SIM-{datetime.utcnow().timestamp():.0f}",
                 "status": "simulated", "symbol": symbol, "side": side, "simulated": True}
@@ -912,6 +944,10 @@ def _liquidate(owner: User, broker: str, symbol: str, bot: Bot | None = None) ->
             # while the shares are still sitting at the broker. Surface it so
             # the caller (stop-loss, manual sell, delete) fails safe instead.
             logger.error("[LIQUIDATE] %s %s FAILED with live keys: %s", symbol, broker, e)
+            raise
+        if not _allow_paper_simulation():
+            logger.error("[PAPER] liquidate %s %s FAILED (simulation disabled in production): %s",
+                         symbol, broker, e)
             raise
         logger.warning("[SIM] liquidate %s %s simulated (broker said: %s)", symbol, broker, e)
         return {"order_id": f"SIM-{datetime.utcnow().timestamp():.0f}",
@@ -1111,6 +1147,7 @@ def _safe_analysis(bot: Bot, owner: User, symbol: str = None) -> Analysis | None
         return get_market_analysis(
             broker=broker, symbol=sym, timeframe=bot.timeframe or "1h", limit=CANDLE_LIMIT,
             paper=_paper(owner, bot), **_creds(owner, broker, bot),
+            use_cache=False,
         )
     except BrokerError as e:
         logger.warning("Analysis fetch failed for bot %s (%s): %s", bot.id, sym, e)
@@ -1257,12 +1294,16 @@ def _pick_best_setup(db: Session, owner: User, bot: Bot) -> Analysis | None:
         return None
 
     scan_n = min(AUTO_SCAN_LIMIT, len(items))
+    # Rotate the scan window hourly so symbols beyond the first N still get considered.
+    hour_bucket = int(datetime.now(timezone.utc).timestamp()) // 3600
+    start_idx = (hour_bucket + int(bot.id or 0)) % len(items)
+    scan_items = [items[(start_idx + i) % len(items)] for i in range(scan_n)]
     _log(db, owner.id,
          f"[AUTO-SCAN] Bot '{bot.name}' scanning {scan_n}/{len(items)} {broker} markets for the best dip…")
 
     candidates = []  # (quality_score, strength, analysis)
     scanned = 0
-    for item in items[:scan_n]:
+    for item in scan_items:
         sym = item["symbol"]
         analysis = _safe_analysis(bot, owner, symbol=sym)
         scanned += 1
@@ -1792,10 +1833,13 @@ def run_cycle(bot_id: int) -> dict:
                     logger.error("After-hours micro flatten failed for bot %s: %s", bot_id, e)
             if bot.running:
                 bot.last_analysis_at = datetime.utcnow()
-                bot.last_pattern_summary = "SYSTEM HALT: Market offline. Core trading loops suspended."
+                bot.last_pattern_summary = (
+                    "Market closed — no new stock entries until the next regular session. "
+                    "Scattershot and micro-trader exits still run when due."
+                )
                 db.commit()
                 return {"action": "HALTED", "market_closed": True,
-                        "reason": "US stock market is closed — trading suspended until the next session."}
+                        "reason": "US stock market is closed — no new entries until the next session."}
             return {"action": "SKIPPED", "reason": "Bot is paused and market is closed."}
 
         if strategy == "scattershot":

@@ -7,8 +7,8 @@ always compute against America/New_York so DST (EST/EDT) is handled correctly.
 
 Crypto (OKX) trades 24/7, so ``market_open_for_broker`` only gates Alpaca.
 
-NOTE: US market holidays (e.g. Thanksgiving, July 4th) are NOT modeled here —
-only weekends + daily hours. Add an NYSE holiday calendar if you need that.
+NOTE: Full-day NYSE holidays through 2027 are modeled in ``NYSE_HOLIDAYS``.
+Early-close half-days (e.g. day after Thanksgiving) are not modeled yet.
 """
 
 from __future__ import annotations
@@ -20,6 +20,24 @@ import pytz
 ET = pytz.timezone("America/New_York")
 OPEN_H, OPEN_M = 9, 30
 CLOSE_H, CLOSE_M = 16, 0
+
+# Full-day NYSE closures (ET calendar dates). Early-close half-days are not modeled.
+NYSE_HOLIDAYS = {
+    # 2025
+    "2025-01-01", "2025-01-20", "2025-02-17", "2025-04-18", "2025-05-26",
+    "2025-06-19", "2025-07-04", "2025-09-01", "2025-11-27", "2025-12-25",
+    # 2026
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+    # 2027
+    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+}
+
+
+def is_us_market_holiday(day_et) -> bool:
+    """True when ``day_et`` (ET-aware) falls on a full NYSE holiday."""
+    return day_et.strftime("%Y-%m-%d") in NYSE_HOLIDAYS
 
 
 def _now_et(now_utc: datetime | None = None) -> datetime:
@@ -34,6 +52,8 @@ def is_market_open(now_utc: datetime | None = None) -> bool:
     et = _now_et(now_utc)
     if et.weekday() >= 5:  # 5 = Saturday, 6 = Sunday
         return False
+    if is_us_market_holiday(et):
+        return False
     open_t = et.replace(hour=OPEN_H, minute=OPEN_M, second=0, microsecond=0)
     close_t = et.replace(hour=CLOSE_H, minute=CLOSE_M, second=0, microsecond=0)
     return open_t <= et < close_t
@@ -45,7 +65,7 @@ def next_market_open(now_utc: datetime | None = None) -> datetime:
     candidate = et.replace(hour=OPEN_H, minute=OPEN_M, second=0, microsecond=0)
     if et >= candidate:              # today's open already passed → look ahead
         candidate = candidate + timedelta(days=1)
-    while candidate.weekday() >= 5:  # skip Sat/Sun
+    while candidate.weekday() >= 5 or is_us_market_holiday(candidate):
         candidate = candidate + timedelta(days=1)
     # Re-localize so a DST boundary crossed by the timedelta stays correct.
     candidate = ET.localize(candidate.replace(tzinfo=None))
@@ -67,7 +87,7 @@ def session_date_et(now_utc: datetime | None = None) -> str:
 def minutes_since_open(now_utc: datetime | None = None) -> float | None:
     """Minutes elapsed since today's 09:30 ET open, or None if the market is closed."""
     et = _now_et(now_utc)
-    if et.weekday() >= 5:
+    if et.weekday() >= 5 or is_us_market_holiday(et):
         return None
     open_t = et.replace(hour=OPEN_H, minute=OPEN_M, second=0, microsecond=0)
     close_t = et.replace(hour=CLOSE_H, minute=CLOSE_M, second=0, microsecond=0)
@@ -79,7 +99,7 @@ def minutes_since_open(now_utc: datetime | None = None) -> float | None:
 def minutes_until_close(now_utc: datetime | None = None) -> float | None:
     """Minutes remaining until today's 16:00 ET close, or None if the market is closed."""
     et = _now_et(now_utc)
-    if et.weekday() >= 5:
+    if et.weekday() >= 5 or is_us_market_holiday(et):
         return None
     open_t = et.replace(hour=OPEN_H, minute=OPEN_M, second=0, microsecond=0)
     close_t = et.replace(hour=CLOSE_H, minute=CLOSE_M, second=0, microsecond=0)
@@ -124,8 +144,8 @@ def trading_session_bounds(now_utc: datetime | None = None) -> tuple[datetime, d
 
     - During the regular session: 09:30 ET today → now.
     - After today's close: 09:30–16:00 ET today.
-    - Before today's open or on weekends: the previous completed session
-      (09:30–16:00 ET on the last weekday).
+    - Before today's open, on weekends, or on NYSE holidays: the previous
+      completed session (09:30–16:00 ET on the last weekday that traded).
     """
     now = now_utc or datetime.now(pytz.utc)
     if now.tzinfo is None:
@@ -135,16 +155,23 @@ def trading_session_bounds(now_utc: datetime | None = None) -> tuple[datetime, d
     et = now.astimezone(ET)
     open_today, close_today = _session_open_close_et(et)
 
-    if et.weekday() < 5:
+    def _is_trading_day(day_et) -> bool:
+        return day_et.weekday() < 5 and not is_us_market_holiday(day_et)
+
+    if _is_trading_day(et):
         if open_today <= et < close_today:
             return open_today.astimezone(pytz.utc), now
         if et >= close_today:
             return open_today.astimezone(pytz.utc), close_today.astimezone(pytz.utc)
         prev = _previous_weekday_et(et)
+        while not _is_trading_day(prev):
+            prev = _previous_weekday_et(prev)
         open_prev, close_prev = _session_open_close_et(prev)
         return open_prev.astimezone(pytz.utc), close_prev.astimezone(pytz.utc)
 
     prev = _previous_weekday_et(et)
+    while not _is_trading_day(prev):
+        prev = _previous_weekday_et(prev)
     open_prev, close_prev = _session_open_close_et(prev)
     return open_prev.astimezone(pytz.utc), close_prev.astimezone(pytz.utc)
 

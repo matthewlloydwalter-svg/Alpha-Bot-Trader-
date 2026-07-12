@@ -3,7 +3,7 @@ import json
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import FastAPI, Depends, HTTPException, Request
@@ -18,6 +18,26 @@ from sqlalchemy.exc import IntegrityError
 from sse_starlette.sse import EventSourceResponse
 
 load_dotenv()
+
+VERIFICATION_CODE_TTL_HOURS = int(os.getenv("VERIFICATION_CODE_TTL_HOURS", "24"))
+
+
+def _iso_utc(dt) -> Optional[str]:
+    """Naive UTC datetimes → ISO-8601 with explicit Z suffix for browsers."""
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _verification_code_expired(user: User) -> bool:
+    sent = getattr(user, "verification_code_sent_at", None)
+    if not sent:
+        return False
+    return (datetime.utcnow() - sent) > timedelta(hours=VERIFICATION_CODE_TTL_HOURS)
 
 from app.database import engine, Base, init_db, get_db, SessionLocal, User, Bot, Trade, ActivityLog, MarketQuote
 from app.auth import (
@@ -921,6 +941,7 @@ def trigger_verification(request: Request, u: User = Depends(get_current_user_fr
     limit_verification(request)
     code = generate_verification_code()
     u.verification_code = code
+    u.verification_code_sent_at = datetime.utcnow()
     db.commit()
     try:
         send_verification_email(u.email, code)
@@ -947,8 +968,14 @@ def confirm_verification(body: VerificationChallengeModel, request: Request, u: 
     # Password-reset codes are namespaced so they cannot confirm email verify.
     if not stored or stored.startswith("rp:") or stored != body.code.strip():
         raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
+    if _verification_code_expired(u):
+        u.verification_code = None
+        u.verification_code_sent_at = None
+        db.commit()
+        raise HTTPException(status_code=400, detail="Verification code expired — request a new one.")
     u.email_verified = True
     u.verification_code = None
+    u.verification_code_sent_at = None
     db.commit()
     return {"success": True}
 
@@ -971,6 +998,7 @@ def password_reset_request(body: PasswordResetRequestModel, request: Request, db
         # Namespace so an in-flight email-verify code is not overwritten ambiguously
         # and reset codes cannot be reused on /auth/confirm-verification.
         user.verification_code = f"rp:{code}"
+        user.verification_code_sent_at = datetime.utcnow()
         db.commit()
         try:
             send_password_reset_email(user.email, code)
@@ -1004,9 +1032,15 @@ def password_reset_verify(body: PasswordResetVerifyModel, request: Request, db: 
     expected = f"rp:{code}"
     if not user or not user.verification_code or user.verification_code != expected:
         raise HTTPException(status_code=400, detail="Invalid verification code.")
+    if _verification_code_expired(user):
+        user.verification_code = None
+        user.verification_code_sent_at = None
+        db.commit()
+        raise HTTPException(status_code=400, detail="Verification code expired — request a new one.")
 
     # Consume the one-time code; the reset token authorizes the password change.
     user.verification_code = None
+    user.verification_code_sent_at = None
     # Proving inbox access also satisfies email verification.
     user.email_verified = True
     db.commit()
@@ -1218,7 +1252,8 @@ def get_trades_ledger(u: User = Depends(get_current_user_from_cookie), db: Sessi
             "bot_id": r.bot_id,
             "bot_uuid": r.bot_uuid,
             "bot_name": bot_names.get(r.bot_id, "Manual / Unlinked" if r.bot_id is None else f"Bot #{r.bot_id}"),
-            "created_at": r.created_at.isoformat()
+            "status": r.status or "submitted",
+            "created_at": _iso_utc(r.created_at)
         } for r in records
     ]
 
@@ -1352,7 +1387,7 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "realized_pnl": b.realized_pnl,
             "last_signal": b.last_signal,
             "last_pattern_summary": b.last_pattern_summary,
-            "last_analysis_at": b.last_analysis_at.isoformat() if b.last_analysis_at else None,
+            "last_analysis_at": _iso_utc(b.last_analysis_at),
         })
     return rows
 
@@ -1544,12 +1579,37 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
 def _collect_bot_status(user_id: int, exchange: str, symbol: str) -> dict:
     """Summarize what the internal bots think/are doing for this asset."""
     from app.database import SessionLocal
+    from app.bot_engine import _bot_held_tickers
     db = SessionLocal()
     try:
-        bots = db.query(Bot).filter(
-            Bot.owner_id == user_id,
-            Bot.ticker.ilike(symbol),
-        ).all()
+        sym = symbol.upper()
+        ex = exchange.lower()
+        all_bots = db.query(Bot).filter(Bot.owner_id == user_id).all()
+        bots = [
+            b for b in all_bots
+            if (b.broker or "alpaca").lower() == ex
+            and sym in _bot_held_tickers(b)
+        ]
+        auto_scanners = [
+            b for b in all_bots
+            if (b.broker or "alpaca").lower() == ex
+            and b.auto_select and b.running and not (b.ticker or "").strip()
+        ]
+        if not bots and auto_scanners:
+            return {
+                "has_bot": True,
+                "headline": f"{len(auto_scanners)} autonomous bot(s) scanning {ex.upper()} markets",
+                "detail": f"No bot is fixed to {sym.upper()}, but autonomous scanners may target it when a setup confirms.",
+                "bots": [{
+                    "id": b.id, "name": b.name, "running": b.running,
+                    "in_position": b.in_position, "signal": b.last_signal,
+                    "mode": b.mode or "paper", "broker": b.broker or "alpaca",
+                    "summary": b.last_pattern_summary or "Scanning all markets.",
+                    "stop_price": b.stop_price, "take_profit_price": b.take_profit_price,
+                    "avg_entry_price": b.avg_entry_price, "trade_count": b.trade_count,
+                    "analyzed_at": _iso_utc(b.last_analysis_at),
+                } for b in auto_scanners],
+            }
         if not bots:
             return {
                 "has_bot": False,
@@ -1563,10 +1623,11 @@ def _collect_bot_status(user_id: int, exchange: str, symbol: str) -> dict:
             "bots": [{
                 "id": b.id, "name": b.name, "running": b.running,
                 "in_position": b.in_position, "signal": b.last_signal,
+                "mode": b.mode or "paper", "broker": b.broker or "alpaca",
                 "summary": b.last_pattern_summary or "Awaiting first scan.",
                 "stop_price": b.stop_price, "take_profit_price": b.take_profit_price,
                 "avg_entry_price": b.avg_entry_price, "trade_count": b.trade_count,
-                "analyzed_at": b.last_analysis_at.isoformat() if b.last_analysis_at else None,
+                "analyzed_at": _iso_utc(b.last_analysis_at),
             } for b in bots],
         }
     finally:
@@ -1578,16 +1639,20 @@ def scan_all_bots(u: User = Depends(get_current_user_from_cookie)):
     """Run one decision cycle for every running bot owned by this user."""
     db = SessionLocal()
     try:
-        bots = db.query(Bot).filter(Bot.owner_id == u.id, Bot.running == True).all()  # noqa: E712
+        bots = db.query(Bot).filter(Bot.owner_id == u.id, Bot.running == True).order_by(Bot.id.asc()).all()  # noqa: E712
     finally:
         db.close()
+    max_batch = int(os.getenv("BOT_SCAN_ALL_LIMIT", "10"))
+    truncated = len(bots) > max_batch
+    if truncated:
+        bots = bots[:max_batch]
     results = []
     for b in bots:
         try:
             results.append({"bot_id": b.id, "ticker": b.ticker, **bot_engine.run_cycle(b.id)})
         except Exception as e:
             results.append({"bot_id": b.id, "ticker": b.ticker, "action": "ERROR", "reason": str(e)})
-    return {"scanned": len(results), "results": results}
+    return {"scanned": len(results), "truncated": truncated, "results": results}
 
 
 def _bot_performance_highlights(db: Session, bots: list) -> Optional[dict]:
@@ -1606,8 +1671,29 @@ def _bot_performance_highlights(db: Session, bots: list) -> Optional[dict]:
         realized = float(b.realized_pnl or 0.0)
         unrealized = 0.0
         if b.in_position and b.avg_entry_price and b.shares_held:
-            q = market_store.get_quote(db, b.broker or "alpaca", b.ticker or "")
-            mark = q.price if (q and q.price) else b.avg_entry_price
+            mark = b.avg_entry_price
+            if (b.low_balance_strategy or "").lower() == "scattershot":
+                state = {}
+                try:
+                    state = json.loads(b.strategy_state or "{}") if b.strategy_state else {}
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    state = {}
+                legs = state.get("legs") or []
+                if legs:
+                    leg_marks = []
+                    for leg in legs:
+                        sym = (leg.get("ticker") or "").upper().strip()
+                        if not sym:
+                            continue
+                        q = market_store.get_quote(db, b.broker or "alpaca", sym)
+                        if q and q.price:
+                            leg_marks.append(float(q.price))
+                    if leg_marks:
+                        mark = sum(leg_marks) / len(leg_marks)
+            else:
+                q = market_store.get_quote(db, b.broker or "alpaca", b.ticker or "")
+                if q and q.price:
+                    mark = q.price
             unrealized = (float(mark) - float(b.avg_entry_price)) * float(b.shares_held)
         net = round(realized + unrealized, 2)
         funds = float(b.funds_allocated or 0.0)
@@ -1754,7 +1840,7 @@ def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_curr
         "trade_count": len(trades),
         "series": series,
         "markers": markers,
-        "highlights": _bot_performance_highlights(db, bots),
+        "highlights": _bot_performance_highlights(db, mode_bots),
     }
 
 

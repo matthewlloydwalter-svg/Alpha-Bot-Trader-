@@ -473,11 +473,12 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
     # Session charts outside RTH often return empty on short windows — walk back to
     # the previous weekday session, then try a coarser intraday bar size.
     if not rows and _is_intraday_timeframe(timeframe):
-        from app.market_hours import ET
+        from app.market_hours import ET, is_us_market_holiday
         fb_start, fb_end = start, end
-        for _ in range(5):
+        for _ in range(8):
             fb_start, fb_end = _shift_alpaca_window(fb_start, fb_end, days=1)
-            if fb_start.astimezone(ET).weekday() < 5:
+            day_et = fb_start.astimezone(ET)
+            if day_et.weekday() < 5 and not is_us_market_holiday(day_et):
                 break
         for fb_tf in _intraday_fallback_timeframes(timeframe):
             try:

@@ -1712,10 +1712,10 @@ function renderBots() {
     const modeBadge = botMode === "live"
       ? `<span class="badge badge-mode-live" title="Live trading account">LIVE</span>`
       : `<span class="badge badge-mode-paper" title="Paper trading account">PAPER</span>`;
-    // Equities halt when the US market is closed; crypto (OKX) trades 24/7.
+    // Equities: no new entries when US market is closed; crypto (OKX) trades 24/7.
     const isStock = (b.broker || "alpaca").toLowerCase() !== "okx";
-    const haltRow = (isStock && isMarketClosed())
-      ? `<div class="bot-halt">🛑 SYSTEM HALT: Market offline. Core trading loops suspended. Awaiting market open at ${esc(fmtLocalOpenTime())}.</div>`
+    const haltRow = (isStock && b.running && isMarketClosed())
+      ? `<div class="bot-halt">⏸ Market closed — no new stock entries until ${esc(fmtLocalOpenTime())}. Scattershot/micro exits still run when due.</div>`
       : "";
     const sigColor = b.last_signal === "BUY" ? "badge-green" : b.last_signal === "SELL" ? "badge-red" : "badge-amber";
     const entryPrice = (b.entry_price ?? b.avg_entry_price);
@@ -1785,7 +1785,7 @@ function renderBots() {
         <button class="btn btn-sm btn-primary" onclick="updateBotFunds(${b.id})">Update</button>
       </div>
       <div style="background:var(--bg2);padding:10px;border-radius:6px;border:1px solid var(--border)">
-        <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Last scan ${b.last_analysis_at ? `· ${new Date(b.last_analysis_at+"Z").toLocaleTimeString()}` : "· not yet scanned"}</div>
+        <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Last scan ${b.last_analysis_at ? `· ${new Date(/Z|[+-]\d{2}:?\d{2}$/.test(b.last_analysis_at) ? b.last_analysis_at : b.last_analysis_at + "Z").toLocaleTimeString()}` : "· not yet scanned"}</div>
         <div style="font-size:11px;color:var(--t2)">${esc(b.last_pattern_summary || (b.running ? "Engine is warming up — first scan runs within 60 seconds." : "Bot is paused. Toggle it on to start autonomous scanning."))}</div>
       </div>
     </div>`;
@@ -1895,6 +1895,7 @@ let MARKETS_EXCHANGE = "alpaca";
 
 async function loadStocks() {
   const tbody = document.getElementById("stocks-table-body");
+  if (!tbody) return;
   const exchange = USER ? (USER.active_broker || "alpaca") : "alpaca";
   MARKETS_EXCHANGE = exchange;
   tbody.innerHTML = `<tr><td colspan="5" style="color:var(--t2)">Loading active markets…</td></tr>`;
@@ -1909,6 +1910,7 @@ async function loadStocks() {
 
 function renderMarkets() {
   const tbody = document.getElementById("stocks-table-body");
+  if (!tbody) return;
   const filter = (document.getElementById("markets-search")?.value || "").trim().toUpperCase();
   const cls = MARKETS_EXCHANGE === "okx" ? "Crypto" : "Equity";
   const items = filter
@@ -2339,14 +2341,22 @@ function prefillBotFromDashboard() {
 
 async function loadTradeHistory() {
   const tbody = document.getElementById("history-table-body");
+  if (!tbody) return;
   try {
     const trades = await api("/broker/trades-ledger");
     const hdr = document.getElementById("history-header-count");
     if (hdr) hdr.textContent = String((trades && trades.length) || 0);
-    if (!trades.length) { tbody.innerHTML = `<tr><td colspan="7" style="color:var(--t2)">No trades logged yet.</td></tr>`; return; }
+    if (!trades.length) { tbody.innerHTML = `<tr><td colspan="8" style="color:var(--t2)">No trades logged yet.</td></tr>`; return; }
     tbody.innerHTML = trades.map(t => {
       const qty = Number(t.qty || 0);
       const qtyStr = qty === 0 ? "0" : qty.toLocaleString(undefined, { maximumFractionDigits: 8 });
+      const sim = (t.status || "").toLowerCase() === "simulated";
+      const st = (t.status || "submitted").toLowerCase();
+      const statusBadge = sim
+        ? `<span class="badge badge-amber" title="No broker keys — simulated fill">Simulated</span>`
+        : (st === "filled" || st === "accepted" || st === "closed")
+          ? `<span class="badge badge-green">Filled</span>`
+          : `<span class="badge badge-blue" title="${esc(t.status || "")}">${esc(String(t.status || "submitted"))}</span>`;
       return `
       <tr>
         <td style="color:var(--t2)">${new Date(/Z|[+-]\d{2}:?\d{2}$/.test(t.created_at) ? t.created_at : t.created_at + "Z").toLocaleString()}</td>
@@ -2356,9 +2366,10 @@ async function loadTradeHistory() {
         <td>${qtyStr}</td>
         <td style="font-family:monospace">$${parseFloat(t.price || 0).toFixed(2)}</td>
         <td><span class="badge badge-blue">${esc((t.mode || "paper").toUpperCase())}</span></td>
+        <td>${statusBadge}</td>
       </tr>`;
     }).join("");
-  } catch (e) { tbody.innerHTML = `<tr><td colspan="7" style="color:var(--red)">Failed to fetch execution records.</td></tr>`; }
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="8" style="color:var(--red)">Failed to fetch execution records.</td></tr>`; }
 }
 
 async function loadNews() {

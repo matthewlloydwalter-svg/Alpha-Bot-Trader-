@@ -64,6 +64,7 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     email_verified = Column(Boolean, default=False)
     verification_code = Column(String, nullable=True)
+    verification_code_sent_at = Column(DateTime, nullable=True)
     # Bumped on password reset so existing session JWTs stop working.
     session_version = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -265,6 +266,7 @@ _MIGRATIONS = {
         "total_withdrawn": "FLOAT DEFAULT 0",
         "email_verified": "BOOLEAN DEFAULT FALSE",
         "verification_code": "VARCHAR",
+        "verification_code_sent_at": "TIMESTAMP",
         "session_version": "INTEGER DEFAULT 0",
         "alpaca_key": "VARCHAR",
         "alpaca_secret": "VARCHAR",

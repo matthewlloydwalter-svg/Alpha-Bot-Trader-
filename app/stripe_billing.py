@@ -185,8 +185,9 @@ def customer_has_blocking_subscription(user) -> bool:
                 return True
     except Exception as exc:
         logger.warning("Could not list Stripe subscriptions for customer %s: %s", customer_id, exc)
-        # Fail closed: do not open a second Checkout while we cannot verify.
-        return True
+        # Only block when local DB already shows an active subscription; do not
+        # deny checkout on transient Stripe API failures.
+        return bool(local_sub and local_status not in {"", "canceled", "incomplete_expired"})
     return False
 
 
@@ -440,5 +441,12 @@ def find_user_for_stripe_object(db, data: dict, User):
             return user
     customer = data.get("customer")
     if customer:
-        return db.query(User).filter(User.stripe_customer_id == customer).first()
+        user = db.query(User).filter(User.stripe_customer_id == customer).first()
+        if user:
+            return user
+    # Checkout sessions include the purchaser email before customer_id is linked.
+    details = data.get("customer_details") or {}
+    email = (details.get("email") or data.get("customer_email") or "").strip().lower()
+    if email:
+        return db.query(User).filter(User.email == email).first()
     return None
