@@ -342,7 +342,19 @@
       <div class="pf-overlay">
         <header class="pf-sticky-header holo-card">
           <div class="pf-sticky-top">
-            <div class="pf-mode-title" id="markets-view-label">📊 Markets</div>
+            <div class="pf-mode-title">
+              <span id="markets-view-label">📊 Markets</span>
+              <button type="button" id="markets-mode-badge" class="mode-switch-btn badge badge-green" data-mode-switch
+                      onclick="toggleTradingMode()" aria-label="Switch trading mode">
+                <span class="mode-switch-current">● Paper</span>
+                <span class="mode-switch-hint">Switch to Live trading</span>
+              </button>
+              <button type="button" id="markets-broker-badge" class="mode-switch-btn badge badge-blue" data-broker-switch
+                      onclick="toggleBroker()" aria-label="Switch broker">
+                <span class="mode-switch-current">Alpaca</span>
+                <span class="mode-switch-hint">Switch to OKX broker</span>
+              </button>
+            </div>
             <input type="text" id="markets-search" placeholder="🔍 Filter symbol…" oninput="filterMarkets()" style="max-width:200px">
           </div>
           <div class="pf-summary-grid">
