@@ -340,8 +340,8 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   width:100%;
   max-width:100%;
   background-image:url("/static/images/portfolio-background1.png");
-  background-size:cover;
-  background-position:center top;
+  background-size:contain;
+  background-position:center;
   background-repeat:no-repeat;
   background-color:#070b14;
   border-radius:0;
@@ -634,7 +634,7 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   margin:0;
   width:100%;
   max-width:100%;
-  background-size:cover;
+  background-size:contain;
   background-position:center;
   background-repeat:no-repeat;
   background-color:#070b14;
@@ -643,14 +643,12 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   min-height:calc(100vh - var(--topbar-h) - var(--nav-h));
   overflow:visible;
 }
-/* Keep portfolio art anchored to the top (shared .tab-stage uses center). */
-.portfolio-stage{ background-position:center top; }
 .auth-stage{
   position:relative;
   margin:0;
   width:100%;
   max-width:100%;
-  background-size:cover;
+  background-size:contain;
   background-position:center;
   background-repeat:no-repeat;
   background-color:#070b14;
