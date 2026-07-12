@@ -1722,7 +1722,9 @@ async function sellBot(id) {
   try {
     const res = await api(`/bots/${id}/liquidate`, { method: "POST" });
     if (res && res.status === "flat") toast(res.detail || "Nothing to sell — bot is flat", "");
-    else toast("Holdings sold — bot is now flat", "success");
+    else if (res && res.details && res.details.action === "WAIT") {
+      toast(res.details.reason || "Partial sell — some holdings may remain. Retry.", "error");
+    } else toast("Holdings sold — bot is now flat", "success");
     await loadBots();
     const pv = document.getElementById("view-portfolio");
     if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();

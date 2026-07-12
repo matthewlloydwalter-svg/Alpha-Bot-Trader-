@@ -687,7 +687,13 @@ def billing_confirm_checkout(
         _enforce_running_bot_limit(u, db)
         db.add(u)
         db.commit()
-    return {"ok": True, **_user_plan_payload(u)}
+        return {"ok": True, "confirmed": True, **_user_plan_payload(u)}
+    return {
+        "ok": False,
+        "confirmed": False,
+        "detail": "Payment is still processing or incomplete.",
+        **_user_plan_payload(u),
+    }
 
 
 async def _handle_stripe_webhook(request: Request, db: Session):
@@ -845,12 +851,15 @@ def login_endpoint(body: AuthModel, response: Response, request: Request, db: Se
     user = db.query(User).filter(User.email == normalized_email).first()
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Invalid credential combination supplied.")
-        
-    _issue_session(response, request, user)
+
+    # Evict any prior cookies (stolen session or other devices) on fresh login.
+    _bump_session_version(user)
     if _is_platform_admin(user) and not user.is_admin:
         user.is_admin = True
-        db.add(user)
-        db.commit()
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    _issue_session(response, request, user)
 
     return {
         "id": user.id,
@@ -1964,6 +1973,12 @@ async def delete_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
                 status_code=502,
                 detail=f"Could not sell this bot's holdings before deletion: {e}. "
                        f"The bot was NOT deleted so its shares are not orphaned — please retry.")
+        if (liquidation or {}).get("action") == "ERROR":
+            raise HTTPException(
+                status_code=409,
+                detail=(liquidation or {}).get("reason")
+                or "Could not liquidate safely — bot was NOT deleted. Retry in a moment.",
+            )
         db.expire_all()  # liquidate_bot committed the close in its own session
         # Abort delete if scattershot (or other) unwind only partially succeeded.
         bot_after = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
@@ -2003,6 +2018,18 @@ async def liquidate_bot_endpoint(bot_id: int, u: User = Depends(get_current_user
     except Exception as e:
         logger.error("Manual sell failed for bot %s: %s", bot_id, e)
         raise HTTPException(status_code=502, detail=f"Could not sell this bot's holdings: {e}")
+    if (result or {}).get("action") == "ERROR":
+        raise HTTPException(status_code=409, detail=(result or {}).get("reason") or "Liquidation failed.")
+    db.expire_all()
+    bot_after = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
+    if bot_after and bot_engine.bot_needs_liquidation(bot_after):
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Could not fully unwind this bot's holdings — some legs may still be open. "
+                "Please retry."
+            ),
+        )
     return {"status": "liquidated", "bot_id": bot_id, "details": result}
 
 @app.post("/bots/{bot_id}/funds")

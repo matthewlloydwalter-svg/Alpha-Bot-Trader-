@@ -1623,6 +1623,34 @@ def _resolve_exit_price(db: Session, bot: Bot, owner: User) -> float:
     return float(bot.avg_entry_price or 0.0)
 
 
+_bot_cycle_locks: dict[int, threading.Lock] = {}
+_bot_cycle_locks_guard = threading.Lock()
+
+
+def _acquire_bot_cycle_lock(
+    bot_id: int,
+    *,
+    blocking: bool = False,
+    timeout: float = 45.0,
+) -> threading.Lock | None:
+    """
+    Per-bot lock so scheduler cycles and manual liquidate/delete cannot overlap.
+    Non-blocking for run_cycle (skip if busy); blocking with timeout for liquidate.
+    """
+    with _bot_cycle_locks_guard:
+        lock = _bot_cycle_locks.get(bot_id)
+        if lock is None:
+            lock = threading.Lock()
+            _bot_cycle_locks[bot_id] = lock
+    if blocking:
+        if lock.acquire(timeout=timeout):
+            return lock
+        return None
+    if not lock.acquire(blocking=False):
+        return None
+    return lock
+
+
 def liquidate_bot(bot_id: int, reason: str = "manual sell") -> dict:
     """
     Sell EVERYTHING a single bot is holding, right now, via the robust cancel-
@@ -1630,6 +1658,12 @@ def liquidate_bot(bot_id: int, reason: str = "manual sell") -> dict:
     Manual Sell endpoint and from delete_bot (which liquidates before removing).
     Opens its own session so it is self-contained.
     """
+    lock = _acquire_bot_cycle_lock(bot_id, blocking=True, timeout=45.0)
+    if lock is None:
+        return {
+            "action": "ERROR",
+            "reason": "Bot cycle in progress — could not liquidate safely. Retry in a moment.",
+        }
     db = SessionLocal()
     try:
         bot = db.query(Bot).filter(Bot.id == bot_id).first()
@@ -1651,22 +1685,7 @@ def liquidate_bot(bot_id: int, reason: str = "manual sell") -> dict:
         return {"action": "SELL", "reason": reason, "price": price, **closed}
     finally:
         db.close()
-
-
-_bot_cycle_locks: dict[int, threading.Lock] = {}
-_bot_cycle_locks_guard = threading.Lock()
-
-
-def _acquire_bot_cycle_lock(bot_id: int) -> threading.Lock | None:
-    """Non-blocking per-bot lock so scheduler + manual run-cycle cannot overlap."""
-    with _bot_cycle_locks_guard:
-        lock = _bot_cycle_locks.get(bot_id)
-        if lock is None:
-            lock = threading.Lock()
-            _bot_cycle_locks[bot_id] = lock
-    if not lock.acquire(blocking=False):
-        return None
-    return lock
+        lock.release()
 
 
 def run_cycle(bot_id: int) -> dict:
