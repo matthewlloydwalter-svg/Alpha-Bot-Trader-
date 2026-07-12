@@ -1421,10 +1421,10 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
     The bots consume this exact same analysis via market_data.
 
     Optional ``preset`` (1D / 1M / 3M) maps to Alpaca-compatible timeframe +
-    a dynamically calculated UTC start_date:
-      1D → 1Min bars from now−1 day
-      1M → 30Min bars from now−30 days
-      3M → 1Hour bars from now−90 days
+    a dynamically calculated UTC start/end window:
+      1D → 5Min bars for the current/last US regular session (09:30–16:00 ET)
+      1M → 1Day bars from now−30 days
+      3M → 1Day bars from now−90 days
     """
     ex = exchange.lower()
     if ex not in MARKET_UNIVERSE:
@@ -1436,20 +1436,22 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
     display = meta["display"] if meta else symbol.upper()
 
     start = None
+    end = None
     resolved_preset = None
     if preset:
         try:
-            resolved = resolve_chart_preset(preset)
+            resolved = resolve_chart_preset(preset, broker=ex)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         timeframe = resolved["timeframe"]
         limit = resolved["limit"]
         start = resolved["start"]
+        end = resolved.get("end")
         resolved_preset = resolved["preset"]
         logger.info(
-            "[DASHBOARD] preset=%s → tf=%s (%s) start=%s limit=%d",
+            "[DASHBOARD] preset=%s → tf=%s (%s) start=%s end=%s limit=%d",
             resolved_preset, timeframe, resolved["alpaca_timeframe"],
-            start.isoformat(), limit,
+            start.isoformat(), end.isoformat() if end else "now", limit,
         )
     else:
         limit = max(50, min(int(limit), 500))
@@ -1480,7 +1482,7 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
     try:
         analysis = get_market_analysis(
             broker=ex, symbol=symbol, timeframe=timeframe, limit=limit,
-            start=start, preset=resolved_preset,
+            start=start, end=end, preset=resolved_preset,
             alpaca_key=creds.get("alpaca_key"), alpaca_secret=creds.get("alpaca_secret"),
             okx_key=creds.get("okx_key"), okx_secret=creds.get("okx_secret"),
             okx_passphrase=creds.get("okx_passphrase"),
@@ -1532,6 +1534,7 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
         "preset": resolved_preset,
         "chart_presets": list(CHART_PRESETS.keys()),
         "start_date": start.isoformat() if start else None,
+        "end_date": end.isoformat() if end else None,
         "data_as_of": data_as_of,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     })

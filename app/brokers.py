@@ -304,9 +304,20 @@ def _clean_key(raw: str) -> str:
     return cleaned
 
 
+def _is_intraday_timeframe(timeframe: str) -> bool:
+    return (timeframe or "").lower() in {"1m", "5m", "15m", "30m", "1h"}
+
+
+def _shift_alpaca_window(start: datetime, end: datetime, days: int = 1) -> tuple[datetime, datetime]:
+    """Move a session window back by ``days`` calendar days (for empty-bar fallback)."""
+    delta = timedelta(days=days)
+    return start - delta, end - delta
+
+
 def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
                     api_key: str, secret_key: str,
-                    start: datetime | None = None) -> list[dict]:
+                    start: datetime | None = None,
+                    end: datetime | None = None) -> list[dict]:
     """
     Fetch historical stock bars from data.alpaca.markets.
 
@@ -373,7 +384,13 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
 
     # Always pin an explicit UTC end. Free-tier Alpaca defaults end to ~15 minutes
     # ago when omitted; chart presets must recalculate against "now" every refresh.
-    end = datetime.now(timezone.utc)
+    if end is not None:
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        else:
+            end = end.astimezone(timezone.utc)
+    else:
+        end = datetime.now(timezone.utc)
     if end <= start:
         end = start + timedelta(minutes=1)
 
@@ -389,20 +406,20 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
 
     client = StockHistoricalDataClient(api_key, secret_key)
 
-    def _fetch(feed=None) -> list[dict]:
+    def _fetch_at(window_start, window_end, tf_key: str, feed=None) -> list[dict]:
+        tf_obj = tf_map.get(tf_key, tf)
         kwargs = dict(
             symbol_or_symbols=symbol.upper(),
-            timeframe=tf,
-            start=start,
-            end=end,
-            # Intentionally omit limit so we receive the full window through "now".
+            timeframe=tf_obj,
+            start=window_start,
+            end=window_end,
         )
         if feed is not None:
             kwargs["feed"] = feed
         req = StockBarsRequest(**kwargs)
         bars = client.get_stock_bars(req)
         data = bars.data.get(symbol.upper(), []) if hasattr(bars, "data") else []
-        rows = [
+        out = [
             {
                 "ts": int(b.timestamp.timestamp()),
                 "open": float(b.open), "high": float(b.high),
@@ -411,8 +428,11 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
             }
             for b in data
         ]
-        rows.sort(key=lambda r: r["ts"])
-        return rows
+        out.sort(key=lambda r: r["ts"])
+        return out
+
+    def _fetch(feed=None) -> list[dict]:
+        return _fetch_at(start, end, timeframe, feed=feed)
 
     try:
         # First attempt — no explicit feed restriction (works for SIP + IEX).
@@ -428,6 +448,11 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
                             symbol, timeframe, first_ts, last_ts, age_sec)
             except Exception:
                 pass
+        elif _is_intraday_timeframe(timeframe):
+            # Free-tier accounts often only have IEX intraday bars — retry explicitly.
+            logger.info("[BARS] Alpaca %s tf=%s empty on default feed, retrying IEX…", symbol, timeframe)
+            rows = _fetch(feed=DataFeed.IEX)
+            logger.info("[BARS] Alpaca %s tf=%s -> %d bars (IEX feed)", symbol, timeframe, len(rows))
     except AlpacaAPIError as first_err:
         err_str = str(first_err)
         # 403 / subscription error → retry with the free IEX feed.
@@ -445,14 +470,42 @@ def get_alpaca_bars(symbol: str, timeframe: str, limit: int,
     except Exception as first_err:
         raise BrokerError(_humanize_alpaca_error(first_err, key_hint))
 
+    # Session charts outside RTH often return empty on short windows — walk back to
+    # the previous weekday session, then try a coarser intraday bar size.
+    if not rows and _is_intraday_timeframe(timeframe):
+        from app.market_hours import ET
+        fb_start, fb_end = start, end
+        for _ in range(5):
+            fb_start, fb_end = _shift_alpaca_window(fb_start, fb_end, days=1)
+            if fb_start.astimezone(ET).weekday() < 5:
+                break
+        for fb_tf in _intraday_fallback_timeframes(timeframe):
+            try:
+                fb_rows = _fetch_at(fb_start, fb_end, fb_tf, feed=DataFeed.IEX)
+            except Exception:
+                fb_rows = []
+            if fb_rows:
+                logger.info("[BARS] Alpaca %s fallback tf=%s prior session -> %d bars",
+                            symbol, fb_tf, len(fb_rows))
+                rows = fb_rows
+                break
+
     if not rows:
         raise BrokerError(
             f"Alpaca returned no bars for {symbol.upper()} ({timeframe}). "
-            "Outside US market hours there may be no recent IEX data for short timeframes — "
-            "try switching to the 1D timeframe or check that the ticker symbol is correct."
+            "Check that the ticker symbol is correct and that your Alpaca data keys are active."
         )
     # Keep the most recent bars for analysis/charting.
     return rows[-limit:] if limit and limit > 0 else rows
+
+
+def _intraday_fallback_timeframes(timeframe: str) -> list[str]:
+    order = ["1m", "5m", "15m", "30m", "1h"]
+    tf = (timeframe or "5m").lower()
+    if tf not in order:
+        return [tf]
+    idx = order.index(tf)
+    return order[idx:] + order[:idx]
 
 
 def _humanize_alpaca_error(e, key_hint: str = "????") -> str:
@@ -563,10 +616,12 @@ def get_okx_candles(symbol: str, timeframe: str, limit: int,
 def get_candles(broker: str, symbol: str, timeframe: str = "1h", limit: int = 200,
                 alpaca_key: str = None, alpaca_secret: str = None,
                 okx_key: str = None, okx_secret: str = None, okx_passphrase: str = None,
-                paper: bool = True, start: datetime | None = None) -> list[dict]:
+                paper: bool = True, start: datetime | None = None,
+                end: datetime | None = None) -> list[dict]:
     """Unified candle feeder used by both the dashboard API and the bot engine."""
     if broker == "alpaca":
-        return get_alpaca_bars(symbol, timeframe, limit, alpaca_key, alpaca_secret, start=start)
+        return get_alpaca_bars(symbol, timeframe, limit, alpaca_key, alpaca_secret,
+                               start=start, end=end)
     elif broker == "okx":
         return get_okx_candles(symbol, timeframe, limit, okx_key, okx_secret, okx_passphrase, paper,
                                start=start)

@@ -100,6 +100,55 @@ def is_eod_exit_window(window_minutes: int = 20, now_utc: datetime | None = None
     return mins is not None and 0 <= mins <= window_minutes
 
 
+def _session_open_close_et(day_et) -> tuple:
+    """09:30 and 16:00 ET on the calendar day of ``day_et`` (ET-aware)."""
+    open_et = day_et.replace(hour=OPEN_H, minute=OPEN_M, second=0, microsecond=0)
+    close_et = day_et.replace(hour=CLOSE_H, minute=CLOSE_M, second=0, microsecond=0)
+    return open_et, close_et
+
+
+def _previous_weekday_et(day_et, *, skip: int = 1):
+    """Walk backward ``skip`` weekdays from ``day_et`` (ET-aware)."""
+    d = day_et
+    steps = 0
+    while steps < skip:
+        d = d - timedelta(days=1)
+        if d.weekday() < 5:
+            steps += 1
+    return d
+
+
+def trading_session_bounds(now_utc: datetime | None = None) -> tuple[datetime, datetime]:
+    """
+    UTC (start, end) for the Alpaca-style 1D intraday chart window.
+
+    - During the regular session: 09:30 ET today → now.
+    - After today's close: 09:30–16:00 ET today.
+    - Before today's open or on weekends: the previous completed session
+      (09:30–16:00 ET on the last weekday).
+    """
+    now = now_utc or datetime.now(pytz.utc)
+    if now.tzinfo is None:
+        now = pytz.utc.localize(now)
+    else:
+        now = now.astimezone(pytz.utc)
+    et = now.astimezone(ET)
+    open_today, close_today = _session_open_close_et(et)
+
+    if et.weekday() < 5:
+        if open_today <= et < close_today:
+            return open_today.astimezone(pytz.utc), now
+        if et >= close_today:
+            return open_today.astimezone(pytz.utc), close_today.astimezone(pytz.utc)
+        prev = _previous_weekday_et(et)
+        open_prev, close_prev = _session_open_close_et(prev)
+        return open_prev.astimezone(pytz.utc), close_prev.astimezone(pytz.utc)
+
+    prev = _previous_weekday_et(et)
+    open_prev, close_prev = _session_open_close_et(prev)
+    return open_prev.astimezone(pytz.utc), close_prev.astimezone(pytz.utc)
+
+
 def market_status(now_utc: datetime | None = None) -> dict:
     """Serializable market-status payload for the frontend.
 

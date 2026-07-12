@@ -1964,7 +1964,10 @@ function filterMarkets() { renderMarkets(); }
 
 // Chart timeframe presets → backend `preset` codes.
 // Backend maps these to Alpaca-compatible bar size + dynamic UTC start_date:
-//   1D → 1Min / now−1 day
+// Chart presets (Alpaca-aligned):
+//   1D → 5Min bars for current/last US regular session
+//   1M → daily bars, ~30 days
+//   3M → daily bars, ~90 days
 //   1M → 30Min / now−30 days
 //   3M → 1Hour / now−90 days
 const DASH_PRESETS = ["1D", "1M", "3M"];
