@@ -10,16 +10,16 @@ from app.plans import normalize_plan, plan_level_label
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-# Forwarding aliases users email (Gmail filter → folders). Override via env.
+# Forwarding aliases users email (Gmail filter → Support/… labels). Override via env.
 _SUPPORT_DOMAIN = (
-    os.getenv("SUPPORT_MAIL_DOMAIN") or "alphabotixtrading.com"
+    os.getenv("SUPPORT_MAIL_DOMAIN") or "alphabotservices.com"
 ).strip().lstrip("@")
 
 SUPPORT_MAILTO = {
     "enterprise": os.getenv("SUPPORT_MAILTO_ENTERPRISE")
     or f"enterprise@{_SUPPORT_DOMAIN}",
+    "pro": os.getenv("SUPPORT_MAILTO_PRO") or f"pro@{_SUPPORT_DOMAIN}",
     "growth": os.getenv("SUPPORT_MAILTO_GROWTH") or f"growth@{_SUPPORT_DOMAIN}",
-    "pro": os.getenv("SUPPORT_MAILTO_GROWTH") or f"growth@{_SUPPORT_DOMAIN}",
     "starter": os.getenv("SUPPORT_MAILTO_DEFAULT") or f"support@{_SUPPORT_DOMAIN}",
 }
 
@@ -108,10 +108,11 @@ def support_destination_email(plan_level: Optional[str]) -> str:
 
 def support_mailto_for_plan(plan_level: Optional[str]) -> str:
     """
-    Public mailto alias (user-facing Contact Support button):
-      Enterprise → enterprise@domain
-      Growth/Pro → growth@domain
-      Otherwise → support@domain
+    Public mailto alias (Account → Contact Support):
+      Enterprise → enterprise@alphabotservices.com
+      Pro        → pro@alphabotservices.com
+      Growth     → growth@alphabotservices.com
+      Starter    → support@alphabotservices.com
     """
     key = plan_key_from_level(plan_level)
     return SUPPORT_MAILTO.get(key, SUPPORT_MAILTO["starter"])
