@@ -294,6 +294,32 @@ def _enforce_bot_create_limit(user: User, db: Session) -> None:
         )
 
 
+def _enforce_running_bot_limit(user: User, db: Session) -> int:
+    """
+    After plan downgrades (or before starting a bot), ensure running bots
+    do not exceed the account's plan limit. Pauses newest excess bots first.
+    Returns how many bots were paused.
+    """
+    limit = _user_bot_limit(user)
+    if limit is None:
+        return 0
+    running = (
+        db.query(Bot)
+        .filter(Bot.owner_id == user.id, Bot.running == True)  # noqa: E712
+        .order_by(Bot.id.desc())
+        .all()
+    )
+    paused = 0
+    for b in running[limit:]:
+        b.running = False
+        b.last_pattern_summary = (
+            f"Paused automatically — plan limit is {limit} running bot"
+            f"{'s' if limit != 1 else ''}."
+        )
+        paused += 1
+    return paused
+
+
 def _user_plan_payload(user: User) -> dict:
     is_admin = bool(user.is_admin or is_user_admin(user.email or ""))
     plan = normalize_plan(getattr(user, "subscription_plan", None))
@@ -426,7 +452,7 @@ def upgrade_plans_pane(request: Request, db: Session = Depends(get_db)):
     try:
         user = get_current_user_from_cookie(request, db)
     except Exception:
-        return RedirectResponse(url="/login", status_code=303)
+        return RedirectResponse(url="/login?next=/upgrade-plans", status_code=303)
     plans = public_plan_payload()
     return _html_page(
         request,
@@ -642,10 +668,13 @@ def billing_confirm_checkout(
         raise HTTPException(status_code=503, detail="Stripe package not installed")
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not load Checkout session: {exc}")
-    if str(session.get("client_reference_id") or "") not in {"", str(u.id)}:
-        meta = session.get("metadata") or {}
-        if str(meta.get("user_id") or "") != str(u.id):
-            raise HTTPException(status_code=403, detail="Checkout session does not belong to this account.")
+    meta = session.get("metadata") or {}
+    owns = (
+        str(session.get("client_reference_id") or "") == str(u.id)
+        or str(meta.get("user_id") or "") == str(u.id)
+    )
+    if not owns:
+        raise HTTPException(status_code=403, detail="Checkout session does not belong to this account.")
     if session.get("payment_status") in {"paid", "no_payment_required"} or session.get("status") == "complete":
         stripe_billing.sync_user_from_checkout_session(u, session)
         db.add(u)
@@ -694,6 +723,7 @@ async def _handle_stripe_webhook(request: Request, db: Session):
         stripe_billing.sync_user_from_subscription(user, data)
 
     if user is not None:
+        _enforce_running_bot_limit(user, db)
         db.add(user)
         db.commit()
     return {"received": True}
@@ -1848,7 +1878,27 @@ async def toggle_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
     bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
-        
+
+    # Starting a bot must respect plan running limits (create limit alone is not enough
+    # after a downgrade when older bots still exist).
+    if not bot.running:
+        limit = _user_bot_limit(u)
+        if limit is not None:
+            running_count = (
+                db.query(Bot)
+                .filter(Bot.owner_id == u.id, Bot.running == True)  # noqa: E712
+                .count()
+            )
+            if running_count >= limit:
+                plan_name = plan_display_name(getattr(u, "subscription_plan", None))
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"{plan_name} accounts can run up to {limit} bot"
+                        f"{'s' if limit != 1 else ''} at once. Pause another bot or upgrade."
+                    ),
+                )
+
     bot.running = not bot.running
     db.commit()
     return {"status": f"bot {bot_id} toggled", "running": bot.running}

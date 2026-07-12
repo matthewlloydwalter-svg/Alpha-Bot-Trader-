@@ -85,6 +85,12 @@ function formatApiDetail(detail) {
 }
 
 let _forcingLogout = false;
+const AUTH_BROADCAST_KEY = "alphabot_auth_epoch";
+
+function bumpAuthEpoch() {
+  try { localStorage.setItem(AUTH_BROADCAST_KEY, String(Date.now())); } catch (_) {}
+}
+
 function forceLogout(reason) {
   if (_forcingLogout) return;
   _forcingLogout = true;
@@ -96,6 +102,7 @@ function forceLogout(reason) {
     }
   } catch (_) {}
   USER = null;
+  bumpAuthEpoch();
   try { toast(reason || "Session expired — please sign in again.", ""); } catch (_) {}
   // Leave a beat so the toast can paint, then hard-navigate to login.
   setTimeout(() => { location.href = "/login"; }, 80);
@@ -367,6 +374,7 @@ async function handleLogin(e) {
   const password = document.getElementById("login-password").value;
   try {
     USER = await api("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+    bumpAuthEpoch();
     toast("Welcome back!", "success");
     if (await redirectAfterAuthIfNeeded()) return;
     await enterApp();
@@ -389,6 +397,7 @@ async function handleRegister(e) {
       method: "POST",
       body: JSON.stringify({ email, password, confirm_password: confirm, agreed_to_tos: true })
     });
+    bumpAuthEpoch();
     toast("Account setup successful!", "success");
     if (await redirectAfterAuthIfNeeded()) return;
     await enterApp();
@@ -450,6 +459,7 @@ async function handleLogoutClick() {
   catch (_) {}
   USER = null;
   try { sessionStorage.removeItem("post_login_path"); } catch (_) {}
+  bumpAuthEpoch();
   location.href = "/login";
 }
 
@@ -543,6 +553,15 @@ async function enterApp() {
         }
         updateBotLimitUI();
       } catch (_) {}
+    });
+  }
+
+  // Another tab logged in/out as a different account — reload to drop stale SSE/USER.
+  if (!window._authStorageBound) {
+    window._authStorageBound = true;
+    window.addEventListener("storage", (ev) => {
+      if (ev.key !== AUTH_BROADCAST_KEY) return;
+      location.reload();
     });
   }
 }
