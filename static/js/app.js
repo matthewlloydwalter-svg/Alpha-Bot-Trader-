@@ -88,13 +88,22 @@ let _forcingLogout = false;
 function forceLogout(reason) {
   if (_forcingLogout) return;
   _forcingLogout = true;
+  // Preserve deep link so re-login returns the user to where they were.
+  try {
+    const path = normalizePath(location.pathname);
+    if (isDashboardPath(path) || path === "/admin") {
+      sessionStorage.setItem("post_login_path", path);
+    }
+  } catch (_) {}
   USER = null;
-  try { toast(reason || "Session expired — please sign in again.", "error"); } catch (_) {}
+  try { toast(reason || "Session expired — please sign in again.", ""); } catch (_) {}
   // Leave a beat so the toast can paint, then hard-navigate to login.
   setTimeout(() => { location.href = "/login"; }, 80);
 }
 
 function toast(msg, type = "") {
+  // Suppress follow-on error toasts while a forced logout redirect is in flight.
+  if (_forcingLogout && type === "error") return;
   if (typeof msg === "object" && msg !== null) {
     if (msg instanceof Error) msg = msg.message;
     else msg = formatApiDetail(msg.detail) || msg.message || JSON.stringify(msg);
@@ -415,6 +424,7 @@ async function handleLogoutClick() {
   try { await api("/auth/logout", { method: "POST" }); }
   catch (_) {}
   USER = null;
+  try { sessionStorage.removeItem("post_login_path"); } catch (_) {}
   location.href = "/login";
 }
 
@@ -523,8 +533,8 @@ function connectLiveStream() {
   EVT_SOURCE.addEventListener("trade", (ev) => {
     try {
       const t = JSON.parse(ev.data);
-      const verb = t.side === "buy" ? "Bought" : "Sold";
-      toast(`🤖 ${t.bot_name || "Bot"} ${verb} ${Number(t.qty || 0).toFixed(4)} ${t.ticker}`, "success");
+      const verb = t.side === "buy" ? "Bought" : t.side === "sell" ? "Sold" : "Traded";
+      toast(`🤖 ${t.bot_name || "Bot"} ${verb} ${Number(t.qty || 0).toFixed(4)} ${t.ticker || ""}`.trim(), "success");
     } catch (_) {}
     const hv = document.getElementById("view-history");
     if (hv && !hv.classList.contains("hidden")) loadTradeHistory();
@@ -585,6 +595,14 @@ function setupRouter() {
         toggleAuthMode(path !== "/signup");
         return;
       }
+      // Logged-in Back onto /login|/signup → snap URL back to the active tab.
+      if (isAuthPath(location.pathname)) {
+        const active = document.querySelector(".nav-tab.active")?.getAttribute("data-tab");
+        const tab = (active && TAB_PATHS[active]) ? active : "portfolio";
+        history.replaceState({ tab }, "", pathForTab(tab));
+        activateTab(tab, { push: false });
+        return;
+      }
       const tab = tabFromPath(location.pathname) || "portfolio";
       activateTab(tab, { push: false });
     });
@@ -617,7 +635,7 @@ async function refreshUserData() {
       vText.style.color = "var(--amber, #f59e0b)";
       vBtn.classList.remove("hidden");
     }
-  } catch (e) { toast("Session sync failed.", "error"); }
+  } catch (e) { if (!_forcingLogout) toast("Session sync failed.", "error"); }
 }
 
 function updatePlanUI() {
@@ -673,11 +691,14 @@ function updateBotLimitUI() {
         ? `${count} / ${limit} bots · limit reached — upgrade for more`
         : `${count} / ${limit} bots used`;
       hint.classList.remove("hidden");
+      hint.style.display = "block";
     } else if (USER) {
       hint.textContent = "Unlimited bots";
       hint.classList.remove("hidden");
+      hint.style.display = "block";
     } else {
       hint.classList.add("hidden");
+      hint.style.display = "";
     }
   }
 }
@@ -970,7 +991,9 @@ async function loadPortfolioForMode(mode) {
       api("/bots"),
     ]);
   } catch (e) {
+    if (_forcingLogout) return;
     if (msg) { msg.classList.remove("hidden"); msg.textContent = `⚠ ${e.message}`; }
+    PF_DATA = null;
     const tEl = document.getElementById("pf-total-value");
     if (tEl) tEl.textContent = "—";
     const pnlEl = document.getElementById("pf-total-pnl");
@@ -978,6 +1001,9 @@ async function loadPortfolioForMode(mode) {
       pnlEl.textContent = "—";
       pnlEl.className = "pf-total-pnl";
     }
+    const dEl = document.getElementById("pf-total-delta");
+    if (dEl) { dEl.textContent = ""; dEl.className = "pf-delta"; }
+    if (PF_MAIN_CHART) { try { PF_MAIN_CHART.remove(); } catch (_) {} PF_MAIN_CHART = null; }
     return;
   }
   PF_DATA = { perf: perf || {}, bots: Array.isArray(bots) ? bots : (bots && bots.bots) || [], mode };
@@ -1418,17 +1444,23 @@ async function createBot() {
     hideCreateBotModal();
     resetCreateBotForm();
     toast(launchedAuto ? "Autonomous bot launched — it will scan all markets" : "Bot launched", "success");
+    if (USER) USER.bot_count = Number(USER.bot_count || 0) + 1;
+    updateBotLimitUI();
     await refreshUserData();
     await loadBots();
-  } catch (e) { toast(e, "error"); }
+  } catch (e) { if (!_forcingLogout) toast(e, "error"); }
 }
 
 async function loadBots() {
   try {
     const res = await api("/bots");
     BOTS = Array.isArray(res) ? res : (res.bots || []);
+    if (USER) {
+      USER.bot_count = BOTS.length;
+      updateBotLimitUI();
+    }
     renderBots();
-  } catch (e) { toast(e, "error"); }
+  } catch (e) { if (!_forcingLogout) toast(e, "error"); }
 }
 
 function renderBots() {
