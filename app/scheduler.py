@@ -57,7 +57,7 @@ def _collect_targets() -> dict[tuple[str, str], dict]:
     targets: dict[tuple[str, str], dict] = {}
     db = SessionLocal()
     try:
-        bots = db.query(Bot).filter(Bot.running == True, Bot.ticker.isnot(None)).all()  # noqa: E712
+        bots = db.query(Bot).filter(Bot.running == True).all()  # noqa: E712
         owners: dict[int, User] = {}
         for b in bots:
             broker = (b.broker or "alpaca").lower()
@@ -67,7 +67,8 @@ def _collect_targets() -> dict[tuple[str, str], dict]:
             owners[b.owner_id] = owner
             paper = (owner.trading_mode or "paper") == "paper"
             creds = resolve_credentials(owner, broker, paper)
-            targets[(broker, b.ticker.upper())] = {"creds": creds, "paper": paper}
+            for symbol in bot_engine._bot_tracked_symbols(b):
+                targets[(broker, symbol)] = {"creds": creds, "paper": paper}
 
         # Watchlist fallback for assets without a bot.
         for broker, cfg in MARKET_UNIVERSE.items():

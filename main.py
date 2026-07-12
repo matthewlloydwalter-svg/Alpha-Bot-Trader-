@@ -397,8 +397,13 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
         broker = (b.broker or u.active_broker or "alpaca").lower()
         paper = (u.trading_mode or "paper") == "paper"
         creds = resolve_credentials(u, broker, paper)
+        strategy_state = bot_engine._load_strategy_state(b)
+        scattershot_legs = strategy_state.get("legs") if (b.low_balance_strategy or "standard").lower() == "scattershot" else None
         position_snapshot = None
-        if b.in_position and b.ticker:
+        scattershot_unrealized = None
+        if scattershot_legs:
+            scattershot_unrealized = bot_engine._scattershot_unrealized_pl(db, b, broker)
+        elif b.in_position and b.ticker and "," not in (b.ticker or ""):
             try:
                 position_snapshot = get_position_snapshot(
                     broker=broker,
@@ -411,18 +416,16 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
 
         entry_price = b.avg_entry_price
         current_price = None
-        unrealized_pl = None
+        unrealized_pl = scattershot_unrealized
         if position_snapshot:
             current_price = position_snapshot.get("current_price")
             unrealized_pl = position_snapshot.get("unrealized_pl")
-        if current_price is None and entry_price is not None:
+        if unrealized_pl is None and current_price is None and entry_price is not None:
             current_price = entry_price
         if unrealized_pl is None and current_price is not None and entry_price is not None and (b.shares_held or 0) > 0:
             unrealized_pl = (current_price - entry_price) * (b.shares_held or 0)
 
         display_stop_price, display_take_profit_price = bot_engine._get_display_risk_targets(entry_price)
-        strategy_state = bot_engine._load_strategy_state(b)
-        scattershot_legs = strategy_state.get("legs") if (b.low_balance_strategy or "standard").lower() == "scattershot" else None
         swing_hold_days = None
         if (b.low_balance_strategy or "standard").lower() == "swing_trader" and b.position_opened_at and b.in_position:
             held = (datetime.utcnow() - b.position_opened_at).total_seconds() / 86400.0
@@ -585,11 +588,9 @@ def _collect_bot_status(user_id: int, exchange: str, symbol: str) -> dict:
     from app.database import SessionLocal
     db = SessionLocal()
     try:
-        bots = db.query(Bot).filter(
-            Bot.owner_id == user_id,
-            Bot.ticker.ilike(symbol),
-        ).all()
-        if not bots:
+        bots = db.query(Bot).filter(Bot.owner_id == user_id).all()
+        matching = [b for b in bots if bot_engine._bot_occupies_ticker(b, symbol) or (b.ticker or "").upper() == symbol.upper()]
+        if not matching:
             return {
                 "has_bot": False,
                 "headline": "No bot deployed on this asset yet.",
@@ -598,7 +599,7 @@ def _collect_bot_status(user_id: int, exchange: str, symbol: str) -> dict:
             }
         return {
             "has_bot": True,
-            "headline": f"{len(bots)} bot(s) monitoring {symbol.upper()}",
+            "headline": f"{len(matching)} bot(s) monitoring {symbol.upper()}",
             "bots": [{
                 "id": b.id, "name": b.name, "running": b.running,
                 "in_position": b.in_position, "signal": b.last_signal,
@@ -606,7 +607,7 @@ def _collect_bot_status(user_id: int, exchange: str, symbol: str) -> dict:
                 "stop_price": b.stop_price, "take_profit_price": b.take_profit_price,
                 "avg_entry_price": b.avg_entry_price, "trade_count": b.trade_count,
                 "analyzed_at": b.last_analysis_at.isoformat() if b.last_analysis_at else None,
-            } for b in bots],
+            } for b in matching],
         }
     finally:
         db.close()
@@ -642,10 +643,15 @@ def _bot_performance_highlights(db: Session, bots: list) -> Optional[dict]:
             continue
         realized = float(b.realized_pnl or 0.0)
         unrealized = 0.0
-        if b.in_position and b.avg_entry_price and b.shares_held:
-            q = market_store.get_quote(db, b.broker or "alpaca", b.ticker or "")
-            mark = q.price if (q and q.price) else b.avg_entry_price
-            unrealized = (float(mark) - float(b.avg_entry_price)) * float(b.shares_held)
+        if b.in_position:
+            if (b.low_balance_strategy or "standard").lower() == "scattershot" and bot_engine._scattershot_active(b):
+                pl = bot_engine._scattershot_unrealized_pl(db, b, b.broker or "alpaca")
+                if pl is not None:
+                    unrealized = pl
+            elif b.avg_entry_price and b.shares_held:
+                q = market_store.get_quote(db, b.broker or "alpaca", b.ticker or "")
+                mark = q.price if (q and q.price) else b.avg_entry_price
+                unrealized = (float(mark) - float(b.avg_entry_price)) * float(b.shares_held)
         net = round(realized + unrealized, 2)
         funds = float(b.funds_allocated or 0.0)
         roi = round((net / funds * 100.0), 2) if funds > 0 else 0.0
@@ -761,7 +767,14 @@ def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_curr
     unrealized = 0.0
     if include_open:
         for b in bots:
-            if b.running and b.in_position and b.avg_entry_price and b.shares_held:
+            if not (b.running and b.in_position):
+                continue
+            if (b.low_balance_strategy or "standard").lower() == "scattershot" and bot_engine._scattershot_active(b):
+                pl = bot_engine._scattershot_unrealized_pl(db, b, b.broker or "alpaca")
+                if pl is not None:
+                    unrealized += pl
+                continue
+            if b.avg_entry_price and b.shares_held:
                 q = market_store.get_quote(db, b.broker or "alpaca", b.ticker or "")
                 mark = float(q.price) if (q and q.price) else float(b.avg_entry_price)
                 unrealized += (mark - float(b.avg_entry_price)) * float(b.shares_held)
@@ -895,6 +908,9 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
     funds = float(data.get("funds_allocated", 0.0) or 0.0)
     if funds <= 0:
         raise HTTPException(status_code=400, detail="Allocate a funds amount greater than zero.")
+    if strategy == "scattershot":
+        ticker_raw = None
+        auto_select = True
     if not auto_select and not ticker_raw:
         raise HTTPException(status_code=400, detail="Manual bots require a ticker symbol.")
 
@@ -966,7 +982,11 @@ async def delete_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
     # bot is removed. With real keys, a liquidation failure aborts the delete
     # (fail safe) rather than silently dropping the bot while shares remain.
     liquidation = None
-    if bot.in_position and (bot.shares_held or 0) > 0:
+    has_holdings = bot.in_position and (
+        (bot.shares_held or 0) > 0
+        or bot_engine._scattershot_active(bot)
+    )
+    if has_holdings:
         try:
             liquidation = bot_engine.liquidate_bot(bot.id, reason="bot deleted")
         except Exception as e:
@@ -999,7 +1019,7 @@ async def liquidate_bot_endpoint(bot_id: int, u: User = Depends(get_current_user
     bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
-    if not bot.in_position or (bot.shares_held or 0) <= 0:
+    if not bot.in_position and not bot_engine._scattershot_active(bot):
         return {"status": "flat", "detail": "This bot is not holding any position to sell."}
     try:
         result = bot_engine.liquidate_bot(bot.id, reason="manual sell")

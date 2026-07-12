@@ -893,7 +893,7 @@ function renderBots() {
     const pnlColor = livePnl >= 0 ? PF_GREEN : PF_RED;
     const assetLabel = b.ticker ? esc(b.ticker) : (b.auto_select ? "🧠 Auto-select (all markets)" : "Auto");
     const strategyLabel = b.low_balance_strategy_label || b.low_balance_strategy || "Standard";
-    const cooldownNote = (b.strategy_cooldown_until && new Date(b.strategy_cooldown_until) > new Date())
+    const cooldownNote = (b.strategy_cooldown_until && new Date(b.strategy_cooldown_until.endsWith("Z") ? b.strategy_cooldown_until : `${b.strategy_cooldown_until}Z`) > new Date())
       ? `<span class="badge badge-amber" title="Settlement cooldown active">Cooldown</span>`
       : "";
     const scattershotNote = (b.scattershot_legs && b.scattershot_legs.length)

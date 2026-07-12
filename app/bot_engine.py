@@ -33,7 +33,7 @@ from __future__ import annotations
 import os
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -95,16 +95,15 @@ def _market_collision_blocked(db: Session, owner: User, bot: Bot, ticker: str | 
             Bot.owner_id == owner.id,
             Bot.id != bot.id,
             Bot.in_position == True,  # noqa: E712
-            Bot.ticker.isnot(None),
         )
         .all()
     )
     for other in conflicts:
-        other_ticker = (other.ticker or "").upper()
-        if other_ticker == ticker:
+        if _bot_occupies_ticker(other, ticker):
             if quality_score >= 1.0:
                 return False, None
-            return True, f"{ticker} is already occupied by another active bot ({other.name})"
+            label = other.ticker or other.name
+            return True, f"{ticker} is already occupied by another active bot ({other.name}: {label})"
     return False, None
 CONSERVATIVE_ENTRY_FILTER = os.getenv("BOT_CONSERVATIVE_ENTRY_FILTER", "1").strip().lower() in ("1", "true", "yes", "on")
 TREND_CONFIRMATION_FILTER = os.getenv("BOT_TREND_CONFIRMATION_FILTER", "1").strip().lower() in ("1", "true", "yes", "on")
@@ -183,6 +182,8 @@ def _get_buying_power(owner: User, broker: str) -> float | None:
     """Return available cash/buying power, or None if it can't be determined."""
     try:
         info = get_account_info(broker=broker, paper=_paper(owner), **_creds(owner, broker))
+        if not isinstance(info, dict) or info.get("error"):
+            return None
         if broker == "alpaca":
             return float(info.get("buying_power", 0.0))
         balances = info.get("balances", {})
@@ -305,6 +306,37 @@ def _scattershot_active(bot: Bot) -> bool:
     return bool(state.get("legs"))
 
 
+def _bot_occupies_ticker(bot: Bot, ticker: str) -> bool:
+    """True when an in-position bot (including scattershot baskets) holds ``ticker``."""
+    if not ticker or not bot.in_position:
+        return False
+    sym = ticker.upper()
+    state = _load_strategy_state(bot)
+    legs = state.get("legs") or []
+    if legs:
+        return any((leg.get("ticker") or "").upper() == sym for leg in legs)
+    bot_ticker = (bot.ticker or "").strip()
+    if not bot_ticker:
+        return False
+    if "," in bot_ticker:
+        return sym in {part.strip().upper() for part in bot_ticker.split(",") if part.strip()}
+    return bot_ticker.upper() == sym
+
+
+def _bot_tracked_symbols(bot: Bot) -> list[str]:
+    """Return every symbol this bot currently tracks or holds."""
+    state = _load_strategy_state(bot)
+    legs = state.get("legs") or []
+    if legs:
+        return [(leg.get("ticker") or "").upper() for leg in legs if leg.get("ticker")]
+    ticker = (bot.ticker or "").strip()
+    if not ticker:
+        return []
+    if "," in ticker:
+        return [part.strip().upper() for part in ticker.split(",") if part.strip()]
+    return [ticker.upper()]
+
+
 def _swing_hold_met(bot: Bot) -> bool:
     if not bot.position_opened_at:
         return True
@@ -328,7 +360,7 @@ def _cooldown_active(bot: Bot) -> bool:
 
 def _set_next_session_cooldown(bot: Bot) -> None:
     nxt = next_market_open()
-    bot.strategy_cooldown_until = datetime.utcfromtimestamp(nxt.timestamp())
+    bot.strategy_cooldown_until = datetime.fromtimestamp(nxt.timestamp(), tz=timezone.utc).replace(tzinfo=None)
 
 
 def _enforce_low_balance_strategy(db: Session, owner: User, bot: Bot, price: float, analysis: Analysis | None) -> tuple[bool, dict]:
@@ -375,6 +407,30 @@ def _enforce_low_balance_strategy(db: Session, owner: User, bot: Bot, price: flo
         }
 
     return True, {"account_type": account_type, "reason": "standard"}
+
+
+def _scattershot_unrealized_pl(db: Session, bot: Bot, broker: str) -> float | None:
+    """Mark-to-market unrealized P/L for an open scattershot basket."""
+    if not bot.in_position:
+        return None
+    legs = (_load_strategy_state(bot).get("legs") or [])
+    if not legs:
+        return None
+    try:
+        from app.market_store import get_quote
+    except Exception:
+        return None
+    total = 0.0
+    for leg in legs:
+        entry = float(leg.get("entry_price") or 0)
+        qty = float(leg.get("qty") or 0)
+        sym = leg.get("ticker")
+        if not sym or qty <= 0:
+            continue
+        q = get_quote(db, broker, sym)
+        mark = float(q.price) if (q and q.price) else entry
+        total += (mark - entry) * qty
+    return round(total, 4)
 
 
 def _resolve_leg_exit_price(db: Session, owner: User, bot: Bot, symbol: str) -> float:
@@ -476,10 +532,7 @@ def _close_scattershot_basket(db: Session, owner: User, bot: Bot, reason: str) -
     bot.position_opened_at = None
     _save_strategy_state(bot, None)
     _set_next_session_cooldown(bot)
-    if bot.auto_select:
-        bot.ticker = None
-    else:
-        bot.ticker = None
+    bot.ticker = None
     bot.last_pattern_summary = (
         f"Scattershot basket closed ({reason}) — {len(closed_symbols)} legs, "
         f"P&L {total_gain:+.2f}. Waiting for next session open."
@@ -544,8 +597,17 @@ def _open_scattershot_basket(db: Session, owner: User, bot: Bot) -> dict:
              f"[SCATTER-SHOT] BUY ${notional:.2f} ({qty:.6f}) {sym} @ {price:.4f}.")
 
     if len(legs) < SCATTERSHOT_LEG_COUNT:
+        for leg in legs:
+            sym = leg.get("ticker")
+            if not sym:
+                continue
+            try:
+                _liquidate(owner, bot.broker, sym)
+            except Exception as e:
+                logger.warning("[SCATTER-SHOT] rollback leg %s failed: %s", sym, e)
         bot.last_pattern_summary = (
-            f"Scattershot deploy incomplete — only {len(legs)}/{SCATTERSHOT_LEG_COUNT} legs filled."
+            f"Scattershot deploy incomplete — only {len(legs)}/{SCATTERSHOT_LEG_COUNT} legs filled; "
+            "rolled back partial basket."
         )
         db.commit()
         return {"action": "WAIT", "reason": "Scattershot basket could not be fully deployed."}
@@ -581,6 +643,12 @@ def _open_scattershot_basket(db: Session, owner: User, bot: Bot) -> dict:
 def _run_scattershot_cycle(db: Session, bot: Bot) -> dict:
     """Dedicated cycle for the scattershot low-balance strategy."""
     owner = bot.owner
+    broker = (bot.broker or owner.active_broker or "alpaca").lower()
+    if broker != "alpaca":
+        bot.last_pattern_summary = "Scattershot requires Alpaca equities."
+        db.commit()
+        return {"action": "ERROR", "reason": "Scattershot is Alpaca-only."}
+
     bot.last_analysis_at = datetime.utcnow()
 
     if not bot.running:
@@ -770,6 +838,9 @@ def _attempt_capital_rotation(db: Session, owner: User, candidate_bot: Bot,
 # Position close
 # ────────────────────────────────────────────────────────────────────
 def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: str) -> dict:
+    if _strategy_name(bot) == "scattershot" and _scattershot_active(bot):
+        return _close_scattershot_basket(db, owner, bot, reason=reason)
+
     qty = bot.shares_held or 0
     ticker = bot.ticker
     # Cancel-then-close: never a naive fixed-qty sell, so open orders reserving
@@ -1027,8 +1098,8 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
     owner: User = bot.owner
     price = analysis.last_price
     sig = analysis.signal
-    atr = analysis.indicators.get("atr")
-    nearest_resistance = analysis.levels.get("nearest_resistance")
+    atr = (analysis.indicators or {}).get("atr")
+    nearest_resistance = (analysis.levels or {}).get("nearest_resistance")
 
     # Persist the latest analysis snapshot for the UI's "Internal Bot Status".
     bot.last_signal = sig.action
@@ -1359,10 +1430,10 @@ def liquidate_bot(bot_id: int, reason: str = "manual sell") -> dict:
         if not bot:
             return {"action": "ERROR", "reason": "Bot not found."}
         owner = bot.owner
+        if _strategy_name(bot) == "scattershot" and _scattershot_active(bot):
+            closed = _close_scattershot_basket(db, owner, bot, reason=reason)
+            return {"action": "SELL", "reason": reason, **closed}
         if not bot.in_position or (bot.shares_held or 0) <= 0:
-            if _strategy_name(bot) == "scattershot" and _scattershot_active(bot):
-                closed = _close_scattershot_basket(db, owner, bot, reason=reason)
-                return {"action": "SELL", "reason": reason, **closed}
             return {"action": "FLAT", "reason": "Bot holds no open position to sell."}
         price = _resolve_exit_price(db, bot, owner)
         closed = _close_position(db, owner, bot, price, reason=reason)
