@@ -1903,15 +1903,15 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
 
     db.add(new_bot)
     try:
+        # Keep the create-limit user lock through flush + running-limit enforce
+        # so concurrent creates cannot leave excess bots running.
+        db.flush()
+        _enforce_running_bot_limit(u, db)
         db.commit()
     except Exception as e:
         db.rollback()
         logger.exception("bot create failed for user %s", u.id)
         raise HTTPException(status_code=500, detail=f"Could not create bot: {e}")
-    # Belt-and-suspenders if concurrent creates raced past the create-count check.
-    paused = _enforce_running_bot_limit(u, db)
-    if paused:
-        db.commit()
     db.refresh(new_bot)
     logger.info("[BOT CREATED] id=%s ticker=%s auto_select=%s broker=%s tf=%s funds=%s",
                 new_bot.id, new_bot.ticker, new_bot.auto_select, new_bot.broker,

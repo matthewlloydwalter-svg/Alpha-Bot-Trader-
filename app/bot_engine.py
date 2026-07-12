@@ -377,6 +377,11 @@ def _requires_same_day_exit(bot: Bot) -> bool:
         return True
     if bot.position_opened_at and session_date_et() != session_date_et(bot.position_opened_at):
         return True
+    # Missed the EOD window (scheduler gap / halt) — still flatten once the
+    # regular US equity session is closed so cash-account GFV stays intact.
+    broker = (bot.broker or "alpaca").lower()
+    if broker == "alpaca" and not market_open_for_broker(broker):
+        return True
     return False
 
 
@@ -754,10 +759,8 @@ def _run_scattershot_cycle(db: Session, bot: Bot) -> dict:
     """Dedicated cycle for the scattershot low-balance strategy."""
     owner = bot.owner
     bot.last_analysis_at = datetime.utcnow()
-
-    if not bot.running:
-        db.commit()
-        return {"action": "SKIPPED", "reason": "Bot is paused."}
+    broker = (bot.broker or owner.active_broker or "alpaca").lower()
+    market_open = market_open_for_broker(broker)
 
     state = _load_strategy_state(bot)
     legs = state.get("legs") or []
@@ -766,6 +769,7 @@ def _run_scattershot_cycle(db: Session, bot: Bot) -> dict:
     # Corrupt/partial state: marked in position but no legs to manage — attempt
     # broker liquidations from the joined ticker (if any), then clear local state
     # so we never open a duplicate basket on top of orphan holdings.
+    # Runs even when paused — open exposure must still be unwound.
     if bot.in_position and not legs:
         symbols = [p.strip() for p in (bot.ticker or "").split(",") if p.strip()]
         failed: list[str] = []
@@ -816,15 +820,23 @@ def _run_scattershot_cycle(db: Session, bot: Bot) -> dict:
         if session_day and session_day != session_date_et():
             closed = _close_scattershot_basket(db, owner, bot, reason="stale overnight basket")
             return {"action": "SELL", "reason": "Closed stale scattershot basket.", **closed}
+        # EOD window OR after the regular session closes (missed-window catch-up).
+        if is_eod_exit_window(SCATTERSHOT_EOD_WINDOW_MIN) or not market_open:
+            closed = _close_scattershot_basket(
+                db, owner, bot,
+                reason=("scattershot end-of-day exit" if market_open else "scattershot after-hours catch-up exit"),
+            )
+            return {
+                "action": "SELL",
+                "reason": "Scattershot end-of-day exit." if market_open else "Scattershot after-hours catch-up exit.",
+                **closed,
+            }
         mins_left = None
         try:
             from app.market_hours import minutes_until_close
             mins_left = minutes_until_close()
         except Exception:
             pass
-        if is_eod_exit_window(SCATTERSHOT_EOD_WINDOW_MIN):
-            closed = _close_scattershot_basket(db, owner, bot, reason="scattershot end-of-day exit")
-            return {"action": "SELL", "reason": "Scattershot end-of-day exit.", **closed}
         tickers = ", ".join(leg.get("ticker", "?") for leg in legs)
         bot.last_pattern_summary = (
             f"Scattershot holding {len(legs)} legs ({tickers}). "
@@ -833,12 +845,17 @@ def _run_scattershot_cycle(db: Session, bot: Bot) -> dict:
         db.commit()
         return {"action": "HOLD", "reason": bot.last_pattern_summary, "legs": legs}
 
+    # Flat — pause / cooldown / entry gates. No new baskets while paused.
+    if not bot.running:
+        db.commit()
+        return {"action": "SKIPPED", "reason": "Bot is paused."}
+
     if _cooldown_active(bot):
         bot.last_pattern_summary = "Scattershot cooldown active — waiting for the next session open."
         db.commit()
         return {"action": "WAIT", "reason": "Scattershot cooldown active."}
 
-    if not is_open_entry_window(SCATTERSHOT_OPEN_WINDOW_MIN):
+    if not market_open or not is_open_entry_window(SCATTERSHOT_OPEN_WINDOW_MIN):
         bot.last_pattern_summary = (
             "Scattershot standing by — deploys $1 × 5 legs during the first "
             f"{SCATTERSHOT_OPEN_WINDOW_MIN} minutes after the open."
@@ -1036,10 +1053,6 @@ def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: st
                  side="sell", qty=qty, notional=notional, price=price,
                  broker=bot.broker, mode=_bot_trading_mode(owner, bot),
                  broker_order_id=order["order_id"], status=order["status"]))
-    _log(db, owner.id,
-         f"[EXECUTE] SELL {qty:.6f} {ticker} @ {price:.4f} ({reason}). "
-         f"Realized P&L: {gain:+.2f}.",
-         "WARNING" if gain < 0 else "INFO")
     bot.in_position = False
     bot.shares_held = 0
     bot.avg_entry_price = None
@@ -1052,10 +1065,30 @@ def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: st
         bot.strategy_cooldown_until = datetime.utcnow() + timedelta(hours=24)
     # Fully autonomous bots release the ticker so the next cycle re-scans the
     # whole market for the freshest dip rather than re-buying the same asset.
+    released_ticker = None
     if bot.auto_select:
-        _log(db, owner.id, f"[AUTO] '{bot.name}' released {ticker} — will re-scan all markets next cycle.")
+        released_ticker = ticker
         bot.ticker = None
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        # Sell already filled at broker. Rollback keeps local in_position so the
+        # next cycle retries liquidation (fail-closed on no_position).
+        logger.critical(
+            "SELL filled but DB persist failed for bot %s %s: %s — local state rolled back",
+            bot.id, ticker, e,
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise BrokerError(f"Sell filled but DB persist failed for {ticker}: {e}")
+    if released_ticker:
+        _log(db, owner.id, f"[AUTO] '{bot.name}' released {released_ticker} — will re-scan all markets next cycle.")
+    _log(db, owner.id,
+         f"[EXECUTE] SELL {qty:.6f} {ticker} @ {price:.4f} ({reason}). "
+         f"Realized P&L: {gain:+.2f}.",
+         "WARNING" if gain < 0 else "INFO")
     _emit("trade", {
         "bot_id": bot.id, "bot_uuid": bot.uuid, "bot_name": bot.name,
         "ticker": ticker, "side": "sell", "qty": round(qty, 8),
@@ -1296,7 +1329,7 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
          f"strength={sig.strength:.2f} bias={sig.bias} | "
          f"patterns={[p['name'] for p in analysis.patterns]}")
 
-    if not bot.running:
+    if not bot.running and not bot.in_position:
         db.commit()
         return {"action": "SKIPPED", "reason": "Bot is paused.",
                 "analysis": _analysis_brief(analysis)}
@@ -1310,9 +1343,12 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
     # skipped ALL risk management AND fell through to the entry logic below —
     # disabling the stop-loss and risking a double buy. Now an open position is
     # always risk-managed and can never re-enter in the same cycle.
+    # Paused bots still manage open risk / mandatory exits — only new entries
+    # are blocked further below.
     if bot.in_position:
         if _strategy_name(bot) == "scattershot" and _scattershot_active(bot):
-            if is_eod_exit_window(SCATTERSHOT_EOD_WINDOW_MIN):
+            broker = (bot.broker or owner.active_broker or "alpaca").lower()
+            if is_eod_exit_window(SCATTERSHOT_EOD_WINDOW_MIN) or not market_open_for_broker(broker):
                 closed = _close_scattershot_basket(db, owner, bot, reason="scattershot end-of-day exit")
                 result.update({"action": "SELL", "reason": "Scattershot end-of-day exit.", **closed})
                 return result
@@ -1393,6 +1429,11 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         return result
 
     # ── LOOK FOR AN ENTRY ─────────────────────────────────────────
+    if not bot.running:
+        db.commit()
+        return {"action": "SKIPPED", "reason": "Bot is paused.",
+                "analysis": _analysis_brief(analysis)}
+
     if sig.action != "BUY" or sig.strength < ENTRY_MIN_STRENGTH:
         db.commit()
         result["reason"] = f"No confirmed dip/reversal (signal {sig.action} {sig.strength:.2f})."
@@ -1557,10 +1598,27 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
                  side="buy", qty=qty, notional=notional, price=price,
                  broker=bot.broker, mode=_bot_trading_mode(owner, bot),
                  broker_order_id=order["order_id"], status=order["status"]))
+    try:
+        db.commit()
+    except Exception as e:
+        # Broker fill already happened — reverse it so we don't leave an orphan.
+        logger.critical(
+            "BUY filled but DB persist failed for bot %s %s: %s — reversing at broker",
+            bot.id, bot.ticker, e,
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            _liquidate(owner, bot.broker, bot.ticker, bot=bot)
+        except Exception as rev:
+            logger.critical("Could not reverse orphan buy for bot %s %s: %s", bot.id, bot.ticker, rev)
+        result.update({"action": "WAIT", "reason": f"Order filled but DB persist failed: {e}"})
+        return result
     _log(db, owner.id,
          f"[EXECUTE] BUY ${notional:.2f} ({qty:.6f}) of {bot.ticker} @ {price:.4f} "
          f"({sig.headline}). Stop {bot.stop_price:.4f} | Target {bot.take_profit_price:.4f}.")
-    db.commit()
     _emit("trade", {
         "bot_id": bot.id, "bot_uuid": bot.uuid, "bot_name": bot.name,
         "ticker": bot.ticker, "side": "buy", "qty": qty,
@@ -1709,14 +1767,37 @@ def run_cycle(bot_id: int) -> dict:
         # suspend the trading loop so no buy/sell orders are placed. Crypto
         # (OKX) is 24/7 and never halts. Paused bots are handled below as usual.
         broker = (bot.broker or owner.active_broker or "alpaca").lower()
-        if bot.running and not market_open_for_broker(broker):
-            bot.last_analysis_at = datetime.utcnow()
-            bot.last_pattern_summary = "SYSTEM HALT: Market offline. Core trading loops suspended."
-            db.commit()
-            return {"action": "HALTED", "market_closed": True,
-                    "reason": "US stock market is closed — trading suspended until the next session."}
-
+        market_open = market_open_for_broker(broker)
         strategy = _strategy_name(bot)
+
+        # Outside regular hours: allow mandatory same-day unwinds, then halt.
+        if not market_open:
+            if strategy == "scattershot" and bot_needs_liquidation(bot):
+                return _run_scattershot_cycle(db, bot)
+            if strategy == "micro_trader" and bot.in_position:
+                analysis = _safe_analysis(bot, owner)
+                if analysis is not None:
+                    return run_bot_cycle(db, bot, analysis)
+                try:
+                    price = _resolve_exit_price(db, bot, owner)
+                    closed = _close_position(
+                        db, owner, bot, price, reason="micro-trader after-hours catch-up exit"
+                    )
+                    return {
+                        "action": "SELL",
+                        "reason": "Micro-trader after-hours catch-up exit.",
+                        **closed,
+                    }
+                except Exception as e:
+                    logger.error("After-hours micro flatten failed for bot %s: %s", bot_id, e)
+            if bot.running:
+                bot.last_analysis_at = datetime.utcnow()
+                bot.last_pattern_summary = "SYSTEM HALT: Market offline. Core trading loops suspended."
+                db.commit()
+                return {"action": "HALTED", "market_closed": True,
+                        "reason": "US stock market is closed — trading suspended until the next session."}
+            return {"action": "SKIPPED", "reason": "Bot is paused and market is closed."}
+
         if strategy == "scattershot":
             return _run_scattershot_cycle(db, bot)
 
@@ -1753,7 +1834,11 @@ def run_all_active_bots() -> dict:
     summary = {"scanned": 0, "actions": []}
     db = SessionLocal()
     try:
-        bot_ids = [b.id for b in db.query(Bot.id).filter(Bot.running == True).all()]  # noqa: E712
+        # Include paused bots that still hold exposure so mandatory exits run.
+        candidates = db.query(Bot).filter(
+            (Bot.running == True) | (Bot.in_position == True) | (Bot.strategy_state.isnot(None))  # noqa: E712
+        ).all()
+        bot_ids = [b.id for b in candidates if b.running or bot_needs_liquidation(b)]
     finally:
         db.close()
 
