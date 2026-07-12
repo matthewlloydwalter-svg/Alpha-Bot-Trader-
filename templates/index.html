@@ -109,7 +109,11 @@
         <span class="mode-switch-current">● Paper</span>
         <span class="mode-switch-hint">Switch to Live trading</span>
       </button>
-      <span id="broker-badge" class="badge badge-blue">Alpaca</span>
+      <button type="button" id="broker-badge" class="mode-switch-btn badge badge-blue" data-broker-switch
+              onclick="toggleBroker()" aria-label="Switch broker">
+        <span class="mode-switch-current">Alpaca</span>
+        <span class="mode-switch-hint">Switch to OKX broker</span>
+      </button>
       <span class="badge badge-purple hidden" id="admin-topbar-badge">★ Admin</span>
     </div>
     <div class="topbar-right" style="display:flex;align-items:center;gap:10px">
@@ -146,6 +150,11 @@
                         onclick="toggleTradingMode()" aria-label="Switch trading mode">
                   <span class="mode-switch-current">● Paper</span>
                   <span class="mode-switch-hint">Switch to Live trading</span>
+                </button>
+                <button type="button" id="pf-broker-badge" class="mode-switch-btn badge badge-blue" data-broker-switch
+                        onclick="toggleBroker()" aria-label="Switch broker">
+                  <span class="mode-switch-current">Alpaca</span>
+                  <span class="mode-switch-hint">Switch to OKX broker</span>
                 </button>
               </div>
             </div>
@@ -245,6 +254,11 @@
                 <span class="mode-switch-current">● Paper</span>
                 <span class="mode-switch-hint">Switch to Live trading</span>
               </button>
+              <button type="button" id="assets-broker-badge" class="mode-switch-btn badge badge-blue" data-broker-switch
+                      onclick="toggleBroker()" aria-label="Switch broker">
+                <span class="mode-switch-current">Alpaca</span>
+                <span class="mode-switch-hint">Switch to OKX broker</span>
+              </button>
             </div>
           </div>
           <div class="pf-summary-grid">
@@ -289,6 +303,11 @@
                       onclick="toggleTradingMode()" aria-label="Switch trading mode">
                 <span class="mode-switch-current">● Paper</span>
                 <span class="mode-switch-hint">Switch to Live trading</span>
+              </button>
+              <button type="button" id="bots-broker-badge" class="mode-switch-btn badge badge-blue" data-broker-switch
+                      onclick="toggleBroker()" aria-label="Switch broker">
+                <span class="mode-switch-current">Alpaca</span>
+                <span class="mode-switch-hint">Switch to OKX broker</span>
               </button>
             </div>
             <button class="btn btn-primary btn-sm" id="new-bot-btn" onclick="showCreateBotModal()">+ New Bot</button>
@@ -450,6 +469,11 @@
                       onclick="toggleTradingMode()" aria-label="Switch trading mode">
                 <span class="mode-switch-current">● Paper</span>
                 <span class="mode-switch-hint">Switch to Live trading</span>
+              </button>
+              <button type="button" id="account-broker-badge" class="mode-switch-btn badge badge-blue" data-broker-switch
+                      onclick="toggleBroker()" aria-label="Switch broker">
+                <span class="mode-switch-current">Alpaca</span>
+                <span class="mode-switch-hint">Switch to OKX broker</span>
               </button>
             </div>
           </div>
