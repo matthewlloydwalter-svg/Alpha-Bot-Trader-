@@ -51,8 +51,11 @@ async function loadAdminData() {
         }
     } catch (error) {
         console.error('Telepathy read execution fault:', error);
+        const msg = "Execution error accessing remote endpoint data streams.";
         const sc = document.getElementById('stats-content');
-        if (sc) sc.innerText = "Execution error accessing remote endpoint data streams.";
+        if (sc) sc.innerText = msg;
+        const ul = document.getElementById('users-list');
+        if (ul) ul.innerText = msg;
     }
 }
 

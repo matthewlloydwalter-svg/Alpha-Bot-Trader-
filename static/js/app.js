@@ -159,14 +159,20 @@ async function activateTab(tab, { push = false, replace = false } = {}) {
     if (t.id === "admin-nav-btn") return;
     t.classList.toggle("active", t.getAttribute("data-tab") === target);
   });
-  document.querySelectorAll(".tab-view").forEach(v => v.classList.add("hidden"));
-  const view = document.getElementById(`view-${target}`);
-  if (view) view.classList.remove("hidden");
+  const viewId = `view-${target}`;
+  document.querySelectorAll(".tab-view").forEach(v => {
+    v.classList.toggle("hidden", v.id !== viewId);
+  });
 
   if (push) history.pushState({ tab: target }, "", path);
   else if (replace) history.replaceState({ tab: target }, "", path);
 
-  if (target === "portfolio") loadPortfolioPerformance();
+  if (target === "portfolio") {
+    loadPortfolioPerformance();
+    if (typeof syncPortfolioDetailsUI === "function") syncPortfolioDetailsUI();
+  } else if (typeof syncTabDetailsUI === "function") {
+    syncTabDetailsUI(target);
+  }
   if (target === "assets") loadBrokerAccount();
   if (target === "bots") loadBots();
   if (target === "stocks") loadStocks();
