@@ -353,12 +353,16 @@ def health():
 
 
 @app.get("/ads.txt", include_in_schema=False)
-def ads_txt():
-    """Serve Google AdSense ads.txt authorization at the site root."""
-    return FileResponse(
-        os.path.join(BASE_DIR, "ads.txt"),
-        media_type="text/plain; charset=utf-8",
-    )
+def get_ads_txt():
+    """Google AdSense authorization file — must be reachable at /ads.txt."""
+    ads_path = os.path.join(BASE_DIR, "ads.txt")
+    if not os.path.isfile(ads_path):
+        # Fallback so a missing deploy artifact never 404s AdSense crawlers.
+        return Response(
+            content="google.com, pub-2688407250698963, DIRECT, f08c47fec0942fa0\n",
+            media_type="text/plain",
+        )
+    return FileResponse(ads_path, media_type="text/plain")
 
 
 @app.get("/", response_class=HTMLResponse)
