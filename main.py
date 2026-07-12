@@ -232,17 +232,17 @@ def _cookie_kwargs(request: Request | None = None) -> dict:
 def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)) -> User:
     token = request.cookies.get("session_token")
     if not token:
-        raise HTTPException(status_code=401, detail="Session matrix signature missing.")
+        raise HTTPException(status_code=401, detail="Session expired. Please sign in again.")
     payload = decode_session_token(token)
     if not payload:
-        raise HTTPException(status_code=401, detail="Session signature validation expired.")
+        raise HTTPException(status_code=401, detail="Session expired. Please sign in again.")
     try:
         user_id = int(payload["sub"])
     except (KeyError, TypeError, ValueError):
-        raise HTTPException(status_code=401, detail="Session signature validation expired.")
+        raise HTTPException(status_code=401, detail="Session expired. Please sign in again.")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=401, detail="User record context purged.")
+        raise HTTPException(status_code=401, detail="Session expired. Please sign in again.")
     try:
         token_sv = int(payload.get("sv", 0))
     except (TypeError, ValueError):
@@ -452,14 +452,17 @@ def checkout_success_pane(request: Request, db: Session = Depends(get_db), sessi
     Post-Checkout landing. Confirms the session server-side (when possible),
     then shows status and links back into the app.
     """
+    sid = (session_id or request.query_params.get("session_id") or "").strip()
     try:
         user = get_current_user_from_cookie(request, db)
     except Exception:
-        return RedirectResponse(url="/login", status_code=303)
+        # Preserve Checkout context so login can return here and confirm the session.
+        q = f"/checkout/success?session_id={sid}" if sid else "/checkout/success"
+        from urllib.parse import quote
+        return RedirectResponse(url=f"/login?next={quote(q, safe='')}", status_code=303)
 
     confirmed = False
     error = ""
-    sid = (session_id or request.query_params.get("session_id") or "").strip()
     if sid and STRIPE_SECRET_KEY:
         try:
             import stripe
@@ -510,11 +513,12 @@ def api_plans():
 
 
 @app.get("/api/support/lookup")
-def api_support_lookup(email: str = "", db: Session = Depends(get_db)):
+def api_support_lookup(request: Request, email: str = "", db: Session = Depends(get_db)):
     """
     Look up plan_level + support routing for an email (admin/support tooling).
     Returns plan_level and destination inbox for automated ticket routing.
     """
+    _require_admin(request, db)
     from app.support_routing import (
         get_plan_level_by_email, support_destination_email,
         get_support_priority_for_plan, support_mailto_for_plan,
@@ -530,7 +534,8 @@ def api_support_lookup(email: str = "", db: Session = Depends(get_db)):
 
 
 @app.get("/api/support/priority/{user_id}")
-def api_support_priority(user_id: int, db: Session = Depends(get_db)):
+def api_support_priority(user_id: int, request: Request, db: Session = Depends(get_db)):
+    _require_admin(request, db)
     from app.support_routing import get_support_priority
     return {"user_id": user_id, "support_priority": get_support_priority(user_id, db)}
 
@@ -558,6 +563,13 @@ def billing_checkout(
     """
     if u.is_admin or is_user_admin(u.email or ""):
         raise HTTPException(status_code=400, detail="Admin accounts already have unlimited access.")
+
+    status = (getattr(u, "subscription_status", None) or "").lower()
+    if getattr(u, "stripe_subscription_id", None) and status in {"active", "trialing", "past_due"}:
+        raise HTTPException(
+            status_code=400,
+            detail="You already have an active subscription. Use Manage billing to change or cancel your plan.",
+        )
 
     price_id = (body.price_id or "").strip() or None
     lookup_key = (body.lookup_key or "").strip() or None
@@ -653,6 +665,24 @@ async def _handle_stripe_webhook(request: Request, db: Session):
     etype = event.get("type")
     data = (event.get("data") or {}).get("object") or {}
     user = stripe_billing.find_user_for_stripe_object(db, data, User)
+
+    # Paid Checkout / subscription events must resolve a user or Stripe will
+    # stop retrying after a 2xx — leave unpaid plan upgrades silent.
+    critical = etype in {
+        "checkout.session.completed",
+        "customer.subscription.updated",
+        "customer.subscription.created",
+        "customer.subscription.deleted",
+    }
+    if critical and user is None:
+        logger.error(
+            "Stripe webhook %s could not resolve a local user (event=%s)",
+            etype, event.get("id"),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Webhook user not found — Stripe should retry after account sync.",
+        )
 
     if etype == "checkout.session.completed" and user:
         stripe_billing.sync_user_from_checkout_session(user, data)
@@ -842,7 +872,7 @@ def confirm_verification(body: VerificationChallengeModel, request: Request, u: 
     stored = (u.verification_code or "").strip()
     # Password-reset codes are namespaced so they cannot confirm email verify.
     if not stored or stored.startswith("rp:") or stored != body.code.strip():
-        raise HTTPException(status_code=400, detail="Invalid challenge matching hash sequence provided.")
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
     u.email_verified = True
     u.verification_code = None
     db.commit()

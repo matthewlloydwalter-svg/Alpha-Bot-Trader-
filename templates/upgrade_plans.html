@@ -64,6 +64,8 @@
               data-price-week="{{ plan.price_ids.week or '' }}"
               data-price-month="{{ plan.price_ids.month or '' }}"
               data-price-year="{{ plan.price_ids.year or '' }}">Current plan</button>
+          {% elif not CAN_UPGRADE %}
+            <button type="button" class="btn btn-ghost upgrade-btn" disabled>Unavailable</button>
           {% else %}
             <button type="button" class="btn btn-primary upgrade-btn"
               data-checkout="1"
@@ -122,7 +124,13 @@
             body: "{}",
           });
           const data = await resp.json().catch(() => ({}));
-          if (!resp.ok) throw new Error(data.detail || "Could not open billing portal");
+          if (!resp.ok) {
+            const d = data.detail;
+            const msg = Array.isArray(d)
+              ? d.map((x) => (x && x.msg) || String(x)).join("; ")
+              : (d || "Could not open billing portal");
+            throw new Error(msg);
+          }
           if (!data.url) throw new Error("No portal URL returned");
           location.href = data.url;
         } catch (err) {
@@ -157,7 +165,13 @@
               body: JSON.stringify({ price_id: priceId }),
             });
             const data = await resp.json().catch(() => ({}));
-            if (!resp.ok) throw new Error(data.detail || "Checkout failed");
+            if (!resp.ok) {
+              const d = data.detail;
+              const msg = Array.isArray(d)
+                ? d.map((x) => (x && x.msg) || String(x)).join("; ")
+                : (d || "Checkout failed");
+              throw new Error(msg);
+            }
             if (!data.url) throw new Error("No Checkout URL returned");
             location.href = data.url;
           } catch (err) {

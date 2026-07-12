@@ -210,6 +210,12 @@ async function activateTab(tab, { push = false, replace = false } = {}) {
   if (push) history.pushState({ tab: target }, "", path);
   else if (replace) history.replaceState({ tab: target }, "", path);
 
+  // Non-portfolio tabs keep primary content inside a collapsed accordion by
+  // default — expand once so deep links and first visits aren't an empty shell.
+  if (target !== "portfolio" && !Object.prototype.hasOwnProperty.call(TAB_DETAILS_OPEN, target)) {
+    TAB_DETAILS_OPEN[target] = true;
+  }
+
   if (target === "portfolio") {
     loadPortfolioPerformance();
     if (typeof syncPortfolioDetailsUI === "function") syncPortfolioDetailsUI();
@@ -221,7 +227,7 @@ async function activateTab(tab, { push = false, replace = false } = {}) {
   if (target === "stocks") loadStocks();
   if (target === "history") loadTradeHistory();
   if (target === "account") { loadBrokerKeys(); renderOnboarding(); }
-  if (target === "news" && ALL_NEWS.length === 0) loadNews();
+  if (target === "news") loadNews();
 }
 
 function navigateToTab(tab, { push = true } = {}) {
@@ -389,7 +395,7 @@ async function handleRegister(e) {
   } catch (err) { toast(err, "error"); }
 }
 
-/** Honor ?next=/admin (and similar) after login/signup. Returns true if navigated away. */
+/** Honor ?next=… after login/signup. Returns true if navigated away. */
 async function redirectAfterAuthIfNeeded() {
   let next = null;
   try {
@@ -399,14 +405,33 @@ async function redirectAfterAuthIfNeeded() {
     try { next = sessionStorage.getItem("post_login_path"); } catch (_) {}
   }
   if (!next) return false;
-  const path = normalizePath(next);
-  if (path === "/admin") {
+
+  let pathOnly = next;
+  let search = "";
+  try {
+    const u = new URL(next, location.origin);
+    pathOnly = normalizePath(u.pathname);
+    search = u.search || "";
+  } catch (_) {
+    const qi = String(next).indexOf("?");
+    pathOnly = normalizePath(qi >= 0 ? next.slice(0, qi) : next);
+    search = qi >= 0 ? next.slice(qi) : "";
+  }
+
+  const clear = () => { try { sessionStorage.removeItem("post_login_path"); } catch (_) {} };
+
+  if (pathOnly === "/admin") {
     if (USER && USER.is_admin) {
-      try { sessionStorage.removeItem("post_login_path"); } catch (_) {}
+      clear();
       location.href = "/admin";
       return true;
     }
     return false;
+  }
+  if (pathOnly === "/checkout/success" || pathOnly === "/upgrade-plans") {
+    clear();
+    location.href = pathOnly + search;
+    return true;
   }
   return false;
 }
@@ -460,14 +485,30 @@ async function enterApp() {
   if (isAuthPath(location.pathname) || !tab) {
     try {
       const saved = sessionStorage.getItem("post_login_path");
-      if (saved && normalizePath(saved) === "/admin" && USER && USER.is_admin) {
-        sessionStorage.removeItem("post_login_path");
-        location.href = "/admin";
-        return;
-      }
       if (saved) {
+        let savedPath = saved;
+        let savedSearch = "";
+        try {
+          const u = new URL(saved, location.origin);
+          savedPath = normalizePath(u.pathname);
+          savedSearch = u.search || "";
+        } catch (_) {
+          const qi = String(saved).indexOf("?");
+          savedPath = normalizePath(qi >= 0 ? saved.slice(0, qi) : saved);
+          savedSearch = qi >= 0 ? saved.slice(qi) : "";
+        }
+        if (savedPath === "/admin" && USER && USER.is_admin) {
+          sessionStorage.removeItem("post_login_path");
+          location.href = "/admin";
+          return;
+        }
+        if (savedPath === "/checkout/success" || savedPath === "/upgrade-plans") {
+          sessionStorage.removeItem("post_login_path");
+          location.href = savedPath + savedSearch;
+          return;
+        }
         sessionStorage.removeItem("post_login_path");
-        tab = tabFromPath(saved) || "portfolio";
+        tab = tabFromPath(savedPath) || "portfolio";
       } else {
         tab = "portfolio";
       }
@@ -481,6 +522,29 @@ async function enterApp() {
 
   await activateTab(tab, { push: false });
   connectLiveStream();         // subscribe to the always-on backend feed
+
+  if (!window._focusSyncBound) {
+    window._focusSyncBound = true;
+    document.addEventListener("visibilitychange", async () => {
+      if (document.visibilityState !== "visible" || !USER || _forcingLogout) return;
+      try {
+        const prevMode = USER.trading_mode;
+        const prevBroker = USER.active_broker;
+        await refreshUserData();
+        if (!USER) return;
+        if (USER.trading_mode !== prevMode || USER.active_broker !== prevBroker) {
+          renderModeUI();
+          renderBrokerUI();
+          renderPortfolioModeIndicator();
+          const pv = document.getElementById("view-portfolio");
+          if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
+          const bv = document.getElementById("view-bots");
+          if (bv && !bv.classList.contains("hidden")) loadBots();
+        }
+        updateBotLimitUI();
+      } catch (_) {}
+    });
+  }
 }
 
 /* --- LIVE DATA STREAM (Server-Sent Events) --- */
@@ -1004,6 +1068,12 @@ async function loadPortfolioForMode(mode) {
     const dEl = document.getElementById("pf-total-delta");
     if (dEl) { dEl.textContent = ""; dEl.className = "pf-delta"; }
     if (PF_MAIN_CHART) { try { PF_MAIN_CHART.remove(); } catch (_) {} PF_MAIN_CHART = null; }
+    const win = document.getElementById("pf-winner");
+    if (win) win.innerHTML = "";
+    const lose = document.getElementById("pf-loser");
+    if (lose) lose.innerHTML = "";
+    const abl = document.getElementById("active-bots-list");
+    if (abl) abl.innerHTML = `<div style="color:var(--t2);padding:8px">Portfolio data unavailable.</div>`;
     return;
   }
   PF_DATA = { perf: perf || {}, bots: Array.isArray(bots) ? bots : (bots && bots.bots) || [], mode };
@@ -2131,10 +2201,14 @@ function renderNews() {
 
 (async function boot() {
   try {
-    // Preserve ?next=/admin across the auth screen when arriving logged out.
+    // Preserve ?next=… across the auth screen when arriving logged out.
+    // Do not clobber an existing deep-link (e.g. /dashboard/bots) with a later next.
     try {
       const next = new URLSearchParams(location.search).get("next");
-      if (next) sessionStorage.setItem("post_login_path", normalizePath(next));
+      if (next) {
+        const existing = sessionStorage.getItem("post_login_path");
+        if (!existing) sessionStorage.setItem("post_login_path", next);
+      }
     } catch (_) {}
     USER = await api("/auth/me");
     if (await redirectAfterAuthIfNeeded()) return;
@@ -2143,8 +2217,13 @@ function renderNews() {
     // Unauthenticated: show login/signup. Preserve deep-linked dashboard paths
     // so post-login restore works; AdSense stays off the public landing `/`.
     const path = normalizePath(location.pathname);
-    if (isDashboardPath(path) || path === "/admin") {
-      try { sessionStorage.setItem("post_login_path", path); } catch (_) {}
+    if (isDashboardPath(path) || path === "/admin" || path === "/checkout/success" || path === "/upgrade-plans") {
+      try {
+        const full = path + (location.search || "");
+        if (!sessionStorage.getItem("post_login_path")) {
+          sessionStorage.setItem("post_login_path", full);
+        }
+      } catch (_) {}
       history.replaceState({ auth: "login" }, "", "/login");
       toggleAuthMode(true);
     } else {
