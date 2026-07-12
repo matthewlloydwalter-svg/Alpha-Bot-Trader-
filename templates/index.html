@@ -104,7 +104,11 @@
     <div class="topbar-left">
       <img src="/static/images/alphabot-trading-logo.png" alt="{{ PLATFORM_NAME }} logo" class="brand-logo">
       <span class="logo-text">{{ PLATFORM_NAME }}</span>
-      <span id="mode-badge" class="badge badge-green">● Paper</span>
+      <button type="button" id="mode-badge" class="mode-switch-btn badge badge-green" data-mode-switch
+              onclick="toggleTradingMode()" aria-label="Switch trading mode">
+        <span class="mode-switch-current">● Paper</span>
+        <span class="mode-switch-hint">Switch to Live trading</span>
+      </button>
       <span id="broker-badge" class="badge badge-blue">Alpaca</span>
       <span class="badge badge-purple hidden" id="admin-topbar-badge">★ Admin</span>
     </div>
@@ -138,11 +142,11 @@
             <div class="pf-mode-bar pf-sticky-mode">
               <div class="pf-mode-title">
                 <span id="pf-mode-label">Paper Trading Portfolio</span>
-                <span id="pf-mode-badge" class="badge badge-green">● Paper</span>
-              </div>
-              <div class="mode-toggle pf-mode-toggle">
-                <button class="mode-btn active" id="pf-mode-paper" onclick="setPortfolioMode('paper')">📄 Paper</button>
-                <button class="mode-btn" id="pf-mode-live" onclick="setPortfolioMode('live')">⚡ Live</button>
+                <button type="button" id="pf-mode-badge" class="mode-switch-btn badge badge-green" data-mode-switch
+                        onclick="toggleTradingMode()" aria-label="Switch trading mode">
+                  <span class="mode-switch-current">● Paper</span>
+                  <span class="mode-switch-hint">Switch to Live trading</span>
+                </button>
               </div>
             </div>
           </div>
@@ -234,7 +238,14 @@
       <div class="pf-overlay">
         <header class="pf-sticky-header holo-card">
           <div class="pf-sticky-top">
-            <div class="pf-mode-title">💰 Assets</div>
+            <div class="pf-mode-title">
+              <span>💰 Assets</span>
+              <button type="button" id="assets-mode-badge" class="mode-switch-btn badge badge-green" data-mode-switch
+                      onclick="toggleTradingMode()" aria-label="Switch trading mode">
+                <span class="mode-switch-current">● Paper</span>
+                <span class="mode-switch-hint">Switch to Live trading</span>
+              </button>
+            </div>
           </div>
           <div class="pf-summary-grid">
             <div class="pf-summary-metric">
@@ -274,7 +285,11 @@
           <div class="pf-sticky-top">
             <div class="pf-mode-title">
               <span>🤖 Trading Bots</span>
-              <span id="bots-mode-badge" class="badge badge-green">● Paper</span>
+              <button type="button" id="bots-mode-badge" class="mode-switch-btn badge badge-green" data-mode-switch
+                      onclick="toggleTradingMode()" aria-label="Switch trading mode">
+                <span class="mode-switch-current">● Paper</span>
+                <span class="mode-switch-hint">Switch to Live trading</span>
+              </button>
             </div>
             <button class="btn btn-primary btn-sm" id="new-bot-btn" onclick="showCreateBotModal()">+ New Bot</button>
           </div>
@@ -429,7 +444,14 @@
       <div class="pf-overlay">
         <header class="pf-sticky-header holo-card">
           <div class="pf-sticky-top">
-            <div class="pf-mode-title">👤 Account</div>
+            <div class="pf-mode-title">
+              <span>👤 Account</span>
+              <button type="button" id="account-mode-badge" class="mode-switch-btn badge badge-green" data-mode-switch
+                      onclick="toggleTradingMode()" aria-label="Switch trading mode">
+                <span class="mode-switch-current">● Paper</span>
+                <span class="mode-switch-hint">Switch to Live trading</span>
+              </button>
+            </div>
           </div>
           <div class="pf-summary-grid">
             <div class="pf-summary-metric">

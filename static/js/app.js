@@ -803,17 +803,46 @@ async function openBillingPortal() {
 }
 
 /* --- BROKER & MODE CONFIG --- */
+function currentTradingMode() {
+  return (USER && USER.trading_mode) || "paper";
+}
+
+function syncModeSwitchButtons() {
+  const m = currentTradingMode();
+  const isLive = m === "live";
+  const label = isLive ? "⚡ Live" : "● Paper";
+  const hint = isLive ? "Switch to Paper trading" : "Switch to Live trading";
+  const colorClass = isLive ? "badge-red" : "badge-green";
+  document.querySelectorAll("[data-mode-switch]").forEach((el) => {
+    el.className = `mode-switch-btn badge ${colorClass}`;
+    el.title = hint;
+    el.setAttribute("aria-label", hint);
+    const cur = el.querySelector(".mode-switch-current");
+    const tip = el.querySelector(".mode-switch-hint");
+    if (cur) cur.textContent = label;
+    if (tip) tip.textContent = hint;
+  });
+}
+
 function renderModeUI() {
-  const m = USER.trading_mode || "paper";
-  document.getElementById("mode-badge").textContent = m === "live" ? "⚡ Live" : "● Paper";
-  document.getElementById("mode-badge").className = `badge ${m === "live" ? "badge-red" : "badge-green"}`;
-  document.getElementById("mode-paper").classList.toggle("active", m === "paper");
-  document.getElementById("mode-live").classList.toggle("active", m === "live");
+  syncModeSwitchButtons();
+  const m = currentTradingMode();
+  const paperBtn = document.getElementById("mode-paper");
+  const liveBtn = document.getElementById("mode-live");
+  if (paperBtn) paperBtn.classList.toggle("active", m === "paper");
+  if (liveBtn) liveBtn.classList.toggle("active", m === "live");
+}
+
+function toggleTradingMode() {
+  const next = currentTradingMode() === "live" ? "paper" : "live";
+  return setTradingMode(next);
 }
 
 async function setTradingMode(mode) {
+  const next = (mode || "").toLowerCase() === "live" ? "live" : "paper";
+  if (currentTradingMode() === next) return;
   try {
-    const data = await api("/broker/trading-mode", { method: "POST", body: JSON.stringify({ mode }) });
+    const data = await api("/broker/trading-mode", { method: "POST", body: JSON.stringify({ mode: next }) });
     USER.trading_mode = data.trading_mode;
     renderModeUI();
     // The Portfolio is mode-aware: refresh its indicator + data for the new mode.
@@ -823,35 +852,25 @@ async function setTradingMode(mode) {
     // The Bots tab is also mode-filtered — re-render it if it's showing.
     const bv = document.getElementById("view-bots");
     if (bv && !bv.classList.contains("hidden")) loadBots();
+    const av = document.getElementById("view-assets");
+    if (av && !av.classList.contains("hidden") && typeof loadBrokerAccount === "function") {
+      loadBrokerAccount();
+    }
     const paused = Number(data.paused_count || 0);
     if (paused > 0) {
-      toast(`Switched to ${mode}. Paused ${paused} bot${paused === 1 ? "" : "s"} from the previous mode.`, "success");
+      toast(`Switched to ${next}. Paused ${paused} bot${paused === 1 ? "" : "s"} from the previous mode.`, "success");
     } else {
-      toast(`Switched to ${mode} trading`, "success");
+      toast(`Switched to ${next} trading`, "success");
     }
   } catch (e) { toast(e, "error"); }
 }
 
-// Portfolio-page mode toggle — switches the whole account mode (paper/live) and
-// re-renders the Portfolio so all P&L / charts / bots reflect that account only.
-function setPortfolioMode(mode) {
-  if (((USER && USER.trading_mode) || "paper") === mode) return;
-  setTradingMode(mode);
-}
-
-// Reflects the active trading mode in the Portfolio header (label + badge + toggle).
+// Reflects the active trading mode in the Portfolio header label.
 function renderPortfolioModeIndicator() {
-  const mode = (USER && USER.trading_mode) || "paper";
+  const mode = currentTradingMode();
   const label = document.getElementById("pf-mode-label");
   if (label) label.textContent = mode === "live" ? "Live Trading Portfolio" : "Paper Trading Portfolio";
-  const badge = document.getElementById("pf-mode-badge");
-  if (badge) {
-    badge.textContent = mode === "live" ? "⚡ Live" : "● Paper";
-    badge.className = "badge " + (mode === "live" ? "badge-red" : "badge-green");
-  }
-  const pB = document.getElementById("pf-mode-paper"), lB = document.getElementById("pf-mode-live");
-  if (pB) pB.classList.toggle("active", mode === "paper");
-  if (lB) lB.classList.toggle("active", mode === "live");
+  syncModeSwitchButtons();
 }
 
 function renderBrokerUI() {
@@ -1575,13 +1594,8 @@ function renderBots() {
   const hdrCount = document.getElementById("bots-header-count");
   if (hdrCount) hdrCount.textContent = String(visible.filter(b => b.running).length);
 
-  // Reflect the active account in the Bots-tab header.
-  const badge = document.getElementById("bots-mode-badge");
-  if (badge) {
-    badge.textContent = mode === "live" ? "⚡ Live" : "● Paper";
-    badge.className = "badge " + (mode === "live" ? "badge-red" : "badge-green");
-    badge.style.fontSize = "10px"; badge.style.verticalAlign = "middle";
-  }
+  // Reflect the active account in the Bots-tab header (and all shared switches).
+  syncModeSwitchButtons();
   const sub = document.getElementById("bots-mode-sub");
   if (sub) sub.textContent = `Showing your ${mode === "live" ? "Live" : "Paper"} account bots (${visible.length}) · switch account in the top bar or Account tab`;
 
