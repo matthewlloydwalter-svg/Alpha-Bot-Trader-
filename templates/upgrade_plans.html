@@ -135,11 +135,13 @@
         if (btn.disabled) return;
         btn.addEventListener("click", async () => {
           const interval = root.dataset.interval || "month";
-          const priceId =
+          // Prefer the Price ID bound for the active toggle interval.
+          const priceId = (
             btn.dataset.priceId ||
             btn.getAttribute("data-price-" + interval) ||
-            "";
-          if (!priceId) {
+            ""
+          ).trim();
+          if (!priceId || !priceId.startsWith("price_")) {
             showFlash("No Stripe price is configured for this option.", false);
             return;
           }
@@ -147,7 +149,7 @@
           const prev = btn.textContent;
           btn.textContent = "Redirecting…";
           try {
-            // Send only the allowlisted price_id — never amounts or line items.
+            // Server allowlists this price_id and builds mode=subscription line_items.
             const resp = await fetch("/billing/checkout", {
               method: "POST",
               credentials: "include",
