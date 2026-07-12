@@ -66,6 +66,7 @@
               data-price-year="{{ plan.price_ids.year or '' }}">Current plan</button>
           {% else %}
             <button type="button" class="btn btn-primary upgrade-btn"
+              data-checkout="1"
               data-plan="{{ plan.key }}"
               data-price-week="{{ plan.price_ids.week or '' }}"
               data-price-month="{{ plan.price_ids.month or '' }}"

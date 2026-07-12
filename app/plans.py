@@ -36,9 +36,9 @@ _PLAN_BASE: dict[str, dict[str, Any]] = {
         "featured": True,
         "free": False,
         "display": {
-            "week": {"amount": "$4.75", "period": "/week"},
-            "month": {"amount": "$19", "period": "/month"},
-            "year": {"amount": "$182", "period": "/year"},
+            "week": {"amount": "$5", "period": "/week"},
+            "month": {"amount": "$20", "period": "/month"},
+            "year": {"amount": "$192", "period": "/year"},
         },
     },
     "pro": {
@@ -50,9 +50,9 @@ _PLAN_BASE: dict[str, dict[str, Any]] = {
         "featured": False,
         "free": False,
         "display": {
-            "week": {"amount": "$12.25", "period": "/week"},
-            "month": {"amount": "$49", "period": "/month"},
-            "year": {"amount": "$470", "period": "/year"},
+            "week": {"amount": "$12.50", "period": "/week"},
+            "month": {"amount": "$50", "period": "/month"},
+            "year": {"amount": "$480", "period": "/year"},
         },
     },
     "enterprise": {
@@ -64,9 +64,9 @@ _PLAN_BASE: dict[str, dict[str, Any]] = {
         "featured": False,
         "free": False,
         "display": {
-            "week": {"amount": "$24.75", "period": "/week"},
-            "month": {"amount": "$99", "period": "/month"},
-            "year": {"amount": "$950", "period": "/year"},
+            "week": {"amount": "$25", "period": "/week"},
+            "month": {"amount": "$100", "period": "/month"},
+            "year": {"amount": "$960", "period": "/year"},
         },
     },
 }

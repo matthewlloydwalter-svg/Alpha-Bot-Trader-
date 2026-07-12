@@ -32,10 +32,14 @@
 
       const btn = card.querySelector(".upgrade-btn");
       if (btn && plan.price_ids) {
-        const pid = plan.price_ids[iv];
-        btn.dataset.priceId = pid || "";
+        const pid = plan.price_ids[iv] || "";
+        btn.dataset.priceId = pid;
         btn.dataset.interval = iv;
-        btn.disabled = !pid;
+        // Only actionable Upgrade CTAs toggle disabled state — never unlock
+        // "Current plan" / free placeholders that are permanently disabled.
+        if (btn.dataset.checkout === "1") {
+          btn.disabled = !pid;
+        }
       }
     });
 
