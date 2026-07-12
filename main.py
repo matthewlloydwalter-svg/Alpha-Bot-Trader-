@@ -1119,75 +1119,40 @@ async def set_trading_mode(request: Request, u: User = Depends(get_current_user_
     previous = (u.trading_mode or "paper").lower()
     u.trading_mode = mode
 
-    # Switching the account UI away from a mode must not leave that mode's bots
-    # trading in the background. Auto-pause them, then auto-resume when the
-    # user returns (unless they manually paused in the meantime).
-    paused_ids: list[int] = []
+    # Mode switch is a UI/account view only — bots keep trading in the
+    # background in whichever Paper/Live account they belong to.
+    # One-time recovery: resume anything still marked from the old
+    # "pause on switch" behavior so users aren't stuck needing Play.
+    from sqlalchemy import or_
     resumed_ids: list[int] = []
-    if previous != mode:
-        leaving = previous
-        running_bots = (
-            db.query(Bot)
-            .filter(
-                Bot.owner_id == u.id,
-                Bot.running == True,  # noqa: E712
-            )
-            .all()
+    stuck = (
+        db.query(Bot)
+        .filter(
+            Bot.owner_id == u.id,
+            Bot.running == False,  # noqa: E712
+            or_(
+                Bot.paused_by_mode_switch == True,  # noqa: E712
+                Bot.last_pattern_summary.like("Paused automatically — account switched%"),
+            ),
         )
-        for b in running_bots:
-            bot_mode = (b.mode or previous).lower()
-            if bot_mode == leaving:
-                b.running = False
-                b.paused_by_mode_switch = True
-                paused_ids.append(b.id)
-                b.last_pattern_summary = (
-                    f"Paused automatically — account switched from {leaving} to {mode}. "
-                    f"Will resume when you switch back to {leaving}."
-                )
-
-        # Resume bots that were auto-paused the last time we left `mode`.
-        # Also honor legacy auto-pause summaries from before paused_by_mode_switch.
-        from sqlalchemy import or_
-        candidates = (
-            db.query(Bot)
-            .filter(
-                Bot.owner_id == u.id,
-                Bot.running == False,  # noqa: E712
-                or_(
-                    Bot.paused_by_mode_switch == True,  # noqa: E712
-                    Bot.last_pattern_summary.like("Paused automatically — account switched%"),
-                ),
-            )
-            .order_by(Bot.id.asc())
-            .all()
+        .all()
+    )
+    for b in stuck:
+        b.paused_by_mode_switch = False
+        b.running = True
+        b.last_pattern_summary = (
+            "Resumed — Paper/Live switch no longer pauses background bots."
         )
-        limit = _user_bot_limit(u)
-        running_count = (
-            db.query(Bot)
-            .filter(Bot.owner_id == u.id, Bot.running == True)  # noqa: E712
-            .count()
-        )
-        for b in candidates:
-            bot_mode = (b.mode or mode).lower()
-            if bot_mode != mode:
-                continue
-            if limit is not None and running_count >= limit:
-                b.paused_by_mode_switch = False
-                b.last_pattern_summary = (
-                    f"Stayed paused after returning to {mode} — plan running-bot limit reached."
-                )
-                continue
-            b.running = True
-            b.paused_by_mode_switch = False
-            b.last_pattern_summary = f"Resumed automatically — account switched back to {mode}."
-            resumed_ids.append(b.id)
-            running_count += 1
+        resumed_ids.append(b.id)
+    if resumed_ids:
+        _enforce_running_bot_limit(u, db)
 
     db.commit()
     return {
         "trading_mode": u.trading_mode,
-        "paused_bots": paused_ids,
-        "paused_count": len(paused_ids),
+        "previous_mode": previous,
+        "paused_bots": [],
+        "paused_count": 0,
         "resumed_bots": resumed_ids,
         "resumed_count": len(resumed_ids),
     }

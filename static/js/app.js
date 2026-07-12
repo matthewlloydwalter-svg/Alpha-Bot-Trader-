@@ -856,19 +856,14 @@ async function setTradingMode(mode) {
     if (av && !av.classList.contains("hidden") && typeof loadBrokerAccount === "function") {
       loadBrokerAccount();
     }
-    const paused = Number(data.paused_count || 0);
     const resumed = Number(data.resumed_count || 0);
-    if (paused > 0 && resumed > 0) {
+    if (resumed > 0) {
       toast(
-        `Switched to ${next}. Paused ${paused} bot${paused === 1 ? "" : "s"} from the other mode; resumed ${resumed}.`,
+        `Switched to ${next}. Background bots keep running — restored ${resumed} previously auto-paused bot${resumed === 1 ? "" : "s"}.`,
         "success",
       );
-    } else if (paused > 0) {
-      toast(`Switched to ${next}. Paused ${paused} bot${paused === 1 ? "" : "s"} from the previous mode.`, "success");
-    } else if (resumed > 0) {
-      toast(`Switched to ${next}. Resumed ${resumed} bot${resumed === 1 ? "" : "s"}.`, "success");
     } else {
-      toast(`Switched to ${next} trading`, "success");
+      toast(`Switched to ${next} — bots in both modes keep running in the background.`, "success");
     }
   } catch (e) { toast(e, "error"); }
 }
