@@ -1605,12 +1605,12 @@ function renderBots() {
   // Reflect the active account in the Bots-tab header (and all shared switches).
   syncModeSwitchButtons();
   const sub = document.getElementById("bots-mode-sub");
-  if (sub) sub.textContent = `Showing your ${mode === "live" ? "Live" : "Paper"} account bots (${visible.length}) · switch account in the top bar or Account tab`;
+  if (sub) sub.textContent = `Showing your ${mode === "live" ? "Live" : "Paper"} account bots (${visible.length}) · switch modes anytime — other-mode bots keep running`;
 
   if (!visible.length) {
     const other = mode === "live" ? activePaperBots.length : activeLiveBots.length;
     el.innerHTML = `<div style="text-align:center;color:var(--t2);padding:20px">No ${mode === "live" ? "Live" : "Paper"} account bots yet.` +
-      (other ? ` You have ${other} bot(s) in your ${mode === "live" ? "Paper" : "Live"} account — switch accounts to see them.` : ` Create one with “+ New Bot”.`) +
+      (other ? ` You have ${other} bot(s) in your ${mode === "live" ? "Paper" : "Live"} account (still running in the background) — switch modes to see them.` : ` Create one with “+ New Bot”.`) +
       `</div>`;
     return;
   }
