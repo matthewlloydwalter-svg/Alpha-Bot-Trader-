@@ -551,7 +551,7 @@ function updatePlanUI() {
   const planName = USER.subscription_plan_name || USER.plan_level || "Starter";
   const canUpgrade = !!USER.can_upgrade;
   const supportPriority = USER.support_priority || "Basic";
-  const supportMailto = USER.support_mailto || "support@alphabotservices.com";
+  const supportMailto = USER.support_mailto || "support@alphabotixtrading.com";
 
   const planEl = document.getElementById("account-plan-name");
   if (planEl) planEl.textContent = planName;

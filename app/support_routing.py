@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 # Forwarding aliases users email (Gmail filter → Support/… labels). Override via env.
 _SUPPORT_DOMAIN = (
-    os.getenv("SUPPORT_MAIL_DOMAIN") or "alphabotservices.com"
+    os.getenv("SUPPORT_MAIL_DOMAIN") or "alphabotixtrading.com"
 ).strip().lstrip("@")
 
 SUPPORT_MAILTO = {
@@ -26,13 +26,12 @@ SUPPORT_MAILTO = {
 # Internal destination inboxes (provider routing / team aliases).
 SUPPORT_INBOX = {
     "enterprise": os.getenv("SUPPORT_INBOX_ENTERPRISE")
-    or "vip-support@alphabotix.com",
+    or f"enterprise@{_SUPPORT_DOMAIN}",
     "growth": os.getenv("SUPPORT_INBOX_STANDARD")
-    or "standard-support@alphabotix.com",
-    "pro": os.getenv("SUPPORT_INBOX_STANDARD")
-    or "standard-support@alphabotix.com",
+    or f"growth@{_SUPPORT_DOMAIN}",
+    "pro": os.getenv("SUPPORT_INBOX_PRO") or f"pro@{_SUPPORT_DOMAIN}",
     "starter": os.getenv("SUPPORT_INBOX_GENERAL")
-    or "general-support@alphabotix.com",
+    or f"support@{_SUPPORT_DOMAIN}",
 }
 
 SUPPORT_PRIORITY = {
