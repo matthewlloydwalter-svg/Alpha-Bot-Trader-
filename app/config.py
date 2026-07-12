@@ -36,6 +36,15 @@ STRIPE_API_KEY = (
 STRIPE_SECRET_KEY = STRIPE_API_KEY  # alias used throughout the codebase
 STRIPE_WEBHOOK_SECRET = (os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip()
 STRIPE_PUBLISHABLE_KEY = (os.getenv("STRIPE_PUBLISHABLE_KEY") or "").strip()
+# test | live — selects which Stripe Price ID dictionary is active for Checkout.
+_raw_stripe_env = (os.getenv("STRIPE_ENVIRONMENT") or "").strip().lower()
+if _raw_stripe_env in {"live", "prod", "production"}:
+    STRIPE_ENVIRONMENT = "live"
+elif _raw_stripe_env in {"test", "sandbox"}:
+    STRIPE_ENVIRONMENT = "test"
+else:
+    # Default: live keys → live prices; otherwise test.
+    STRIPE_ENVIRONMENT = "live" if STRIPE_API_KEY.startswith("sk_live_") else "test"
 # Absolute public site origin used in Stripe success/cancel URLs (no trailing slash).
 PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or os.getenv("FRONTEND_ORIGIN") or "").strip().rstrip(",")
 if "," in PUBLIC_BASE_URL:

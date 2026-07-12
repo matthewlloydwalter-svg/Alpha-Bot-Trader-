@@ -548,11 +548,23 @@ async function refreshUserData() {
 
 function updatePlanUI() {
   if (!USER) return;
-  const planName = USER.subscription_plan_name || "Starter";
+  const planName = USER.subscription_plan_name || USER.plan_level || "Starter";
   const canUpgrade = !!USER.can_upgrade;
+  const supportPriority = USER.support_priority || "Basic";
+  const supportMailto = USER.support_mailto || "mailto:support@alphabotixtrading.com";
 
   const planEl = document.getElementById("account-plan-name");
   if (planEl) planEl.textContent = planName;
+
+  const supportEl = document.getElementById("account-support-priority");
+  if (supportEl) supportEl.textContent = supportPriority;
+
+  const supportBtn = document.getElementById("account-support-btn");
+  if (supportBtn) {
+    const addr = String(supportMailto).replace(/^mailto:/i, "");
+    supportBtn.href = "mailto:" + addr;
+    supportBtn.title = "Email " + addr;
+  }
 
   const topBtn = document.getElementById("upgrade-topbar-btn");
   if (topBtn) topBtn.classList.toggle("hidden", !canUpgrade);

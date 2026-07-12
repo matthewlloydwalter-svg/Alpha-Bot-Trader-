@@ -91,8 +91,9 @@ async def lifespan(app: FastAPI):
         pass
     engine_scheduler.start_scheduler()
     logger.info(
-        "[STARTUP] %s engine core online (env=%s, free_bot_limit=%s).",
+        "[STARTUP] %s engine core online (env=%s, free_bot_limit=%s, stripe_env=%s).",
         PLATFORM_NAME, APP_ENV, FREE_BOT_LIMIT or "unlimited",
+        __import__("app.config", fromlist=["STRIPE_ENVIRONMENT"]).STRIPE_ENVIRONMENT,
     )
     try:
         yield
@@ -298,14 +299,20 @@ def _user_plan_payload(user: User) -> dict:
     is_admin = bool(user.is_admin or is_user_admin(user.email or ""))
     plan = normalize_plan(getattr(user, "subscription_plan", None))
     end = getattr(user, "subscription_current_period_end", None)
+    from app.support_routing import support_payload_for_user
+    support = support_payload_for_user(user)
     return {
         "subscription_plan": plan,
         "subscription_plan_name": plan_display_name(plan, is_admin=is_admin),
+        "plan_level": support["plan_level"],
         "subscription_interval": getattr(user, "subscription_interval", None),
         "subscription_status": getattr(user, "subscription_status", None),
         "subscription_current_period_end": end.isoformat() + "Z" if end else None,
         "can_upgrade": (not is_admin) and plan != "enterprise",
         "has_stripe_customer": bool(getattr(user, "stripe_customer_id", None)),
+        "support_priority": support["support_priority"],
+        "support_mailto": support["support_mailto"],
+        "stripe_environment": __import__("app.config", fromlist=["STRIPE_ENVIRONMENT"]).STRIPE_ENVIRONMENT,
     }
 
 
@@ -482,7 +489,38 @@ def checkout_success_pane(request: Request, db: Session = Depends(get_db), sessi
 @app.get("/api/plans")
 def api_plans():
     """Public plan catalog for pricing UIs."""
-    return {"plans": public_plan_payload(), "intervals": list(INTERVALS)}
+    from app.config import STRIPE_ENVIRONMENT
+    return {
+        "plans": public_plan_payload(),
+        "intervals": list(INTERVALS),
+        "stripe_environment": STRIPE_ENVIRONMENT,
+    }
+
+
+@app.get("/api/support/lookup")
+def api_support_lookup(email: str = "", db: Session = Depends(get_db)):
+    """
+    Look up plan_level + support routing for an email (admin/support tooling).
+    Returns plan_level and destination inbox for automated ticket routing.
+    """
+    from app.support_routing import (
+        get_plan_level_by_email, support_destination_email,
+        get_support_priority_for_plan, support_mailto_for_plan,
+    )
+    level = get_plan_level_by_email(email, db)
+    return {
+        "email": (email or "").strip().lower(),
+        "plan_level": level,
+        "support_priority": get_support_priority_for_plan(level),
+        "support_destination": support_destination_email(level),
+        "support_mailto": support_mailto_for_plan(level),
+    }
+
+
+@app.get("/api/support/priority/{user_id}")
+def api_support_priority(user_id: int, db: Session = Depends(get_db)):
+    from app.support_routing import get_support_priority
+    return {"user_id": user_id, "support_priority": get_support_priority(user_id, db)}
 
 
 class CheckoutModel(BaseModel):
@@ -693,6 +731,7 @@ def register_endpoint(body: AuthModel, response: Response, request: Request, db:
         is_admin=is_user_admin(normalized_email),
         email_verified=False,
         subscription_plan=DEFAULT_PLAN,
+        plan_level="Starter",
     )
     db.add(new_user)
     try:

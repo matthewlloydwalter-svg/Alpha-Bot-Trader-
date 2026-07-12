@@ -14,24 +14,38 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from app.config import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, PUBLIC_BASE_URL
+from app.config import STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, PUBLIC_BASE_URL, STRIPE_ENVIRONMENT
 from app.plans import (
     PRICE_ID_LOOKUP,
     normalize_plan,
+    plan_level_label,
     resolve_plan_from_price_id,
+    rebuild_plan_catalog,
+    active_price_ids,
 )
 
 logger = logging.getLogger("alphabot.stripe")
 
-# Server-side allowlist — only these Price IDs may be used in Checkout.
-ALLOWED_PRICE_IDS = frozenset(PRICE_ID_LOOKUP.keys())
 
-# Optional lookup_key → price_id map (Stripe Dashboard lookup keys).
-# Keys are also accepted from the client and resolved server-side.
-LOOKUP_KEY_TO_PRICE: dict[str, str] = {
-    f"{plan}_{interval}": price_id
-    for price_id, (plan, interval) in PRICE_ID_LOOKUP.items()
-}
+def _allowed_price_ids() -> frozenset:
+    rebuild_plan_catalog()
+    # Checkout only accepts prices for the *active* environment.
+    active = set()
+    for intervals in active_price_ids().values():
+        for pid in intervals.values():
+            if pid:
+                active.add(pid)
+    return frozenset(active)
+
+
+def _lookup_key_map() -> dict[str, str]:
+    rebuild_plan_catalog()
+    return {
+        f"{plan}_{interval}": price_id
+        for price_id, (plan, interval) in PRICE_ID_LOOKUP.items()
+        if price_id in _allowed_price_ids()
+    }
+
 
 
 class BillingError(Exception):
@@ -62,8 +76,22 @@ def _client():
             "Stripe is not configured. Set STRIPE_API_KEY (or STRIPE_SECRET_KEY) on the server.",
             status_code=503,
         )
+    # Safety: refuse mixing live prices with a test secret (and vice versa).
+    key = STRIPE_SECRET_KEY
+    if STRIPE_ENVIRONMENT == "live" and key.startswith("sk_test_"):
+        raise BillingError(
+            "STRIPE_ENVIRONMENT=live but STRIPE_API_KEY is a test key (sk_test_…). "
+            "Use your live secret key (sk_live_…).",
+            status_code=503,
+        )
+    if STRIPE_ENVIRONMENT == "test" and key.startswith("sk_live_"):
+        raise BillingError(
+            "STRIPE_ENVIRONMENT=test but STRIPE_API_KEY is a live key (sk_live_…). "
+            "Use a test secret key or set STRIPE_ENVIRONMENT=live.",
+            status_code=503,
+        )
     stripe = _stripe()
-    stripe.api_key = STRIPE_SECRET_KEY
+    stripe.api_key = key
     return stripe
 
 
@@ -110,10 +138,11 @@ def resolve_allowed_price_id(
     """
     pid = (price_id or "").strip()
     key = (lookup_key or "").strip()
+    allowed = _allowed_price_ids()
+    lookup_map = _lookup_key_map()
 
     if not pid and key:
-        # Prefer local map; fall back to Stripe lookup_keys API then re-check allowlist.
-        pid = LOOKUP_KEY_TO_PRICE.get(key) or ""
+        pid = lookup_map.get(key) or ""
         if not pid:
             stripe = _client()
             prices = stripe.Price.list(lookup_keys=[key], active=True, limit=1)
@@ -124,8 +153,11 @@ def resolve_allowed_price_id(
     if not pid:
         raise BillingError("Provide a price_id or lookup_key.")
 
-    if pid not in ALLOWED_PRICE_IDS:
-        raise BillingError("Unrecognized or unauthorized Stripe price_id.", status_code=400)
+    if pid not in allowed:
+        raise BillingError(
+            f"Unrecognized or unauthorized Stripe price_id for STRIPE_ENVIRONMENT={STRIPE_ENVIRONMENT}.",
+            status_code=400,
+        )
 
     plan, interval = resolve_plan_from_price_id(pid)
     return pid, plan, interval
@@ -147,6 +179,7 @@ def create_checkout_session(
         price_id=price_id, lookup_key=lookup_key,
     )
     customer_id = ensure_customer(user)
+    plan_level = plan_level_label(plan_key)
 
     session = stripe.checkout.Session.create(
         mode="subscription",
@@ -161,13 +194,16 @@ def create_checkout_session(
         metadata={
             "user_id": str(user.id),
             "plan": plan_key,
+            "plan_level": plan_level,
             "interval": interval_key,
             "price_id": pid,
+            "stripe_environment": STRIPE_ENVIRONMENT,
         },
         subscription_data={
             "metadata": {
                 "user_id": str(user.id),
                 "plan": plan_key,
+                "plan_level": plan_level,
                 "interval": interval_key,
                 "price_id": pid,
             },
@@ -182,6 +218,7 @@ def create_checkout_session(
         "session_id": session.get("id"),
         "mode": "checkout",
         "plan": plan_key,
+        "plan_level": plan_level,
         "interval": interval_key,
     }
 
@@ -216,8 +253,11 @@ def apply_plan_to_user(
     customer_id: Optional[str] = None,
     subscription_id: Optional[str] = None,
     current_period_end: Any = None,
+    plan_level: Optional[str] = None,
 ) -> None:
-    user.subscription_plan = normalize_plan(plan)
+    key = normalize_plan(plan)
+    user.subscription_plan = key
+    user.plan_level = (plan_level or plan_level_label(key)).strip() or plan_level_label(key)
     user.subscription_interval = (interval or "month").strip().lower()
     user.subscription_status = status
     if customer_id:
@@ -229,6 +269,8 @@ def apply_plan_to_user(
         user.subscription_current_period_end = end
     elif status in {"canceled", "unpaid", "incomplete_expired"}:
         user.subscription_current_period_end = None
+        user.subscription_plan = "starter"
+        user.plan_level = "Starter"
 
 
 def _period_end_from_subscription(subscription: dict) -> Any:
@@ -236,16 +278,20 @@ def _period_end_from_subscription(subscription: dict) -> Any:
 
 
 def sync_user_from_checkout_session(user, session: dict, *, stripe_client=None) -> None:
-    """Fulfill checkout.session.completed — set active + plan + period end."""
+    """Fulfill checkout.session.completed — set active + plan_level + period end."""
     stripe = stripe_client or _client()
     meta = session.get("metadata") or {}
     plan = meta.get("plan")
     interval = meta.get("interval")
+    plan_level = meta.get("plan_level")
     price_hint = meta.get("price_id") or ""
-    if price_hint and price_hint in ALLOWED_PRICE_IDS:
+    # Accept historical test/live price IDs for fulfillment (full lookup).
+    rebuild_plan_catalog()
+    if price_hint and price_hint in PRICE_ID_LOOKUP:
         plan, interval = resolve_plan_from_price_id(price_hint)
     plan = plan or "starter"
     interval = interval or "month"
+    plan_level = plan_level or plan_level_label(plan)
 
     period_end = None
     sub_id = session.get("subscription")
@@ -253,12 +299,12 @@ def sync_user_from_checkout_session(user, session: dict, *, stripe_client=None) 
         try:
             sub = stripe.Subscription.retrieve(sub_id)
             period_end = _period_end_from_subscription(sub)
-            # Prefer live price on the subscription item.
             items = (sub.get("items") or {}).get("data") or []
             if items:
                 pid = ((items[0].get("price") or {}).get("id")) or ""
-                if pid in ALLOWED_PRICE_IDS:
+                if pid and pid in PRICE_ID_LOOKUP:
                     plan, interval = resolve_plan_from_price_id(pid)
+                    plan_level = plan_level_label(plan)
         except Exception as exc:
             logger.warning("Could not retrieve subscription %s: %s", sub_id, exc)
 
@@ -270,11 +316,13 @@ def sync_user_from_checkout_session(user, session: dict, *, stripe_client=None) 
         customer_id=session.get("customer"),
         subscription_id=sub_id,
         current_period_end=period_end,
+        plan_level=plan_level,
     )
 
 
 def sync_user_from_subscription(user, subscription: dict) -> None:
     """Fulfill customer.subscription.updated / deleted."""
+    rebuild_plan_catalog()
     status = subscription.get("status") or "active"
     items = (subscription.get("items") or {}).get("data") or []
     price_id = ""
@@ -282,11 +330,13 @@ def sync_user_from_subscription(user, subscription: dict) -> None:
         price = items[0].get("price") or {}
         price_id = price.get("id") or ""
     meta = subscription.get("metadata") or {}
-    if price_id and price_id in ALLOWED_PRICE_IDS:
+    if price_id and price_id in PRICE_ID_LOOKUP:
         plan, interval = resolve_plan_from_price_id(price_id)
+        plan_level = plan_level_label(plan)
     else:
         plan = meta.get("plan") or getattr(user, "subscription_plan", None) or "starter"
         interval = meta.get("interval") or getattr(user, "subscription_interval", None) or "month"
+        plan_level = meta.get("plan_level") or plan_level_label(plan)
 
     period_end = _period_end_from_subscription(subscription)
 
@@ -299,9 +349,9 @@ def sync_user_from_subscription(user, subscription: dict) -> None:
             customer_id=subscription.get("customer"),
             subscription_id=subscription.get("id"),
             current_period_end=None,
+            plan_level="Starter",
         )
     else:
-        # Normalize Stripe's "active"/"trialing" into access-granting status.
         access_status = "active" if status in {"active", "trialing"} else status
         apply_plan_to_user(
             user,
@@ -311,6 +361,7 @@ def sync_user_from_subscription(user, subscription: dict) -> None:
             customer_id=subscription.get("customer"),
             subscription_id=subscription.get("id"),
             current_period_end=period_end,
+            plan_level=plan_level,
         )
 
 

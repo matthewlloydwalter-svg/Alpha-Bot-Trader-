@@ -93,6 +93,8 @@ class User(Base):
     # ── Subscription / Stripe ──
     # starter | growth | pro | enterprise  (admins bypass limits regardless)
     subscription_plan = Column(String, default="starter", nullable=False)
+    # Support/CRM label kept in sync: Starter | Growth | Pro | Enterprise
+    plan_level = Column(String, default="Starter", nullable=False)
     subscription_interval = Column(String, nullable=True)  # week | month | year
     subscription_status = Column(String, nullable=True)  # active | canceled | …
     stripe_customer_id = Column(String, nullable=True)
@@ -284,6 +286,7 @@ _MIGRATIONS = {
         "okx_secret_live": "VARCHAR",
         "okx_pass_live": "VARCHAR",
         "subscription_plan": "VARCHAR DEFAULT 'starter'",
+        "plan_level": "VARCHAR DEFAULT 'Starter'",
         "subscription_interval": "VARCHAR",
         "subscription_status": "VARCHAR",
         "stripe_customer_id": "VARCHAR",
@@ -390,13 +393,30 @@ def _backfill_integrity():
                         "UPDATE users SET subscription_plan = 'starter' "
                         "WHERE subscription_plan IS NULL OR subscription_plan = ''"
                     ))
-                    # rowcount not always available; log best-effort
                     try:
                         n = updated.rowcount
                         if n:
                             logger.info("[BACKFILL] Set starter plan on %d user(s)", n)
                     except Exception:
                         pass
+                if "plan_level" in cols:
+                    # Keep plan_level aligned with subscription_plan for support routing.
+                    mapping = [
+                        ("starter", "Starter"),
+                        ("growth", "Growth"),
+                        ("pro", "Pro"),
+                        ("enterprise", "Enterprise"),
+                    ]
+                    for key, label in mapping:
+                        conn.execute(text(
+                            "UPDATE users SET plan_level = :label "
+                            "WHERE lower(coalesce(subscription_plan, 'starter')) = :key "
+                            "AND (plan_level IS NULL OR plan_level = '' OR plan_level != :label)"
+                        ), {"label": label, "key": key})
+                    conn.execute(text(
+                        "UPDATE users SET plan_level = 'Starter' "
+                        "WHERE plan_level IS NULL OR plan_level = ''"
+                    ))
 
             if "trades" in tables and "bots" in tables:
                 conn.execute(text(
