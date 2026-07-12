@@ -140,7 +140,17 @@ function esc(str) {
 
 /** Safe single-quoted JS string literal for inline onclick handlers. */
 function escJs(str) {
-  return JSON.stringify(str == null ? "" : String(str));
+  // Must use single quotes so the result is valid inside double-quoted HTML attrs:
+  //   onclick="openMarketDashboard('alpaca','AAPL')"
+  // JSON.stringify() would emit double quotes and break the attribute.
+  return "'" + String(str == null ? "" : str)
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029")
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    + "'";
 }
 
 function toggleAuthMode(showLogin) {
@@ -1640,28 +1650,60 @@ function renderBots() {
   const el = document.getElementById("bots-list-container");
   if (!el) return;
 
-  // ── Mode-aware view filter (UI ONLY) ──────────────────────────────────
-  // Group the user's bots by the account they're assigned to (bot.mode from
-  // GET /bots). Both arrays are kept so it's clear how the view filters; we
-  // render only the one for the current trading mode. This is purely a display
-  // filter — hidden bots keep running on the backend scheduler untouched.
-  const mode = (USER && USER.trading_mode) || "paper";
-  const activePaperBots = BOTS.filter(b => ((b.mode || "paper") === "paper"));
-  const activeLiveBots  = BOTS.filter(b => ((b.mode || "paper") === "live"));
-  const visible = mode === "live" ? activeLiveBots : activePaperBots;
+  // ── Mode + broker view filter (UI ONLY) ───────────────────────────────
+  // Show only bots for the active Paper/Live mode AND active Alpaca/OKX
+  // broker. Hidden bots keep running on the backend scheduler untouched.
+  const mode = ((USER && USER.trading_mode) || "paper").toLowerCase();
+  const broker = currentBroker();
+  const visible = BOTS.filter((b) => {
+    const botMode = ((b.mode || "paper") + "").toLowerCase();
+    const botBroker = ((b.broker || "alpaca") + "").toLowerCase() === "okx" ? "okx" : "alpaca";
+    return botMode === mode && botBroker === broker;
+  });
+  const otherModeCount = BOTS.filter((b) => {
+    const botMode = ((b.mode || "paper") + "").toLowerCase();
+    const botBroker = ((b.broker || "alpaca") + "").toLowerCase() === "okx" ? "okx" : "alpaca";
+    return botMode !== mode && botBroker === broker;
+  }).length;
+  const otherBrokerCount = BOTS.filter((b) => {
+    const botMode = ((b.mode || "paper") + "").toLowerCase();
+    const botBroker = ((b.broker || "alpaca") + "").toLowerCase() === "okx" ? "okx" : "alpaca";
+    return botMode === mode && botBroker !== broker;
+  }).length;
+
+  const modeLabel = mode === "live" ? "Live" : "Paper";
+  const brokerLabel = broker === "okx" ? "OKX" : "Alpaca";
+  const otherModeLabel = mode === "live" ? "Paper" : "Live";
+  const otherBrokerLabel = broker === "okx" ? "Alpaca" : "OKX";
 
   const hdrCount = document.getElementById("bots-header-count");
   if (hdrCount) hdrCount.textContent = String(visible.filter(b => b.running).length);
 
   // Reflect the active account in the Bots-tab header (and all shared switches).
   syncModeSwitchButtons();
+  syncBrokerSwitchButtons();
   const sub = document.getElementById("bots-mode-sub");
-  if (sub) sub.textContent = `Showing your ${mode === "live" ? "Live" : "Paper"} account bots (${visible.length}) · switch modes anytime — other-mode bots keep running`;
+  if (sub) {
+    sub.textContent =
+      `Showing your ${modeLabel} ${brokerLabel} bots (${visible.length}) · ` +
+      `switch mode/broker anytime — other bots keep running in the background`;
+  }
 
   if (!visible.length) {
-    const other = mode === "live" ? activePaperBots.length : activeLiveBots.length;
-    el.innerHTML = `<div style="text-align:center;color:var(--t2);padding:20px">No ${mode === "live" ? "Live" : "Paper"} account bots yet.` +
-      (other ? ` You have ${other} bot(s) in your ${mode === "live" ? "Paper" : "Live"} account (still running in the background) — switch modes to see them.` : ` Create one with “+ New Bot”.`) +
+    const hints = [];
+    if (otherBrokerCount) {
+      hints.push(
+        `You have ${otherBrokerCount} ${modeLabel} ${otherBrokerLabel} bot(s) still running in the background — switch broker to see them.`
+      );
+    }
+    if (otherModeCount) {
+      hints.push(
+        `You have ${otherModeCount} ${otherModeLabel} ${brokerLabel} bot(s) still running in the background — switch mode to see them.`
+      );
+    }
+    el.innerHTML =
+      `<div style="text-align:center;color:var(--t2);padding:20px">No ${modeLabel} ${brokerLabel} bots yet.` +
+      (hints.length ? ` ${hints.join(" ")}` : ` Create one with “+ New Bot”.`) +
       `</div>`;
     return;
   }
@@ -1881,7 +1923,7 @@ function renderMarkets() {
     return;
   }
   tbody.innerHTML = items.map(m => `
-    <tr class="market-row" onclick="openMarketDashboard(${escJs(MARKETS_EXCHANGE)},${escJs(m.symbol)})">
+    <tr class="market-row" data-exchange="${esc(MARKETS_EXCHANGE)}" data-symbol="${esc(m.symbol)}" role="button" tabindex="0">
       <td>${esc(m.display || m.symbol)}</td>
       <td style="color:var(--t1)">${esc(m.name || "")}</td>
       <td>${cls}</td>
@@ -1889,6 +1931,31 @@ function renderMarkets() {
       <td class="market-open-hint">Open dashboard →</td>
     </tr>
   `).join("");
+  bindMarketsTableClicks();
+}
+
+function bindMarketsTableClicks() {
+  const tbody = document.getElementById("stocks-table-body");
+  if (!tbody || tbody.dataset.marketsBound === "1") return;
+  tbody.dataset.marketsBound = "1";
+  tbody.addEventListener("click", (ev) => {
+    const row = ev.target && ev.target.closest ? ev.target.closest("tr.market-row") : null;
+    if (!row || !tbody.contains(row)) return;
+    const exchange = row.getAttribute("data-exchange");
+    const symbol = row.getAttribute("data-symbol");
+    if (!exchange || !symbol) return;
+    openMarketDashboard(exchange, symbol);
+  });
+  tbody.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter" && ev.key !== " ") return;
+    const row = ev.target && ev.target.closest ? ev.target.closest("tr.market-row") : null;
+    if (!row || !tbody.contains(row)) return;
+    ev.preventDefault();
+    const exchange = row.getAttribute("data-exchange");
+    const symbol = row.getAttribute("data-symbol");
+    if (!exchange || !symbol) return;
+    openMarketDashboard(exchange, symbol);
+  });
 }
 
 function filterMarkets() { renderMarkets(); }

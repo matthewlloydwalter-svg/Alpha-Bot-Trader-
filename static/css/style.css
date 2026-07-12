@@ -185,7 +185,7 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
 .toast.success{border-color:var(--green);color:var(--green);background:var(--gdim)}
 @keyframes slideIn{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}
 
-.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:500;padding:16px;backdrop-filter:blur(2px)}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:5000;padding:16px;backdrop-filter:blur(2px)}
 .modal{background:var(--bg1);border-radius:12px;padding:1.5rem;width:100%;max-width:440px;border:1px solid var(--border2);max-height:90vh;overflow-y:auto}
 
 @media(max-width:640px){
