@@ -163,33 +163,19 @@ def start_scheduler() -> BackgroundScheduler | None:
     sched = BackgroundScheduler(timezone="UTC")
 
     # NOTE: do NOT pass next_run_time=None — that pauses the job in APScheduler
-    # and it will NEVER fire automatically. Omitting the kwarg lets APScheduler
-    # calculate the first run time from the trigger (i.e. "now + interval"),
-    # and the two immediate one-shot jobs below warm the system right away.
+    # and it will NEVER fire automatically. Pass next_run_time=now so the first
+    # interval fire is immediate (no separate boot job that can overlap).
+    now = _dt.utcnow()
     sched.add_job(poll_market_data, "interval", seconds=MARKET_POLL_INTERVAL,
-                  id="market_poll", max_instances=1, coalesce=True)
+                  id="market_poll", max_instances=1, coalesce=True, next_run_time=now)
     sched.add_job(evaluate_bots, "interval", seconds=BOT_SCAN_INTERVAL,
-                  id="bot_eval", max_instances=1, coalesce=True)
+                  id="bot_eval", max_instances=1, coalesce=True, next_run_time=now)
     sched.start()
     _scheduler = sched
     logger.info(
         "[ENGINE] Background engine started — market poll every %ss, bot eval every %ss.",
         MARKET_POLL_INTERVAL, BOT_SCAN_INTERVAL,
     )
-
-    # Kick both jobs immediately so the system is live on startup without
-    # waiting for a full interval to pass.
-    now = _dt.utcnow()
-    try:
-        sched.add_job(poll_market_data, id="market_poll_boot",
-                      next_run_time=now, max_instances=1)
-    except Exception:
-        pass
-    try:
-        sched.add_job(evaluate_bots, id="bot_eval_boot",
-                      next_run_time=now, max_instances=1)
-    except Exception:
-        pass
 
     return sched
 

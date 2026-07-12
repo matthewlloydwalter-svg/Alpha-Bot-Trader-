@@ -185,6 +185,8 @@ def customer_has_blocking_subscription(user) -> bool:
                 return True
     except Exception as exc:
         logger.warning("Could not list Stripe subscriptions for customer %s: %s", customer_id, exc)
+        # Fail closed: do not open a second Checkout while we cannot verify.
+        return True
     return False
 
 
@@ -369,11 +371,16 @@ def sync_user_from_subscription(user, subscription: dict) -> None:
         elif status in {"canceled", "unpaid", "incomplete_expired"}:
             plan, interval, plan_level = "starter", "month", "Starter"
         else:
+            # Active paying sub with unmapped price — keep current entitlements
+            # rather than silently downgrading a billed customer.
             logger.warning(
-                "Unrecognized Stripe price_id=%s for user_id=%s status=%s — defaulting plan to starter",
+                "Unrecognized Stripe price_id=%s for user_id=%s status=%s — keeping current plan=%s",
                 price_id, getattr(user, "id", None), status,
+                getattr(user, "subscription_plan", None),
             )
-            plan, interval, plan_level = "starter", "month", "Starter"
+            plan = normalize_plan(getattr(user, "subscription_plan", None) or "starter")
+            interval = getattr(user, "subscription_interval", None) or "month"
+            plan_level = plan_level_label(plan)
 
     period_end = _period_end_from_subscription(subscription)
 

@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 import json
 import logging
+import threading
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
@@ -261,9 +262,10 @@ def _get_alpaca_account_context(owner: User, broker: str, bot: Bot | None = None
     try:
         info = get_account_info(broker=broker, paper=_paper(owner, bot), **_creds(owner, broker, bot))
         if info.get("error"):
-            # Lookup failed (bad keys / broker down) — do not assume cash and
-            # block bot create; treat as unknown/margin so GFV checks are skipped.
-            return {"account_type": "margin", "equity": None, "non_marginable_buying_power": None, "multiplier": None}
+            # Lookup failed (bad keys / broker down). Create-time GFV checks only
+            # act on account_type=="cash", so "unknown" skips them. Trading-time
+            # strategy guards treat "unknown" as fail-closed for cash strategies.
+            return {"account_type": "unknown", "equity": None, "non_marginable_buying_power": None, "multiplier": None}
         equity = info.get("equity")
         non_marginable = info.get("non_marginable_buying_power")
         multiplier = info.get("multiplier")
@@ -294,7 +296,7 @@ def _get_alpaca_account_context(owner: User, broker: str, bot: Bot | None = None
         }
     except Exception as e:
         logger.warning("Alpaca account context lookup failed: %s", e)
-        return {"account_type": "margin", "equity": None, "non_marginable_buying_power": None, "multiplier": None}
+        return {"account_type": "unknown", "equity": None, "non_marginable_buying_power": None, "multiplier": None}
 
 
 def _strategy_allows_cash_guard(bot: Bot) -> bool:
@@ -348,6 +350,19 @@ def _scattershot_active(bot: Bot) -> bool:
     return bool(state.get("legs"))
 
 
+def bot_needs_liquidation(bot: Bot) -> bool:
+    """
+    True when delete/manual-sell must call liquidate_bot before treating the bot
+    as flat. Covers scattershot baskets whose exposure lives in strategy_state
+    even when shares_held looks empty.
+    """
+    if _strategy_name(bot) == "scattershot" and (
+        _scattershot_active(bot) or bot.in_position or "," in (bot.ticker or "")
+    ):
+        return True
+    return bool(bot.in_position and (bot.shares_held or 0) > 0)
+
+
 def _swing_hold_met(bot: Bot) -> bool:
     if not bot.position_opened_at:
         return True
@@ -383,6 +398,11 @@ def _enforce_low_balance_strategy(db: Session, owner: User, bot: Bot, price: flo
 
     if strategy == "standard" or not _strategy_allows_cash_guard(bot):
         return True, {"account_type": account_type, "reason": "standard"}
+
+    # Broker metadata unavailable — fail closed for cash-sensitive strategies
+    # rather than treating the account as margin and skipping GFV gates.
+    if account_type == "unknown":
+        return False, {"account_type": account_type, "reason": "account metadata unavailable"}
 
     # Cash accounts must respect unsettled-funds limits; margin can opt into the
     # same sizing rules without the non-marginable buying-power gate.
@@ -487,7 +507,29 @@ def _close_scattershot_basket(db: Session, owner: User, bot: Bot, reason: str) -
     state = _load_strategy_state(bot)
     legs = list(state.get("legs") or [])
     if not legs:
-        # Clear stuck basket flags so sell/delete don't no-op forever.
+        # Legs missing but ticker/position flags still set — attempt broker
+        # unwind from the comma-joined ticker before clearing local state.
+        orphan_syms = [s.strip().upper() for s in (bot.ticker or "").split(",") if s.strip()]
+        if orphan_syms and (bot.in_position or bot.shares_held or "," in (bot.ticker or "")):
+            failed: list[str] = []
+            for sym in orphan_syms:
+                try:
+                    _liquidate(owner, bot.broker, sym, bot=bot)
+                    # no_position is fine here: legs state is already empty, so
+                    # broker-flat means there is nothing left to unwind.
+                except Exception as e:
+                    failed.append(sym)
+                    _log(db, owner.id, f"[SCATTER-SHOT] Orphan liquidate {sym} failed: {e}", "ERROR")
+            if failed:
+                bot.last_pattern_summary = (
+                    f"Scattershot orphan unwind incomplete — failed: {', '.join(failed)}"
+                )
+                db.commit()
+                return {
+                    "action": "WAIT",
+                    "reason": "Scattershot orphan unwind incomplete.",
+                    "failed": failed,
+                }
         if bot.in_position or bot.shares_held or bot.strategy_state:
             bot.in_position = False
             bot.shares_held = 0
@@ -523,8 +565,14 @@ def _close_scattershot_basket(db: Session, owner: User, bot: Bot, reason: str) -
             _log(db, owner.id, f"[SCATTER-SHOT] SELL {sym} failed: {e}", "ERROR")
             continue
         if (order or {}).get("status") == "no_position" and qty > 0:
-            # Treat as closed at broker (already flat) — clear the leg locally.
-            order = {"order_id": None, "status": "no_position"}
+            # Align with single-leg _close_position: fail closed so a transient
+            # broker "flat" response cannot wipe a tracked leg.
+            failed_symbols.append(sym)
+            remaining_legs.append(leg)
+            _log(db, owner.id,
+                 f"[SCATTER-SHOT] SELL {sym} reported no_position while leg qty={qty} "
+                 f"— refusing to clear leg.", "ERROR")
+            continue
         gain = (price - entry) * qty
         notional = round(qty * price, 6)
         total_gain += gain
@@ -950,7 +998,14 @@ def _attempt_capital_rotation(db: Session, owner: User, candidate_bot: Bot,
          f"at {worst_perf:+.2f}% to fund stronger setup '{candidate_bot.ticker}' "
          f"(strength {candidate_strength:.2f}).", "WARNING")
 
-    _close_position(db, owner, worst_bot, worst_price, reason="capital rotation")
+    try:
+        _close_position(db, owner, worst_bot, worst_price, reason="capital rotation")
+    except BrokerError as e:
+        _log(db, owner.id, f"[ROTATION] Close failed for '{worst_bot.name}': {e}", "ERROR")
+        return False
+    except Exception as e:
+        _log(db, owner.id, f"[ROTATION] Unexpected close failure for '{worst_bot.name}': {e}", "ERROR")
+        return False
     return True
 
 
@@ -1588,7 +1643,7 @@ def liquidate_bot(bot_id: int, reason: str = "manual sell") -> dict:
             _scattershot_active(bot) or bot.in_position or "," in (bot.ticker or "")
         ):
             closed = _close_scattershot_basket(db, owner, bot, reason=reason)
-            return {"action": "SELL", "reason": reason, **closed}
+            return {"action": closed.get("action") or "SELL", "reason": reason, **closed}
         if not bot.in_position or (bot.shares_held or 0) <= 0:
             return {"action": "FLAT", "reason": "Bot holds no open position to sell."}
         price = _resolve_exit_price(db, bot, owner)
@@ -1598,11 +1653,30 @@ def liquidate_bot(bot_id: int, reason: str = "manual sell") -> dict:
         db.close()
 
 
+_bot_cycle_locks: dict[int, threading.Lock] = {}
+_bot_cycle_locks_guard = threading.Lock()
+
+
+def _acquire_bot_cycle_lock(bot_id: int) -> threading.Lock | None:
+    """Non-blocking per-bot lock so scheduler + manual run-cycle cannot overlap."""
+    with _bot_cycle_locks_guard:
+        lock = _bot_cycle_locks.get(bot_id)
+        if lock is None:
+            lock = threading.Lock()
+            _bot_cycle_locks[bot_id] = lock
+    if not lock.acquire(blocking=False):
+        return None
+    return lock
+
+
 def run_cycle(bot_id: int) -> dict:
     """
     Run one full decision cycle for a single bot by id. Opens its own DB
     session so it is safe to call from an API route or a background scheduler.
     """
+    lock = _acquire_bot_cycle_lock(bot_id)
+    if lock is None:
+        return {"action": "SKIPPED", "reason": "Cycle already in progress for this bot."}
     db = SessionLocal()
     try:
         bot = db.query(Bot).filter(Bot.id == bot_id).first()
@@ -1652,6 +1726,7 @@ def run_cycle(bot_id: int) -> dict:
         return run_bot_cycle(db, bot, analysis)
     finally:
         db.close()
+        lock.release()
 
 
 def run_all_active_bots() -> dict:

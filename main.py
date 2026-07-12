@@ -510,6 +510,7 @@ def checkout_success_pane(request: Request, db: Session = Depends(get_db), sessi
                 error = "This Checkout session does not belong to your account."
             elif session.get("payment_status") in {"paid", "no_payment_required"} or session.get("status") == "complete":
                 stripe_billing.sync_user_from_checkout_session(user, session)
+                _enforce_running_bot_limit(user, db)
                 db.add(user)
                 db.commit()
                 db.refresh(user)
@@ -683,6 +684,7 @@ def billing_confirm_checkout(
         raise HTTPException(status_code=403, detail="Checkout session does not belong to this account.")
     if session.get("payment_status") in {"paid", "no_payment_required"} or session.get("status") == "complete":
         stripe_billing.sync_user_from_checkout_session(u, session)
+        _enforce_running_bot_limit(u, db)
         db.add(u)
         db.commit()
     return {"ok": True, **_user_plan_payload(u)}
@@ -887,7 +889,20 @@ def current_user_endpoint(u: User = Depends(get_current_user_from_cookie), db: S
     }
 
 @app.post("/auth/logout")
-def logout_endpoint(response: Response, request: Request):
+def logout_endpoint(response: Response, request: Request, db: Session = Depends(get_db)):
+    # Invalidate the server-side session so a stolen cookie cannot be reused.
+    token = request.cookies.get("session_token")
+    if token:
+        payload = decode_session_token(token)
+        if payload:
+            try:
+                user = db.query(User).filter(User.id == int(payload["sub"])).first()
+                token_sv = int(payload.get("sv", 0) or 0)
+                if user and token_sv == int(user.session_version or 0):
+                    _bump_session_version(user)
+                    db.commit()
+            except Exception:
+                db.rollback()
     response.delete_cookie("session_token", samesite="lax", secure=_cookie_kwargs(request=request)["secure"])
     return {"success": True}
 
@@ -1903,6 +1918,8 @@ async def toggle_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
     # Starting a bot must respect plan running limits (create limit alone is not enough
     # after a downgrade when older bots still exist).
     if not bot.running:
+        # Serialize concurrent start toggles for this account.
+        db.query(User).filter(User.id == u.id).with_for_update().first()
         limit = _user_bot_limit(u)
         if limit is not None:
             running_count = (
@@ -1935,8 +1952,10 @@ async def delete_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
     # whole real position — so we never orphan live shares at the broker when the
     # bot is removed. With real keys, a liquidation failure aborts the delete
     # (fail safe) rather than silently dropping the bot while shares remain.
+    # Also covers scattershot baskets whose legs live in strategy_state even when
+    # shares_held looks flat.
     liquidation = None
-    if bot.in_position and (bot.shares_held or 0) > 0:
+    if bot_engine.bot_needs_liquidation(bot):
         try:
             liquidation = bot_engine.liquidate_bot(bot.id, reason="bot deleted")
         except Exception as e:
@@ -1946,6 +1965,14 @@ async def delete_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
                 detail=f"Could not sell this bot's holdings before deletion: {e}. "
                        f"The bot was NOT deleted so its shares are not orphaned — please retry.")
         db.expire_all()  # liquidate_bot committed the close in its own session
+        # Abort delete if scattershot (or other) unwind only partially succeeded.
+        bot_after = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
+        if bot_after and bot_engine.bot_needs_liquidation(bot_after):
+            raise HTTPException(
+                status_code=502,
+                detail="Could not fully unwind this bot's holdings before deletion. "
+                       "The bot was NOT deleted — please retry.",
+            )
 
     # Preserve the trade ledger when a bot is removed: every Trade (including the
     # liquidation sell just recorded) keeps its immutable bot_uuid for
@@ -1969,7 +1996,7 @@ async def liquidate_bot_endpoint(bot_id: int, u: User = Depends(get_current_user
     bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
-    if not bot.in_position or (bot.shares_held or 0) <= 0:
+    if not bot_engine.bot_needs_liquidation(bot):
         return {"status": "flat", "detail": "This bot is not holding any position to sell."}
     try:
         result = bot_engine.liquidate_bot(bot.id, reason="manual sell")
