@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
@@ -350,6 +350,15 @@ def health():
         "engine": os.getenv("ENGINE_ENABLED", "1"),
         "time": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.get("/ads.txt", include_in_schema=False)
+def ads_txt():
+    """Serve Google AdSense ads.txt authorization at the site root."""
+    return FileResponse(
+        os.path.join(BASE_DIR, "ads.txt"),
+        media_type="text/plain; charset=utf-8",
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
