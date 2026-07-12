@@ -19,7 +19,7 @@ from sse_starlette.sse import EventSourceResponse
 
 load_dotenv()
 
-from app.database import engine, Base, init_db, get_db, SessionLocal, User, Bot, Trade, ActivityLog, MarketQuote, SiteSettings, ensure_site_settings
+from app.database import engine, Base, init_db, get_db, SessionLocal, User, Bot, Trade, ActivityLog, MarketQuote
 from app.auth import (
     hash_password, verify_password, create_session_token, decode_session_token,
     generate_verification_code, send_verification_email, send_password_reset_email,
@@ -43,7 +43,6 @@ from app.market_data import get_market_analysis, resolve_chart_preset, CHART_PRE
 from app.markets_universe import MARKET_UNIVERSE
 from app.credentials import resolve_credentials, has_credentials, keys_payload, seal_secret
 from app.rate_limit import limit_auth, limit_verification
-from app.ads_sanitize import sanitize_ad_snippet
 from app import bot_engine  # Imported bot engine to wire up the run-cycle logic
 from app import market_store, ai_assistant
 from app.realtime import bus
@@ -1115,45 +1114,6 @@ def admin_users_list(request: Request, db: Session = Depends(get_db)):
     if not u.is_admin: raise HTTPException(status_code=403)
     users = db.query(User).all()
     return [{"email": x.email, "is_admin": x.is_admin, "email_verified": x.email_verified} for x in users]
-
-
-class AdSnippetModel(BaseModel):
-    ad_network_snippet: str = ""
-
-
-@app.get("/ads/snippet")
-def get_ad_snippet(db: Session = Depends(get_db)):
-    """Public read of the sanitized ad network HTML/JS snippet for dashboard sidebars."""
-    row = ensure_site_settings(db)
-    raw = row.ad_network_snippet or ""
-    try:
-        return {"ad_network_snippet": sanitize_ad_snippet(raw)}
-    except ValueError:
-        return {"ad_network_snippet": ""}
-
-
-@app.get("/admin/ads")
-def admin_get_ads(request: Request, db: Session = Depends(get_db)):
-    _require_admin(request, db)
-    row = ensure_site_settings(db)
-    return {"ad_network_snippet": row.ad_network_snippet or ""}
-
-
-@app.put("/admin/ads")
-def admin_put_ads(body: AdSnippetModel, request: Request, db: Session = Depends(get_db)):
-    """Admin-only update of the ad network snippet injected into sidebars."""
-    _require_admin(request, db)
-    raw = body.ad_network_snippet if body.ad_network_snippet is not None else ""
-    try:
-        cleaned = sanitize_ad_snippet(raw)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    row = ensure_site_settings(db)
-    row.ad_network_snippet = cleaned
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return {"ok": True, "ad_network_snippet": row.ad_network_snippet or ""}
 
 
 @app.get("/system/logs")

@@ -208,15 +208,6 @@ class ActivityLog(Base):
     owner = relationship("User", back_populates="logs")
 
 
-class SiteSettings(Base):
-    """Singleton row for platform-wide settings (ad network snippet, etc.)."""
-    __tablename__ = "site_settings"
-
-    id = Column(Integer, primary_key=True, index=True)
-    # Raw HTML/JS from the admin Ad Network Configuration panel.
-    ad_network_snippet = Column(Text, nullable=False, default="")
-
-
 # SQL column types for additive migrations on pre-existing tables.
 # create_all() only CREATEs missing tables — it never ALTERs existing ones,
 # so we add any newly-introduced columns here in an idempotent way.
@@ -434,30 +425,10 @@ def _backfill_integrity():
         logger.warning("Integrity backfill skipped: %s", e)
 
 
-def ensure_site_settings(db) -> "SiteSettings":
-    """Return the singleton SiteSettings row, creating it if missing."""
-    row = db.query(SiteSettings).order_by(SiteSettings.id.asc()).first()
-    if row is None:
-        row = SiteSettings(ad_network_snippet="")
-        db.add(row)
-        db.commit()
-        db.refresh(row)
-    return row
-
-
 def init_db():
     Base.metadata.create_all(bind=engine)
     _run_additive_migrations()
     _backfill_integrity()
-    # Ensure the singleton settings row exists so ad endpoints never 404.
-    try:
-        db = SessionLocal()
-        try:
-            ensure_site_settings(db)
-        finally:
-            db.close()
-    except Exception as e:
-        logger.warning("SiteSettings seed skipped: %s", e)
 
 
 def get_db():

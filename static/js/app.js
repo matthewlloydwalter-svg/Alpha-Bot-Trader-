@@ -401,7 +401,6 @@ async function enterApp() {
   }
 
   await activateTab(tab, { push: false });
-  loadAdSidebars();            // inject admin-configured ad snippet into sidebars
   connectLiveStream();         // subscribe to the always-on backend feed
 }
 
@@ -943,47 +942,6 @@ function toggleTabDetails(key) {
   syncTabDetailsUI(key);
 }
 window.toggleTabDetails = toggleTabDetails;
-
-/* ── Ad sidebars: fetch snippet and inject HTML/JS into left + right ── */
-function injectAdSnippet(container, html) {
-  if (!container) return;
-  container.innerHTML = "";
-  const raw = (html || "").trim();
-  if (!raw) {
-    container.classList.add("is-empty");
-    return;
-  }
-  container.classList.remove("is-empty");
-  const slot = document.createElement("div");
-  slot.className = "ad-slot";
-  slot.innerHTML = raw;
-  // Scripts inserted via innerHTML do not execute — re-create them.
-  slot.querySelectorAll("script").forEach((old) => {
-    const s = document.createElement("script");
-    for (const attr of old.attributes) s.setAttribute(attr.name, attr.value);
-    if (old.textContent) s.textContent = old.textContent;
-    old.parentNode.replaceChild(s, old);
-  });
-  container.appendChild(slot);
-}
-
-async function loadAdSidebars() {
-  const left = document.getElementById("ad-sidebar-left");
-  const right = document.getElementById("ad-sidebar-right");
-  if (!left && !right) return;
-  try {
-    const resp = await fetch("/ads/snippet", { credentials: "include" });
-    if (!resp.ok) throw new Error("ads fetch failed");
-    const data = await resp.json();
-    const snippet = data.ad_network_snippet || "";
-    injectAdSnippet(left, snippet);
-    injectAdSnippet(right, snippet);
-  } catch (_) {
-    injectAdSnippet(left, "");
-    injectAdSnippet(right, "");
-  }
-}
-window.loadAdSidebars = loadAdSidebars;
 
 function setPortfolioTimeframe(tf) {
   PF_STATE.timeframe = tf;

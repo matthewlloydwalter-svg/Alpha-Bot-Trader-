@@ -43,24 +43,6 @@
       </div>
     </div>
 
-    <div class="card" id="ad-network-card">
-      <div class="slbl">Ad Network Configuration</div>
-      <div class="info-banner" style="margin-bottom:12px">
-        Paste AdSense / trusted ad-network HTML only (Google script hosts are allowlisted).
-        Arbitrary scripts are stripped on save for security. The same snippet is injected into
-        the left and right dashboard sidebars. Leave empty to hide ads.
-      </div>
-      <label class="field" for="ad-network-snippet">Ad network snippet
-        <textarea id="ad-network-snippet" rows="12"
-          placeholder="<!-- Paste AdSense / banner HTML + script tags here -->"
-          style="width:100%;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--t1);line-height:1.45"></textarea>
-      </label>
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px">
-        <button class="btn btn-primary btn-sm" id="ad-save-btn" onclick="saveAdSettings()">💾 Save Ad Settings</button>
-        <span id="ad-save-status" style="font-size:12px;color:var(--t2)"></span>
-      </div>
-    </div>
-
     <div class="card" id="ai-assistant-card">
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:6px">
         <div class="slbl" style="margin-bottom:0">🧠 AI Code Assistant</div>
