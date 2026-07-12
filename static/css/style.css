@@ -46,6 +46,10 @@ body{
   align-items:stretch;
   background:var(--bg1);
   border-bottom:2px solid var(--border);
+  overflow-x:auto;
+  overflow-y:hidden;
+  -webkit-overflow-scrolling:touch;
+  scrollbar-width:thin;
 }
 .nav-tab{
   height:100%;
@@ -639,6 +643,8 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   min-height:calc(100vh - var(--topbar-h) - var(--nav-h));
   overflow:visible;
 }
+/* Keep portfolio art anchored to the top (shared .tab-stage uses center). */
+.portfolio-stage{ background-position:center top; }
 .auth-stage{
   position:relative;
   margin:0;
