@@ -1756,11 +1756,45 @@ def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_curr
 
 
 # Funding is sourced strictly from the live broker account now — manual
-# deposit/withdrawal tracking has been removed. This is the single, exact
-# message shown when a Box allocation cannot be backed by verified broker cash.
+# deposit/withdrawal tracking has been removed. Allocation cannot exceed
+# verified broker cash (minus capital already reserved by other bots).
+ALPACA_DEPOSIT_URL = "https://alpaca.markets/"
+OKX_DEPOSIT_URL = "https://www.okx.com/"
+
+
+def _insufficient_funds_detail(broker: str | None = None) -> dict:
+    """Structured 400 payload so the UI can show a dismissible deposit modal."""
+    b = (broker or "alpaca").lower()
+    if b == "okx":
+        return {
+            "code": "insufficient_broker_funds",
+            "broker": "okx",
+            "message": (
+                "Insufficient funds in your OKX broker account. Please allocate only "
+                "the cash currently available, or deposit additional funds at OKX.com, "
+                "then return here to continue trading."
+            ),
+            "deposit_url": OKX_DEPOSIT_URL,
+            "deposit_label": "OKX.com",
+        }
+    return {
+        "code": "insufficient_broker_funds",
+        "broker": "alpaca",
+        "message": (
+            "Insufficient funds in your Alpaca broker account. Please allocate only "
+            "the cash currently available, or deposit additional funds at Alpaca.com, "
+            "then return here to continue trading."
+        ),
+        "deposit_url": ALPACA_DEPOSIT_URL,
+        "deposit_label": "Alpaca.com",
+    }
+
+
+# Kept for any log/legacy references; UI prefers the structured detail above.
 INSUFFICIENT_FUNDS_MSG = (
-    "Insufficient funds in broker's account. Please make a deposit via your "
-    "broker Alpaca or OKX before recording an allocation."
+    "Insufficient funds in your broker account. Please allocate only available "
+    "broker funds, or deposit more at Alpaca.com / OKX.com, then return here to "
+    "continue trading."
 )
 
 
@@ -1888,7 +1922,7 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
             and (b.broker or u.active_broker or "alpaca").lower() == broker_selected
         )
         if funds > (available - already_allocated) + 1e-6:
-            raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
+            raise HTTPException(status_code=400, detail=_insufficient_funds_detail(broker_selected))
 
     _validate_cash_account_strategy_allocation(u, broker_selected, strategy, funds)
 
@@ -2082,7 +2116,7 @@ async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_
             and (b.broker or u.active_broker or "alpaca").lower() == bot_broker
         )
         if new_funds > (available - others_allocated) + 1e-6:
-            raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
+            raise HTTPException(status_code=400, detail=_insufficient_funds_detail(bot_broker))
 
     strategy = (bot.low_balance_strategy or "standard").lower()
     _validate_cash_account_strategy_allocation(u, bot_broker, strategy, new_funds)

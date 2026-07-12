@@ -56,13 +56,17 @@ async function api(path, options = {}) {
   let data = null;
   try { data = await resp.json(); } catch (_) {}
   if (!resp.ok) {
-    const detail = formatApiDetail(data && data.detail);
+    const rawDetail = data && data.detail;
+    const detail = formatApiDetail(rawDetail);
     // Expired/missing session while the user still appears logged in → re-auth.
     if (resp.status === 401 && USER && path !== "/auth/login" && path !== "/auth/signup") {
       forceLogout(detail || "Session expired — please sign in again.");
       throw new Error(detail || "Session expired — please sign in again.");
     }
-    throw new Error(detail || `Error triggered (${resp.status})`);
+    const err = new Error(detail || `Error triggered (${resp.status})`);
+    err.status = resp.status;
+    err.detail = rawDetail;
+    throw err;
   }
   return data;
 }
@@ -1614,7 +1618,10 @@ async function createBot() {
     updateBotLimitUI();
     await refreshUserData();
     await loadBots();
-  } catch (e) { if (!_forcingLogout) toast(e, "error"); }
+  } catch (e) {
+    if (showInsufficientFundsModal(e)) return;
+    if (!_forcingLogout) toast(e, "error");
+  }
 }
 
 async function loadBots() {
@@ -1764,8 +1771,48 @@ async function updateBotFunds(id) {
     // Keep the portfolio highlights/metrics in sync if that tab is mounted.
     const pv = document.getElementById("view-portfolio");
     if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
-  } catch (e) { toast(e, "error"); }
+  } catch (e) {
+    if (showInsufficientFundsModal(e)) return;
+    toast(e, "error");
+  }
 }
+
+function isInsufficientFundsError(err) {
+  const d = err && err.detail;
+  if (d && typeof d === "object" && d.code === "insufficient_broker_funds") return true;
+  const msg = String((err && err.message) || err || "");
+  return /insufficient funds/i.test(msg);
+}
+
+function showInsufficientFundsModal(err) {
+  if (!isInsufficientFundsError(err)) return false;
+  const d = (err && err.detail && typeof err.detail === "object") ? err.detail : {};
+  const broker = (d.broker || (USER && USER.active_broker) || "alpaca").toLowerCase();
+  const isOkx = broker === "okx";
+  const body = document.getElementById("insufficient-funds-body");
+  const link = document.getElementById("insufficient-funds-link");
+  const modal = document.getElementById("insufficient-funds-modal");
+  if (!modal) return false;
+  if (body) {
+    body.textContent = d.message || (
+      `Insufficient funds in your ${isOkx ? "OKX" : "Alpaca"} broker account. ` +
+      `Please allocate only the cash currently available, or deposit additional funds ` +
+      `at ${isOkx ? "OKX.com" : "Alpaca.com"}, then return here to continue trading.`
+    );
+  }
+  if (link) {
+    link.href = d.deposit_url || (isOkx ? "https://www.okx.com/" : "https://alpaca.markets/");
+    link.textContent = d.deposit_label || (isOkx ? "OKX.com" : "Alpaca.com");
+  }
+  modal.classList.remove("hidden");
+  return true;
+}
+
+function closeInsufficientFundsModal() {
+  const modal = document.getElementById("insufficient-funds-modal");
+  if (modal) modal.classList.add("hidden");
+}
+window.closeInsufficientFundsModal = closeInsufficientFundsModal;
 
 async function toggleBot(id) {
   try { await api(`/bots/${id}/toggle`, { method: "POST" }); await loadBots(); } catch (e) { toast(e, "error"); }

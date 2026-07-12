@@ -617,6 +617,25 @@
   </main>
 </div>
 
+<div id="insufficient-funds-modal" class="modal-bg hidden" role="dialog" aria-modal="true" aria-labelledby="insufficient-funds-title">
+  <div class="modal">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
+      <div class="slbl" id="insufficient-funds-title" style="margin:0">Insufficient broker funds</div>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="closeInsufficientFundsModal()"
+              aria-label="Close" style="font-size:18px;padding:4px 8px;line-height:1">✕</button>
+    </div>
+    <p id="insufficient-funds-body" style="color:var(--t2);margin:0 0 16px;font-size:13px;line-height:1.6"></p>
+    <p style="margin:0 0 18px;font-size:13px;line-height:1.55;color:var(--t2)">
+      Deposit funds:
+      <a id="insufficient-funds-link" href="https://alpaca.markets/" target="_blank" rel="noopener noreferrer"
+         style="color:var(--blue);font-weight:700;text-decoration:underline">Alpaca.com</a>
+    </p>
+    <div style="display:flex;justify-content:flex-end">
+      <button type="button" class="btn btn-primary" onclick="closeInsufficientFundsModal()">Got it</button>
+    </div>
+  </div>
+</div>
+
 <div id="verify-modal" class="modal-bg hidden">
   <div class="modal">
     <div class="slbl">Enter Verification Code</div>
