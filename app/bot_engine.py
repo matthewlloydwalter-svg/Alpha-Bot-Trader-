@@ -506,6 +506,8 @@ def _close_scattershot_basket(db: Session, owner: User, bot: Bot, reason: str) -
     total_gain = 0.0
     total_notional = 0.0
     closed_symbols: list[str] = []
+    failed_symbols: list[str] = []
+    remaining_legs: list[dict] = []
     for leg in legs:
         sym = leg.get("ticker")
         qty = float(leg.get("qty") or 0)
@@ -513,7 +515,16 @@ def _close_scattershot_basket(db: Session, owner: User, bot: Bot, reason: str) -
         if not sym or qty <= 0:
             continue
         price = _resolve_leg_exit_price(db, owner, bot, sym) or entry
-        order = _liquidate(owner, bot.broker, sym, bot=bot)
+        try:
+            order = _liquidate(owner, bot.broker, sym, bot=bot)
+        except Exception as e:
+            failed_symbols.append(sym)
+            remaining_legs.append(leg)
+            _log(db, owner.id, f"[SCATTER-SHOT] SELL {sym} failed: {e}", "ERROR")
+            continue
+        if (order or {}).get("status") == "no_position" and qty > 0:
+            # Treat as closed at broker (already flat) — clear the leg locally.
+            order = {"order_id": None, "status": "no_position"}
         gain = (price - entry) * qty
         notional = round(qty * price, 6)
         total_gain += gain
@@ -522,10 +533,30 @@ def _close_scattershot_basket(db: Session, owner: User, bot: Bot, reason: str) -
         db.add(Trade(owner_id=owner.id, bot_id=bot.id, bot_uuid=bot.uuid, ticker=sym,
                      side="sell", qty=qty, notional=notional, price=price,
                      broker=bot.broker, mode=_bot_trading_mode(owner, bot),
-                     broker_order_id=order["order_id"], status=order["status"]))
+                     broker_order_id=order.get("order_id"), status=order.get("status")))
         _log(db, owner.id,
              f"[SCATTER-SHOT] SELL {qty:.6f} {sym} @ {price:.4f} ({reason}). Leg P&L: {gain:+.2f}.",
              "WARNING" if gain < 0 else "INFO")
+
+    if failed_symbols:
+        # Keep remaining legs in strategy state; do not mark the whole basket flat.
+        state = _load_strategy_state(bot) or {}
+        state["legs"] = remaining_legs
+        _save_strategy_state(bot, state)
+        bot.last_pattern_summary = (
+            f"Scattershot partial exit ({reason}) — failed: {', '.join(failed_symbols)}"
+        )
+        if closed_symbols:
+            bot.realized_pnl = (bot.realized_pnl or 0) + total_gain
+            bot.trade_count = (bot.trade_count or 0) + len(closed_symbols)
+        db.commit()
+        _emit_portfolio(owner.id)
+        return {
+            "action": "WAIT",
+            "reason": "Partial scattershot exit — some legs still open.",
+            "closed": closed_symbols,
+            "failed": failed_symbols,
+        }
 
     bot.realized_pnl = (bot.realized_pnl or 0) + total_gain
     bot.trade_count = (bot.trade_count or 0) + len(closed_symbols)
@@ -689,12 +720,27 @@ def _run_scattershot_cycle(db: Session, bot: Bot) -> dict:
     # so we never open a duplicate basket on top of orphan holdings.
     if bot.in_position and not legs:
         symbols = [p.strip() for p in (bot.ticker or "").split(",") if p.strip()]
+        failed: list[str] = []
         for sym in symbols:
             try:
                 _liquidate(owner, bot.broker, sym, bot=bot)
                 _log(db, owner.id, f"[SCATTER-SHOT] Reconcile liquidate {sym}.", "WARNING")
             except Exception as e:
+                failed.append(sym)
                 _log(db, owner.id, f"[SCATTER-SHOT] Reconcile liquidate {sym} failed: {e}", "ERROR")
+        # Fail closed: do not clear local state while broker liquidations failed.
+        if failed:
+            bot.last_pattern_summary = (
+                "Scattershot reconcile incomplete — still holding "
+                + ", ".join(failed)
+                + ". Will retry."
+            )
+            db.commit()
+            return {
+                "action": "WAIT",
+                "reason": "Scattershot reconcile could not liquidate all orphan symbols.",
+                "failed": failed,
+            }
         bot.in_position = False
         bot.shares_held = 0
         bot.avg_entry_price = None
@@ -917,6 +963,13 @@ def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: st
     # Cancel-then-close: never a naive fixed-qty sell, so open orders reserving
     # shares can't cause an "insufficient quantity" rejection.
     order = _liquidate(owner, bot.broker, ticker, bot=bot)
+    if (order or {}).get("status") == "no_position" and qty > 0:
+        # Broker says flat but we thought we held shares — fail closed so we
+        # don't write a fake SELL and wipe local state while unsure.
+        raise BrokerError(
+            f"Liquidation of {ticker} reported no_position while bot still tracked "
+            f"{qty} shares — refusing to clear local state."
+        )
     gain = (price - (bot.avg_entry_price or price)) * qty
     notional = round(qty * price, 6)
     bot.realized_pnl = (bot.realized_pnl or 0) + gain
@@ -1367,7 +1420,15 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
     # liquidate another bot's position — it simply waits. Cross-bot rotation is
     # opt-in via BOT_CAPITAL_ROTATION to prevent identity-confusing behaviour.
     buying_power = _get_buying_power(owner, bot.broker or "alpaca", bot=bot)
-    if buying_power is not None and buying_power < notional:
+    # Fail closed when we cannot read buying power — never enter blind on live/paper.
+    if buying_power is None:
+        db.commit()
+        result.update({
+            "action": "WAIT",
+            "reason": "Buying power unavailable from broker — entry deferred.",
+        })
+        return result
+    if buying_power < notional:
         if not CAPITAL_ROTATION_ENABLED:
             db.commit()
             result.update({"action": "WAIT",
@@ -1384,8 +1445,14 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
                            "reason": "Setup confirmed but capital fully deployed; no weaker position to rotate."})
             return result
         buying_power = _get_buying_power(owner, bot.broker or "alpaca", bot=bot)
-        if buying_power is not None:
-            notional = min(notional, round(buying_power * DEPLOY_FRACTION, 2))
+        if buying_power is None:
+            db.commit()
+            result.update({
+                "action": "WAIT",
+                "reason": "Buying power unavailable after rotation — entry deferred.",
+            })
+            return result
+        notional = min(notional, round(buying_power * DEPLOY_FRACTION, 2))
 
     # Never enter on a missing/zero price: it would record an in-position state
     # with 0 shares and a meaningless cost basis (and divide-by-zero math later).

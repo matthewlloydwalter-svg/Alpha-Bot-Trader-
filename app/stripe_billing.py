@@ -163,6 +163,31 @@ def resolve_allowed_price_id(
     return pid, plan, interval
 
 
+def customer_has_blocking_subscription(user) -> bool:
+    """
+    True when Stripe already has an open subscription for this customer.
+    Prefer live Stripe state so webhook lag cannot allow a second Checkout.
+    """
+    local_status = (getattr(user, "subscription_status", None) or "").lower()
+    local_sub = getattr(user, "stripe_subscription_id", None)
+    if local_sub and local_status not in {"", "canceled", "incomplete_expired"}:
+        return True
+
+    customer_id = getattr(user, "stripe_customer_id", None)
+    if not customer_id or not STRIPE_SECRET_KEY:
+        return False
+    try:
+        stripe = _client()
+        subs = stripe.Subscription.list(customer=customer_id, status="all", limit=20)
+        for sub in (subs.get("data") or []):
+            st = (sub.get("status") or "").lower()
+            if st in {"active", "trialing", "past_due", "unpaid", "incomplete"}:
+                return True
+    except Exception as exc:
+        logger.warning("Could not list Stripe subscriptions for customer %s: %s", customer_id, exc)
+    return False
+
+
 def create_checkout_session(
     user,
     *,
@@ -334,9 +359,21 @@ def sync_user_from_subscription(user, subscription: dict) -> None:
         plan, interval = resolve_plan_from_price_id(price_id)
         plan_level = plan_level_label(plan)
     else:
-        plan = meta.get("plan") or getattr(user, "subscription_plan", None) or "starter"
-        interval = meta.get("interval") or getattr(user, "subscription_interval", None) or "month"
-        plan_level = meta.get("plan_level") or plan_level_label(plan)
+        # Prefer explicit Stripe metadata. Never silently keep a paid plan when
+        # the price id is unknown and metadata has no plan (fail toward starter).
+        meta_plan = meta.get("plan")
+        if meta_plan:
+            plan = normalize_plan(meta_plan)
+            interval = meta.get("interval") or getattr(user, "subscription_interval", None) or "month"
+            plan_level = meta.get("plan_level") or plan_level_label(plan)
+        elif status in {"canceled", "unpaid", "incomplete_expired"}:
+            plan, interval, plan_level = "starter", "month", "Starter"
+        else:
+            logger.warning(
+                "Unrecognized Stripe price_id=%s for user_id=%s status=%s — defaulting plan to starter",
+                price_id, getattr(user, "id", None), status,
+            )
+            plan, interval, plan_level = "starter", "month", "Starter"
 
     period_end = _period_end_from_subscription(subscription)
 

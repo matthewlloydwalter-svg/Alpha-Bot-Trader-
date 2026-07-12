@@ -147,8 +147,14 @@ def alpaca_liquidate_position(client: TradingClient, symbol: str,
         # 3) Is there anything to close?
         try:
             pos = client.get_open_position(sym)
-        except AlpacaAPIError:
-            pos = None
+        except AlpacaAPIError as e:
+            msg = str(e).lower()
+            # Only treat genuine "no position" responses as flat — other API
+            # errors must fail closed so we never clear local state while shares remain.
+            if "not found" in msg or "404" in msg or "does not exist" in msg or "no position" in msg:
+                pos = None
+            else:
+                raise BrokerError(f"Alpaca position lookup failed for {sym}: {e}")
         if pos is None:
             return {"order_id": None, "status": "no_position", "symbol": sym,
                     "side": "sell", "qty": 0.0, "cancelled_orders": cancelled}

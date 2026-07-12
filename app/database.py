@@ -344,7 +344,8 @@ def _run_additive_migrations():
                     except Exception as e:
                         logger.debug("ticker NOT NULL relax skipped: %s", e)
     except Exception as e:
-        logger.warning("Additive migration skipped: %s", e)
+        logger.error("Additive migration failed: %s", e)
+        # Do not crash boot on non-critical migration issues, but make it loud.
 
 
 def _backfill_integrity():

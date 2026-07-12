@@ -261,13 +261,18 @@ def _bump_session_version(user: User) -> None:
     user.session_version = int(user.session_version or 0) + 1
 
 
+def _is_platform_admin(user: User) -> bool:
+    """Single source of truth for admin privileges (DB flag OR ADMIN_EMAILS)."""
+    return bool(user.is_admin or is_user_admin(user.email or ""))
+
+
 def _user_bot_limit(user: User) -> Optional[int]:
     """
     Max bots this user may create. None = unlimited.
     Admins are always unlimited. Paid plans map via subscription_plan;
     Starter uses FREE_BOT_LIMIT (default 1).
     """
-    if user.is_admin or is_user_admin(user.email or ""):
+    if _is_platform_admin(user):
         return None
     plan = normalize_plan(getattr(user, "subscription_plan", None))
     if plan != "starter":
@@ -279,6 +284,8 @@ def _user_bot_limit(user: User) -> Optional[int]:
 
 
 def _enforce_bot_create_limit(user: User, db: Session) -> None:
+    # Serialize concurrent creates for this account (Postgres; no-op-ish on SQLite).
+    db.query(User).filter(User.id == user.id).with_for_update().first()
     limit = _user_bot_limit(user)
     if limit is None:
         return
@@ -321,7 +328,7 @@ def _enforce_running_bot_limit(user: User, db: Session) -> int:
 
 
 def _user_plan_payload(user: User) -> dict:
-    is_admin = bool(user.is_admin or is_user_admin(user.email or ""))
+    is_admin = _is_platform_admin(user)
     plan = normalize_plan(getattr(user, "subscription_plan", None))
     end = getattr(user, "subscription_current_period_end", None)
     from app.support_routing import support_payload_for_user
@@ -590,8 +597,7 @@ def billing_checkout(
     if u.is_admin or is_user_admin(u.email or ""):
         raise HTTPException(status_code=400, detail="Admin accounts already have unlimited access.")
 
-    status = (getattr(u, "subscription_status", None) or "").lower()
-    if getattr(u, "stripe_subscription_id", None) and status in {"active", "trialing", "past_due"}:
+    if stripe_billing.customer_has_blocking_subscription(u):
         raise HTTPException(
             status_code=400,
             detail="You already have an active subscription. Use Manage billing to change or cancel your plan.",
@@ -775,8 +781,13 @@ def privacy_pane(request: Request):
 def admin_pane(request: Request, db: Session = Depends(get_db)):
     try:
         u = get_current_user_from_cookie(request, db)
-        if not u.is_admin:
+        if not _is_platform_admin(u):
             return RedirectResponse(url="/dashboard/portfolio")
+        # Keep DB flag in sync with ADMIN_EMAILS so /auth/me matches gate checks.
+        if not u.is_admin and is_user_admin(u.email or ""):
+            u.is_admin = True
+            db.add(u)
+            db.commit()
         return templates.TemplateResponse("admin.html", {"request": request, "PLATFORM_NAME": PLATFORM_NAME, "ASSET_VERSION": _asset_version()})
     except Exception:
         return RedirectResponse(url="/login?next=/admin", status_code=303)
@@ -834,11 +845,15 @@ def login_endpoint(body: AuthModel, response: Response, request: Request, db: Se
         raise HTTPException(status_code=400, detail="Invalid credential combination supplied.")
         
     _issue_session(response, request, user)
+    if _is_platform_admin(user) and not user.is_admin:
+        user.is_admin = True
+        db.add(user)
+        db.commit()
 
     return {
         "id": user.id,
         "email": user.email,
-        "is_admin": user.is_admin,
+        "is_admin": _is_platform_admin(user),
         "email_verified": user.email_verified,
         "trading_mode": user.trading_mode or "paper",
         "active_broker": user.active_broker or "alpaca",
@@ -851,12 +866,16 @@ def login_endpoint(body: AuthModel, response: Response, request: Request, db: Se
 
 @app.get("/auth/me")
 def current_user_endpoint(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    if _is_platform_admin(u) and not u.is_admin:
+        u.is_admin = True
+        db.add(u)
+        db.commit()
     limit = _user_bot_limit(u)
     bot_count = db.query(Bot).filter(Bot.owner_id == u.id).count()
     return {
         "id": u.id,
         "email": u.email,
-        "is_admin": u.is_admin,
+        "is_admin": _is_platform_admin(u),
         "email_verified": u.email_verified,
         "trading_mode": u.trading_mode or "paper",
         "active_broker": u.active_broker or "alpaca",
@@ -1171,8 +1190,7 @@ def get_trades_ledger(u: User = Depends(get_current_user_from_cookie), db: Sessi
 
 @app.get("/admin/stats")
 def admin_stats(request: Request, db: Session = Depends(get_db)):
-    u = get_current_user_from_cookie(request, db)
-    if not u.is_admin: raise HTTPException(status_code=403)
+    _require_admin(request, db)
     return {
         "total_users": db.query(User).count(),
         "verified_users": db.query(User).filter(User.email_verified == True).count(),
@@ -1183,10 +1201,9 @@ def admin_stats(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/admin/users")
 def admin_users_list(request: Request, db: Session = Depends(get_db)):
-    u = get_current_user_from_cookie(request, db)
-    if not u.is_admin: raise HTTPException(status_code=403)
+    _require_admin(request, db)
     users = db.query(User).all()
-    return [{"email": x.email, "is_admin": x.is_admin, "email_verified": x.email_verified} for x in users]
+    return [{"email": x.email, "is_admin": _is_platform_admin(x), "email_verified": x.email_verified} for x in users]
 
 
 @app.get("/system/logs")
@@ -1867,6 +1884,10 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
         db.rollback()
         logger.exception("bot create failed for user %s", u.id)
         raise HTTPException(status_code=500, detail=f"Could not create bot: {e}")
+    # Belt-and-suspenders if concurrent creates raced past the create-count check.
+    paused = _enforce_running_bot_limit(u, db)
+    if paused:
+        db.commit()
     db.refresh(new_bot)
     logger.info("[BOT CREATED] id=%s ticker=%s auto_select=%s broker=%s tf=%s funds=%s",
                 new_bot.id, new_bot.ticker, new_bot.auto_select, new_bot.broker,
@@ -2090,8 +2111,12 @@ class AIProposalModel(BaseModel):
 
 def _require_admin(request: Request, db: Session) -> User:
     u = get_current_user_from_cookie(request, db)
-    if not u.is_admin:
+    if not _is_platform_admin(u):
         raise HTTPException(status_code=403, detail="Admin access required.")
+    if not u.is_admin:
+        u.is_admin = True
+        db.add(u)
+        db.commit()
     return u
 
 
