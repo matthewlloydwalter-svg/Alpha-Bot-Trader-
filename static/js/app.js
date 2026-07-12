@@ -807,6 +807,10 @@ function currentTradingMode() {
   return (USER && USER.trading_mode) || "paper";
 }
 
+function currentBroker() {
+  return ((USER && USER.active_broker) || "alpaca").toLowerCase() === "okx" ? "okx" : "alpaca";
+}
+
 function syncModeSwitchButtons() {
   const m = currentTradingMode();
   const isLive = m === "live";
@@ -814,6 +818,23 @@ function syncModeSwitchButtons() {
   const hint = isLive ? "Switch to Paper trading" : "Switch to Live trading";
   const colorClass = isLive ? "badge-red" : "badge-green";
   document.querySelectorAll("[data-mode-switch]").forEach((el) => {
+    el.className = `mode-switch-btn badge ${colorClass}`;
+    el.title = hint;
+    el.setAttribute("aria-label", hint);
+    const cur = el.querySelector(".mode-switch-current");
+    const tip = el.querySelector(".mode-switch-hint");
+    if (cur) cur.textContent = label;
+    if (tip) tip.textContent = hint;
+  });
+}
+
+function syncBrokerSwitchButtons() {
+  const b = currentBroker();
+  const isOkx = b === "okx";
+  const label = isOkx ? "OKX" : "Alpaca";
+  const hint = isOkx ? "Switch to Alpaca broker" : "Switch to OKX broker";
+  const colorClass = isOkx ? "badge-purple" : "badge-blue";
+  document.querySelectorAll("[data-broker-switch]").forEach((el) => {
     el.className = `mode-switch-btn badge ${colorClass}`;
     el.title = hint;
     el.setAttribute("aria-label", hint);
@@ -877,12 +898,16 @@ function renderPortfolioModeIndicator() {
 }
 
 function renderBrokerUI() {
-  const b = USER.active_broker || "alpaca";
-  document.getElementById("broker-badge").textContent = b === "alpaca" ? "Alpaca" : "OKX";
-  document.getElementById("broker-alpaca").classList.toggle("active", b === "alpaca");
-  document.getElementById("broker-okx").classList.toggle("active", b === "okx");
-  document.getElementById("alpaca-keys-card").classList.toggle("hidden", b !== "alpaca");
-  document.getElementById("okx-keys-card").classList.toggle("hidden", b !== "okx");
+  const b = currentBroker();
+  syncBrokerSwitchButtons();
+  const alpacaBtn = document.getElementById("broker-alpaca");
+  const okxBtn = document.getElementById("broker-okx");
+  if (alpacaBtn) alpacaBtn.classList.toggle("active", b === "alpaca");
+  if (okxBtn) okxBtn.classList.toggle("active", b === "okx");
+  const alpacaCard = document.getElementById("alpaca-keys-card");
+  const okxCard = document.getElementById("okx-keys-card");
+  if (alpacaCard) alpacaCard.classList.toggle("hidden", b !== "alpaca");
+  if (okxCard) okxCard.classList.toggle("hidden", b !== "okx");
 
   // Rename Markets ↔ Crypto tab and view header based on active broker
   const marketsTab = document.getElementById("markets-nav-tab");
@@ -898,21 +923,40 @@ function renderBrokerUI() {
 }
 
 function renderOnboarding() {
-  const b = (USER && USER.active_broker) || "alpaca";
+  const b = currentBroker();
   const alp = document.getElementById("onboarding-alpaca");
   const okx = document.getElementById("onboarding-okx");
   if (alp) alp.classList.toggle("hidden", b !== "alpaca");
   if (okx) okx.classList.toggle("hidden", b !== "okx");
 }
 
+function toggleBroker() {
+  const next = currentBroker() === "okx" ? "alpaca" : "okx";
+  return setBroker(next);
+}
+
 async function setBroker(broker) {
+  const next = (broker || "").toLowerCase() === "okx" ? "okx" : "alpaca";
+  if (currentBroker() === next) return;
   try {
-    const data = await api("/broker/switch", { method: "POST", body: JSON.stringify({ broker }) });
+    const data = await api("/broker/switch", { method: "POST", body: JSON.stringify({ broker: next }) });
     USER.active_broker = data.active_broker;
     renderBrokerUI();
     syncScattershotOption();
     renderMarketOverlay();
-    toast(`Switched to ${broker}`, "success");
+    const pv = document.getElementById("view-portfolio");
+    if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
+    const bv = document.getElementById("view-bots");
+    if (bv && !bv.classList.contains("hidden")) loadBots();
+    const av = document.getElementById("view-assets");
+    if (av && !av.classList.contains("hidden") && typeof loadBrokerAccount === "function") {
+      loadBrokerAccount();
+    }
+    const sv = document.getElementById("view-stocks");
+    if (sv && !sv.classList.contains("hidden") && typeof loadStocks === "function") {
+      loadStocks();
+    }
+    toast(`Switched to ${next === "okx" ? "OKX" : "Alpaca"} broker`, "success");
   } catch (e) { toast(e, "error"); }
 }
 
