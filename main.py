@@ -706,7 +706,7 @@ def admin_pane(request: Request, db: Session = Depends(get_db)):
             return RedirectResponse(url="/dashboard/portfolio")
         return templates.TemplateResponse("admin.html", {"request": request, "PLATFORM_NAME": PLATFORM_NAME, "ASSET_VERSION": _asset_version()})
     except Exception:
-        return _html_page(request, "index.html")
+        return RedirectResponse(url="/login?next=/admin", status_code=303)
 
 @app.post("/auth/signup")
 def register_endpoint(body: AuthModel, response: Response, request: Request, db: Session = Depends(get_db)):
@@ -1336,6 +1336,22 @@ def market_dashboard(exchange: str, symbol: str, timeframe: str = "1h", limit: i
 
     paper = (u.trading_mode or "paper") == "paper"
     creds = resolve_credentials(u, ex, paper)
+
+    # Equity charts need Alpaca credentials. Fall back to platform data keys
+    # (same pattern as the market poller) so Markets works before a user saves keys.
+    if ex == "alpaca" and not (creds.get("alpaca_key") and creds.get("alpaca_secret")):
+        env_key = os.getenv("ALPACA_DATA_KEY") or os.getenv("ALPACA_API_KEY")
+        env_secret = os.getenv("ALPACA_DATA_SECRET") or os.getenv("ALPACA_SECRET_KEY")
+        if env_key and env_secret:
+            creds = {**creds, "alpaca_key": env_key, "alpaca_secret": env_secret}
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Add your Alpaca API keys in Account to view equity market charts "
+                    "(or ask the platform admin to set ALPACA_DATA_KEY / ALPACA_DATA_SECRET)."
+                ),
+            )
 
     try:
         analysis = get_market_analysis(

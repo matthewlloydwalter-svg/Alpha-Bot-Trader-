@@ -1,6 +1,10 @@
 async function loadAdminData() {
     try {
         const statsRes = await fetch('/admin/stats', { credentials: "include" });
+        if (statsRes.status === 401) {
+            location.href = '/login?next=/admin';
+            return;
+        }
         if (!statsRes.ok) throw new Error('Failed to retrieve system status.');
         const stats = await statsRes.json();
 
@@ -18,6 +22,10 @@ async function loadAdminData() {
         }
 
         const usersRes = await fetch('/admin/users', { credentials: "include" });
+        if (usersRes.status === 401) {
+            location.href = '/login?next=/admin';
+            return;
+        }
         if (!usersRes.ok) throw new Error('Failed to retrieve active database rows.');
         const users = await usersRes.json();
 
@@ -77,6 +85,10 @@ async function aiApi(path, options = {}) {
   });
   let data = null;
   try { data = await resp.json(); } catch (_) {}
+  if (resp.status === 401) {
+    location.href = '/login?next=/admin';
+    throw new Error('Session expired — please sign in again.');
+  }
   if (!resp.ok) throw new Error((data && data.detail) ? data.detail : `Error (${resp.status})`);
   return data;
 }

@@ -56,20 +56,54 @@ async function api(path, options = {}) {
   let data = null;
   try { data = await resp.json(); } catch (_) {}
   if (!resp.ok) {
-    throw new Error((data && data.detail) ? data.detail : `Error triggered (${resp.status})`);
+    const detail = formatApiDetail(data && data.detail);
+    // Expired/missing session while the user still appears logged in → re-auth.
+    if (resp.status === 401 && USER && path !== "/auth/login" && path !== "/auth/signup") {
+      forceLogout(detail || "Session expired — please sign in again.");
+      throw new Error(detail || "Session expired — please sign in again.");
+    }
+    throw new Error(detail || `Error triggered (${resp.status})`);
   }
   return data;
 }
 
+function formatApiDetail(detail) {
+  if (detail == null || detail === "") return null;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((d) => {
+      if (typeof d === "string") return d;
+      if (d && typeof d === "object") return d.msg || d.message || JSON.stringify(d);
+      return String(d);
+    }).filter(Boolean).join("; ") || null;
+  }
+  if (typeof detail === "object") {
+    if (detail.msg || detail.message) return detail.msg || detail.message;
+    try { return JSON.stringify(detail); } catch (_) { return String(detail); }
+  }
+  return String(detail);
+}
+
+let _forcingLogout = false;
+function forceLogout(reason) {
+  if (_forcingLogout) return;
+  _forcingLogout = true;
+  USER = null;
+  try { toast(reason || "Session expired — please sign in again.", "error"); } catch (_) {}
+  // Leave a beat so the toast can paint, then hard-navigate to login.
+  setTimeout(() => { location.href = "/login"; }, 80);
+}
+
 function toast(msg, type = "") {
-  if (typeof msg === 'object' && msg !== null) {
-    msg = msg.detail || msg.message || JSON.stringify(msg);
+  if (typeof msg === "object" && msg !== null) {
+    if (msg instanceof Error) msg = msg.message;
+    else msg = formatApiDetail(msg.detail) || msg.message || JSON.stringify(msg);
   }
   const wrap = document.getElementById("toast-container");
   if (!wrap) return;
   const el = document.createElement("div");
   el.className = "toast " + type;
-  el.textContent = msg;
+  el.textContent = String(msg == null ? "" : msg);
   wrap.appendChild(el);
   setTimeout(() => el.remove(), 4000);
 }
@@ -319,6 +353,7 @@ async function handleLogin(e) {
   try {
     USER = await api("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
     toast("Welcome back!", "success");
+    if (await redirectAfterAuthIfNeeded()) return;
     await enterApp();
   } catch (err) { toast(err, "error"); }
 }
@@ -340,8 +375,31 @@ async function handleRegister(e) {
       body: JSON.stringify({ email, password, confirm_password: confirm, agreed_to_tos: true })
     });
     toast("Account setup successful!", "success");
+    if (await redirectAfterAuthIfNeeded()) return;
     await enterApp();
   } catch (err) { toast(err, "error"); }
+}
+
+/** Honor ?next=/admin (and similar) after login/signup. Returns true if navigated away. */
+async function redirectAfterAuthIfNeeded() {
+  let next = null;
+  try {
+    next = new URLSearchParams(location.search).get("next");
+  } catch (_) {}
+  if (!next) {
+    try { next = sessionStorage.getItem("post_login_path"); } catch (_) {}
+  }
+  if (!next) return false;
+  const path = normalizePath(next);
+  if (path === "/admin") {
+    if (USER && USER.is_admin) {
+      try { sessionStorage.removeItem("post_login_path"); } catch (_) {}
+      location.href = "/admin";
+      return true;
+    }
+    return false;
+  }
+  return false;
 }
 
 function openTosModal(e) {
@@ -392,6 +450,11 @@ async function enterApp() {
   if (isAuthPath(location.pathname) || !tab) {
     try {
       const saved = sessionStorage.getItem("post_login_path");
+      if (saved && normalizePath(saved) === "/admin" && USER && USER.is_admin) {
+        sessionStorage.removeItem("post_login_path");
+        location.href = "/admin";
+        return;
+      }
       if (saved) {
         sessionStorage.removeItem("post_login_path");
         tab = tabFromPath(saved) || "portfolio";
@@ -513,6 +576,12 @@ function setupRouter() {
     window.addEventListener("popstate", () => {
       if (!USER) {
         const path = normalizePath(location.pathname);
+        if (isDashboardPath(path) || path === "/admin") {
+          try { sessionStorage.setItem("post_login_path", path); } catch (_) {}
+          history.replaceState({ auth: "login" }, "", "/login");
+          toggleAuthMode(true);
+          return;
+        }
         toggleAuthMode(path !== "/signup");
         return;
       }
@@ -576,6 +645,41 @@ function updatePlanUI() {
 
   const acctBtn = document.getElementById("account-upgrade-btn");
   if (acctBtn) acctBtn.classList.toggle("hidden", !canUpgrade);
+
+  updateBotLimitUI();
+}
+
+function botsAtLimit() {
+  if (!USER) return false;
+  if (USER.bot_limit == null) return false;
+  return Number(USER.bot_count || 0) >= Number(USER.bot_limit);
+}
+
+function updateBotLimitUI() {
+  const btn = document.getElementById("new-bot-btn");
+  const hint = document.getElementById("bots-limit-hint");
+  const atLimit = botsAtLimit();
+  const limit = USER && USER.bot_limit;
+  const count = USER ? Number(USER.bot_count || 0) : 0;
+  if (btn) {
+    btn.disabled = atLimit;
+    btn.title = atLimit
+      ? `Plan limit reached (${count}/${limit}). Upgrade to create more.`
+      : "Create a new bot";
+  }
+  if (hint) {
+    if (USER && limit != null) {
+      hint.textContent = atLimit
+        ? `${count} / ${limit} bots · limit reached — upgrade for more`
+        : `${count} / ${limit} bots used`;
+      hint.classList.remove("hidden");
+    } else if (USER) {
+      hint.textContent = "Unlimited bots";
+      hint.classList.remove("hidden");
+    } else {
+      hint.classList.add("hidden");
+    }
+  }
 }
 
 async function openBillingPortal() {
@@ -736,10 +840,10 @@ async function triggerEmailVerification() {
     if (res && (res.email_not_configured || res.smtp_not_configured)) {
       const vText = document.getElementById("verification-text");
       if (vText) {
-        vText.textContent = (res.detail) || "Email sending is not configured on this server yet (set RESEND_API_KEY). Verification is optional — you can still use the platform.";
+        vText.textContent = (res.detail) || "Email sending is not configured on this server yet (set RESEND_API_KEY). Live trading still requires a verified email once email delivery is available.";
         vText.style.color = "var(--amber, #f59e0b)";
       }
-      toast("Email not configured on this server — verification is optional.", "");
+      toast("Email delivery is not configured — Live trading still requires verification when email is available.", "");
     } else {
       toast("Verification code sent to your inbox!", "success");
       document.getElementById("verify-modal").classList.remove("hidden");
@@ -867,6 +971,13 @@ async function loadPortfolioForMode(mode) {
     ]);
   } catch (e) {
     if (msg) { msg.classList.remove("hidden"); msg.textContent = `⚠ ${e.message}`; }
+    const tEl = document.getElementById("pf-total-value");
+    if (tEl) tEl.textContent = "—";
+    const pnlEl = document.getElementById("pf-total-pnl");
+    if (pnlEl) {
+      pnlEl.textContent = "—";
+      pnlEl.className = "pf-total-pnl";
+    }
     return;
   }
   PF_DATA = { perf: perf || {}, bots: Array.isArray(bots) ? bots : (bots && bots.bots) || [], mode };
@@ -1234,6 +1345,12 @@ function _attachLowBalanceHover() {
 try { _attachLowBalanceHover(); } catch (e) { /* non-fatal */ }
 
 function showCreateBotModal() {
+  if (botsAtLimit()) {
+    const limit = USER.bot_limit;
+    const count = Number(USER.bot_count || 0);
+    toast(`Plan limit reached (${count}/${limit}). Upgrade your plan to create more bots.`, "error");
+    return;
+  }
   resetCreateBotForm();
   syncScattershotOption();
   updateLowBalanceStrategyHint();
@@ -1301,6 +1418,7 @@ async function createBot() {
     hideCreateBotModal();
     resetCreateBotForm();
     toast(launchedAuto ? "Autonomous bot launched — it will scan all markets" : "Bot launched", "success");
+    await refreshUserData();
     await loadBots();
   } catch (e) { toast(e, "error"); }
 }
@@ -1465,6 +1583,7 @@ async function deleteBot(id) {
     const res = await api(`/bots/${id}`, { method: "DELETE" });
     const sold = res && res.liquidation && res.liquidation.action === "SELL";
     toast(sold ? "Position sold and bot deleted" : "Bot deleted", "success");
+    await refreshUserData();
     await loadBots();
     const pv = document.getElementById("view-portfolio");
     if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
@@ -1916,7 +2035,7 @@ async function loadTradeHistory() {
         <td style="color:var(--t2)">${new Date(/Z|[+-]\d{2}:?\d{2}$/.test(t.created_at) ? t.created_at : t.created_at + "Z").toLocaleString()}</td>
         <td style="font-weight:600">${esc(t.bot_name || "—")}</td>
         <td style="font-weight:600">${esc(t.ticker)}</td>
-        <td><span class="badge ${t.side === 'buy' ? 'badge-green' : 'badge-red'}">${esc(t.side.toUpperCase())}</span></td>
+        <td><span class="badge ${t.side === 'buy' ? 'badge-green' : 'badge-red'}">${esc(String(t.side || "—").toUpperCase())}</span></td>
         <td>${qtyStr}</td>
         <td style="font-family:monospace">$${parseFloat(t.price || 0).toFixed(2)}</td>
         <td><span class="badge badge-blue">${esc((t.mode || "paper").toUpperCase())}</span></td>
@@ -1980,13 +2099,19 @@ function renderNews() {
 
 (async function boot() {
   try {
+    // Preserve ?next=/admin across the auth screen when arriving logged out.
+    try {
+      const next = new URLSearchParams(location.search).get("next");
+      if (next) sessionStorage.setItem("post_login_path", normalizePath(next));
+    } catch (_) {}
     USER = await api("/auth/me");
+    if (await redirectAfterAuthIfNeeded()) return;
     await enterApp();
   } catch (_) {
     // Unauthenticated: show login/signup. Preserve deep-linked dashboard paths
     // so post-login restore works; AdSense stays off the public landing `/`.
     const path = normalizePath(location.pathname);
-    if (isDashboardPath(path)) {
+    if (isDashboardPath(path) || path === "/admin") {
       try { sessionStorage.setItem("post_login_path", path); } catch (_) {}
       history.replaceState({ auth: "login" }, "", "/login");
       toggleAuthMode(true);

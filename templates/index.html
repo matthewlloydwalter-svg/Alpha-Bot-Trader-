@@ -276,13 +276,16 @@
               <span>🤖 Trading Bots</span>
               <span id="bots-mode-badge" class="badge badge-green">● Paper</span>
             </div>
-            <button class="btn btn-primary btn-sm" onclick="showCreateBotModal()">+ New Bot</button>
+            <button class="btn btn-primary btn-sm" id="new-bot-btn" onclick="showCreateBotModal()">+ New Bot</button>
           </div>
           <div class="pf-summary-grid">
             <div class="pf-summary-metric">
               <div class="holo-lbl">Total Active Bots</div>
               <div class="holo-total-value" id="bots-header-count" style="font-size:28px">0</div>
-              <div class="holo-total-sub"><span id="bots-mode-sub" style="font-size:12px;color:var(--t2)">Showing your Paper account bots</span></div>
+              <div class="holo-total-sub">
+                <span id="bots-mode-sub" style="font-size:12px;color:var(--t2)">Showing your Paper account bots</span>
+                <span id="bots-limit-hint" class="hidden" style="display:block;font-size:11px;color:var(--t2);margin-top:4px"></span>
+              </div>
             </div>
           </div>
           <div class="pf-sticky-footer">
