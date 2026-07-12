@@ -96,10 +96,11 @@ def get_plan_level_by_email(email_address: str, db: "Session") -> str:
 
 def support_destination_email(plan_level: Optional[str]) -> str:
     """
-    Internal inbox for automated ticket routing:
-      Enterprise → vip-support@alphabotix.com
-      Growth/Pro → standard-support@alphabotix.com
-      Otherwise → general-support@alphabotix.com
+    Internal inbox for automated ticket routing (alphabotixtrading.com):
+      Enterprise → enterprise@…
+      Pro        → pro@…
+      Growth     → growth@…
+      Starter    → support@…
     """
     key = plan_key_from_level(plan_level)
     return SUPPORT_INBOX.get(key, SUPPORT_INBOX["starter"])
@@ -108,10 +109,10 @@ def support_destination_email(plan_level: Optional[str]) -> str:
 def support_mailto_for_plan(plan_level: Optional[str]) -> str:
     """
     Public mailto alias (Account → Contact Support):
-      Enterprise → enterprise@alphabotservices.com
-      Pro        → pro@alphabotservices.com
-      Growth     → growth@alphabotservices.com
-      Starter    → support@alphabotservices.com
+      Enterprise → enterprise@alphabotixtrading.com
+      Pro        → pro@alphabotixtrading.com
+      Growth     → growth@alphabotixtrading.com
+      Starter    → support@alphabotixtrading.com
     """
     key = plan_key_from_level(plan_level)
     return SUPPORT_MAILTO.get(key, SUPPORT_MAILTO["starter"])
