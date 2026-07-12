@@ -261,13 +261,18 @@ def _bump_session_version(user: User) -> None:
     user.session_version = int(user.session_version or 0) + 1
 
 
+def _is_platform_admin(user: User) -> bool:
+    """Single source of truth for admin privileges (DB flag OR ADMIN_EMAILS)."""
+    return bool(user.is_admin or is_user_admin(user.email or ""))
+
+
 def _user_bot_limit(user: User) -> Optional[int]:
     """
     Max bots this user may create. None = unlimited.
     Admins are always unlimited. Paid plans map via subscription_plan;
     Starter uses FREE_BOT_LIMIT (default 1).
     """
-    if user.is_admin or is_user_admin(user.email or ""):
+    if _is_platform_admin(user):
         return None
     plan = normalize_plan(getattr(user, "subscription_plan", None))
     if plan != "starter":
@@ -279,6 +284,8 @@ def _user_bot_limit(user: User) -> Optional[int]:
 
 
 def _enforce_bot_create_limit(user: User, db: Session) -> None:
+    # Serialize concurrent creates for this account (Postgres; no-op-ish on SQLite).
+    db.query(User).filter(User.id == user.id).with_for_update().first()
     limit = _user_bot_limit(user)
     if limit is None:
         return
@@ -321,7 +328,7 @@ def _enforce_running_bot_limit(user: User, db: Session) -> int:
 
 
 def _user_plan_payload(user: User) -> dict:
-    is_admin = bool(user.is_admin or is_user_admin(user.email or ""))
+    is_admin = _is_platform_admin(user)
     plan = normalize_plan(getattr(user, "subscription_plan", None))
     end = getattr(user, "subscription_current_period_end", None)
     from app.support_routing import support_payload_for_user
@@ -503,6 +510,7 @@ def checkout_success_pane(request: Request, db: Session = Depends(get_db), sessi
                 error = "This Checkout session does not belong to your account."
             elif session.get("payment_status") in {"paid", "no_payment_required"} or session.get("status") == "complete":
                 stripe_billing.sync_user_from_checkout_session(user, session)
+                _enforce_running_bot_limit(user, db)
                 db.add(user)
                 db.commit()
                 db.refresh(user)
@@ -590,8 +598,7 @@ def billing_checkout(
     if u.is_admin or is_user_admin(u.email or ""):
         raise HTTPException(status_code=400, detail="Admin accounts already have unlimited access.")
 
-    status = (getattr(u, "subscription_status", None) or "").lower()
-    if getattr(u, "stripe_subscription_id", None) and status in {"active", "trialing", "past_due"}:
+    if stripe_billing.customer_has_blocking_subscription(u):
         raise HTTPException(
             status_code=400,
             detail="You already have an active subscription. Use Manage billing to change or cancel your plan.",
@@ -677,9 +684,16 @@ def billing_confirm_checkout(
         raise HTTPException(status_code=403, detail="Checkout session does not belong to this account.")
     if session.get("payment_status") in {"paid", "no_payment_required"} or session.get("status") == "complete":
         stripe_billing.sync_user_from_checkout_session(u, session)
+        _enforce_running_bot_limit(u, db)
         db.add(u)
         db.commit()
-    return {"ok": True, **_user_plan_payload(u)}
+        return {"ok": True, "confirmed": True, **_user_plan_payload(u)}
+    return {
+        "ok": False,
+        "confirmed": False,
+        "detail": "Payment is still processing or incomplete.",
+        **_user_plan_payload(u),
+    }
 
 
 async def _handle_stripe_webhook(request: Request, db: Session):
@@ -775,8 +789,13 @@ def privacy_pane(request: Request):
 def admin_pane(request: Request, db: Session = Depends(get_db)):
     try:
         u = get_current_user_from_cookie(request, db)
-        if not u.is_admin:
+        if not _is_platform_admin(u):
             return RedirectResponse(url="/dashboard/portfolio")
+        # Keep DB flag in sync with ADMIN_EMAILS so /auth/me matches gate checks.
+        if not u.is_admin and is_user_admin(u.email or ""):
+            u.is_admin = True
+            db.add(u)
+            db.commit()
         return templates.TemplateResponse("admin.html", {"request": request, "PLATFORM_NAME": PLATFORM_NAME, "ASSET_VERSION": _asset_version()})
     except Exception:
         return RedirectResponse(url="/login?next=/admin", status_code=303)
@@ -832,13 +851,20 @@ def login_endpoint(body: AuthModel, response: Response, request: Request, db: Se
     user = db.query(User).filter(User.email == normalized_email).first()
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Invalid credential combination supplied.")
-        
+
+    # Evict any prior cookies (stolen session or other devices) on fresh login.
+    _bump_session_version(user)
+    if _is_platform_admin(user) and not user.is_admin:
+        user.is_admin = True
+    db.add(user)
+    db.commit()
+    db.refresh(user)
     _issue_session(response, request, user)
 
     return {
         "id": user.id,
         "email": user.email,
-        "is_admin": user.is_admin,
+        "is_admin": _is_platform_admin(user),
         "email_verified": user.email_verified,
         "trading_mode": user.trading_mode or "paper",
         "active_broker": user.active_broker or "alpaca",
@@ -851,12 +877,16 @@ def login_endpoint(body: AuthModel, response: Response, request: Request, db: Se
 
 @app.get("/auth/me")
 def current_user_endpoint(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    if _is_platform_admin(u) and not u.is_admin:
+        u.is_admin = True
+        db.add(u)
+        db.commit()
     limit = _user_bot_limit(u)
     bot_count = db.query(Bot).filter(Bot.owner_id == u.id).count()
     return {
         "id": u.id,
         "email": u.email,
-        "is_admin": u.is_admin,
+        "is_admin": _is_platform_admin(u),
         "email_verified": u.email_verified,
         "trading_mode": u.trading_mode or "paper",
         "active_broker": u.active_broker or "alpaca",
@@ -868,7 +898,20 @@ def current_user_endpoint(u: User = Depends(get_current_user_from_cookie), db: S
     }
 
 @app.post("/auth/logout")
-def logout_endpoint(response: Response, request: Request):
+def logout_endpoint(response: Response, request: Request, db: Session = Depends(get_db)):
+    # Invalidate the server-side session so a stolen cookie cannot be reused.
+    token = request.cookies.get("session_token")
+    if token:
+        payload = decode_session_token(token)
+        if payload:
+            try:
+                user = db.query(User).filter(User.id == int(payload["sub"])).first()
+                token_sv = int(payload.get("sv", 0) or 0)
+                if user and token_sv == int(user.session_version or 0):
+                    _bump_session_version(user)
+                    db.commit()
+            except Exception:
+                db.rollback()
     response.delete_cookie("session_token", samesite="lax", secure=_cookie_kwargs(request=request)["secure"])
     return {"success": True}
 
@@ -1171,8 +1214,7 @@ def get_trades_ledger(u: User = Depends(get_current_user_from_cookie), db: Sessi
 
 @app.get("/admin/stats")
 def admin_stats(request: Request, db: Session = Depends(get_db)):
-    u = get_current_user_from_cookie(request, db)
-    if not u.is_admin: raise HTTPException(status_code=403)
+    _require_admin(request, db)
     return {
         "total_users": db.query(User).count(),
         "verified_users": db.query(User).filter(User.email_verified == True).count(),
@@ -1183,10 +1225,9 @@ def admin_stats(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/admin/users")
 def admin_users_list(request: Request, db: Session = Depends(get_db)):
-    u = get_current_user_from_cookie(request, db)
-    if not u.is_admin: raise HTTPException(status_code=403)
+    _require_admin(request, db)
     users = db.query(User).all()
-    return [{"email": x.email, "is_admin": x.is_admin, "email_verified": x.email_verified} for x in users]
+    return [{"email": x.email, "is_admin": _is_platform_admin(x), "email_verified": x.email_verified} for x in users]
 
 
 @app.get("/system/logs")
@@ -1862,6 +1903,10 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
 
     db.add(new_bot)
     try:
+        # Keep the create-limit user lock through flush + running-limit enforce
+        # so concurrent creates cannot leave excess bots running.
+        db.flush()
+        _enforce_running_bot_limit(u, db)
         db.commit()
     except Exception as e:
         db.rollback()
@@ -1882,6 +1927,8 @@ async def toggle_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
     # Starting a bot must respect plan running limits (create limit alone is not enough
     # after a downgrade when older bots still exist).
     if not bot.running:
+        # Serialize concurrent start toggles for this account.
+        db.query(User).filter(User.id == u.id).with_for_update().first()
         limit = _user_bot_limit(u)
         if limit is not None:
             running_count = (
@@ -1914,8 +1961,10 @@ async def delete_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
     # whole real position — so we never orphan live shares at the broker when the
     # bot is removed. With real keys, a liquidation failure aborts the delete
     # (fail safe) rather than silently dropping the bot while shares remain.
+    # Also covers scattershot baskets whose legs live in strategy_state even when
+    # shares_held looks flat.
     liquidation = None
-    if bot.in_position and (bot.shares_held or 0) > 0:
+    if bot_engine.bot_needs_liquidation(bot):
         try:
             liquidation = bot_engine.liquidate_bot(bot.id, reason="bot deleted")
         except Exception as e:
@@ -1924,7 +1973,21 @@ async def delete_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
                 status_code=502,
                 detail=f"Could not sell this bot's holdings before deletion: {e}. "
                        f"The bot was NOT deleted so its shares are not orphaned — please retry.")
+        if (liquidation or {}).get("action") == "ERROR":
+            raise HTTPException(
+                status_code=409,
+                detail=(liquidation or {}).get("reason")
+                or "Could not liquidate safely — bot was NOT deleted. Retry in a moment.",
+            )
         db.expire_all()  # liquidate_bot committed the close in its own session
+        # Abort delete if scattershot (or other) unwind only partially succeeded.
+        bot_after = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
+        if bot_after and bot_engine.bot_needs_liquidation(bot_after):
+            raise HTTPException(
+                status_code=502,
+                detail="Could not fully unwind this bot's holdings before deletion. "
+                       "The bot was NOT deleted — please retry.",
+            )
 
     # Preserve the trade ledger when a bot is removed: every Trade (including the
     # liquidation sell just recorded) keeps its immutable bot_uuid for
@@ -1948,13 +2011,25 @@ async def liquidate_bot_endpoint(bot_id: int, u: User = Depends(get_current_user
     bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
-    if not bot.in_position or (bot.shares_held or 0) <= 0:
+    if not bot_engine.bot_needs_liquidation(bot):
         return {"status": "flat", "detail": "This bot is not holding any position to sell."}
     try:
         result = bot_engine.liquidate_bot(bot.id, reason="manual sell")
     except Exception as e:
         logger.error("Manual sell failed for bot %s: %s", bot_id, e)
         raise HTTPException(status_code=502, detail=f"Could not sell this bot's holdings: {e}")
+    if (result or {}).get("action") == "ERROR":
+        raise HTTPException(status_code=409, detail=(result or {}).get("reason") or "Liquidation failed.")
+    db.expire_all()
+    bot_after = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
+    if bot_after and bot_engine.bot_needs_liquidation(bot_after):
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Could not fully unwind this bot's holdings — some legs may still be open. "
+                "Please retry."
+            ),
+        )
     return {"status": "liquidated", "bot_id": bot_id, "details": result}
 
 @app.post("/bots/{bot_id}/funds")
@@ -2090,8 +2165,12 @@ class AIProposalModel(BaseModel):
 
 def _require_admin(request: Request, db: Session) -> User:
     u = get_current_user_from_cookie(request, db)
-    if not u.is_admin:
+    if not _is_platform_admin(u):
         raise HTTPException(status_code=403, detail="Admin access required.")
+    if not u.is_admin:
+        u.is_admin = True
+        db.add(u)
+        db.commit()
     return u
 
 

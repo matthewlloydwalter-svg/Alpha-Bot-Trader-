@@ -97,8 +97,14 @@ function forceLogout(reason) {
   // Preserve deep link so re-login returns the user to where they were.
   try {
     const path = normalizePath(location.pathname);
-    if (isDashboardPath(path) || path === "/admin") {
-      sessionStorage.setItem("post_login_path", path);
+    const full = path + (location.search || "");
+    if (
+      isDashboardPath(path)
+      || path === "/admin"
+      || path === "/checkout/success"
+      || path === "/upgrade-plans"
+    ) {
+      sessionStorage.setItem("post_login_path", full);
     }
   } catch (_) {}
   USER = null;
@@ -1716,7 +1722,9 @@ async function sellBot(id) {
   try {
     const res = await api(`/bots/${id}/liquidate`, { method: "POST" });
     if (res && res.status === "flat") toast(res.detail || "Nothing to sell — bot is flat", "");
-    else toast("Holdings sold — bot is now flat", "success");
+    else if (res && res.details && res.details.action === "WAIT") {
+      toast(res.details.reason || "Partial sell — some holdings may remain. Retry.", "error");
+    } else toast("Holdings sold — bot is now flat", "success");
     await loadBots();
     const pv = document.getElementById("view-portfolio");
     if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
@@ -1997,18 +2005,23 @@ function formatPrice(p, quote) {
 function renderDashChart(d) {
   const msg = document.getElementById("dash-chart-msg");
   const wrap = document.getElementById("dash-chart");
+  if (!wrap) return;
   if (typeof LightweightCharts === "undefined") {
-    msg.classList.remove("hidden");
-    msg.textContent = "Chart library unavailable (offline). Indicators below are still live.";
+    if (msg) {
+      msg.classList.remove("hidden");
+      msg.textContent = "Chart library unavailable (offline). Indicators below are still live.";
+    }
     return;
   }
   const candles = (d.candles || []).filter(c => c && c.time != null && c.close != null);
   if (!candles.length) {
-    msg.classList.remove("hidden");
-    msg.textContent = "No candle data available for this asset/timeframe.";
+    if (msg) {
+      msg.classList.remove("hidden");
+      msg.textContent = "No candle data available for this asset/timeframe.";
+    }
     return;
   }
-  msg.classList.add("hidden");
+  if (msg) msg.classList.add("hidden");
 
   const chartType = (DASH_STATE.chartType === "line") ? "line" : "candles";
 

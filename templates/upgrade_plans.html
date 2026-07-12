@@ -113,11 +113,27 @@
         showFlash("Checkout canceled — no charges were made.", false);
       }
 
+      function redirectToLogin() {
+        try {
+          sessionStorage.setItem("post_login_path", "/upgrade-plans" + (location.search || ""));
+        } catch (_) {}
+        location.href = "/login?next=" + encodeURIComponent("/upgrade-plans" + (location.search || ""));
+      }
+
+      async function billingFetch(url, options) {
+        const resp = await fetch(url, options);
+        if (resp.status === 401) {
+          redirectToLogin();
+          throw new Error("Session expired — please sign in again.");
+        }
+        return resp;
+      }
+
       document.getElementById("manage-billing-btn")?.addEventListener("click", async () => {
         const btn = document.getElementById("manage-billing-btn");
         btn.disabled = true;
         try {
-          const resp = await fetch("/billing/portal", {
+          const resp = await billingFetch("/billing/portal", {
             method: "POST",
             credentials: "include",
             headers: { "Content-Type": "application/json" },
@@ -158,7 +174,7 @@
           btn.textContent = "Redirecting…";
           try {
             // Server allowlists this price_id and builds mode=subscription line_items.
-            const resp = await fetch("/billing/checkout", {
+            const resp = await billingFetch("/billing/checkout", {
               method: "POST",
               credentials: "include",
               headers: { "Content-Type": "application/json" },
