@@ -114,10 +114,9 @@
       }
 
       function redirectToLogin() {
-        try {
-          sessionStorage.setItem("post_login_path", "/upgrade-plans" + (location.search || ""));
-        } catch (_) {}
-        location.href = "/login?next=" + encodeURIComponent("/upgrade-plans" + (location.search || ""));
+        // TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+        // AdSense guest bypass: stay on upgrade page / dashboard instead of login.
+        location.href = "/dashboard/portfolio";
       }
 
       async function billingFetch(url, options) {

@@ -106,24 +106,16 @@ function bumpAuthEpoch() {
 function forceLogout(reason) {
   if (_forcingLogout) return;
   _forcingLogout = true;
-  // Preserve deep link so re-login returns the user to where they were.
-  try {
-    const path = normalizePath(location.pathname);
-    const full = path + (location.search || "");
-    if (
-      isDashboardPath(path)
-      || path === "/admin"
-      || path === "/checkout/success"
-      || path === "/upgrade-plans"
-    ) {
-      sessionStorage.setItem("post_login_path", full);
-    }
-  } catch (_) {}
+  // TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+  // AdSense guest bypass: never bounce reviewers to the login form — reload the
+  // dashboard so /auth/me re-attaches the mock guest_trader profile.
   USER = null;
   bumpAuthEpoch();
-  try { toast(reason || "Session expired — please sign in again.", ""); } catch (_) {}
-  // Leave a beat so the toast can paint, then hard-navigate to login.
-  setTimeout(() => { location.href = "/login"; }, 80);
+  try { toast(reason || "Refreshing guest session…", ""); } catch (_) {}
+  setTimeout(() => {
+    const path = normalizePath(location.pathname);
+    location.href = isDashboardPath(path) ? (path + (location.search || "")) : "/dashboard/portfolio";
+  }, 80);
 }
 
 function toast(msg, type = "") {
@@ -488,7 +480,9 @@ async function handleLogoutClick() {
   USER = null;
   try { sessionStorage.removeItem("post_login_path"); } catch (_) {}
   bumpAuthEpoch();
-  location.href = "/login";
+  // TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+  // Sign-out still clears the real cookie, then reloads as the AdSense guest.
+  location.href = "/dashboard/portfolio";
 }
 
 async function enterApp() {
@@ -700,15 +694,16 @@ function setupRouter() {
   if (!window._dashPopstateBound) {
     window._dashPopstateBound = true;
     window.addEventListener("popstate", () => {
+      // TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+      // Never force the login screen on Back/Forward during AdSense guest mode.
       if (!USER) {
         const path = normalizePath(location.pathname);
-        if (isDashboardPath(path) || path === "/admin") {
-          try { sessionStorage.setItem("post_login_path", path); } catch (_) {}
-          history.replaceState({ auth: "login" }, "", "/login");
-          toggleAuthMode(true);
+        if (isAuthPath(path)) {
+          history.replaceState({ tab: "portfolio" }, "", "/dashboard/portfolio");
+          location.reload();
           return;
         }
-        toggleAuthMode(path !== "/signup");
+        location.reload();
         return;
       }
       // Logged-in Back onto /login|/signup → snap URL back to the active tab.
@@ -735,7 +730,10 @@ async function refreshUserData() {
     USER = await api("/auth/me");
 
     const acctEmail = document.getElementById("account-header-email");
-    if (acctEmail) acctEmail.textContent = USER.email || "—";
+    if (acctEmail) {
+      // TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+      acctEmail.textContent = USER.name || USER.email || "guest_trader";
+    }
 
     updatePlanUI();
 
@@ -2528,9 +2526,11 @@ function renderNews() {
 }
 
 (async function boot() {
+  // TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+  // AdSense review: always enter the dashboard with guest/dummy account data.
+  // Never render the login/signup forms — /auth/me returns mock guest_trader
+  // when there is no real session cookie.
   try {
-    // Preserve ?next=… across the auth screen when arriving logged out.
-    // Do not clobber an existing deep-link (e.g. /dashboard/bots) with a later next.
     try {
       const next = new URLSearchParams(location.search).get("next");
       if (next) {
@@ -2538,36 +2538,51 @@ function renderNews() {
         if (!existing) sessionStorage.setItem("post_login_path", next);
       }
     } catch (_) {}
-    // TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
-    // Backend AdSense bypass makes /auth/me succeed without a cookie (mock guest_trader).
-    // That lets reviewers open /dashboard/* with no login redirect.
+
     USER = await api("/auth/me");
-    const path = normalizePath(location.pathname);
-    // Keep /login and /signup usable so real owners can still authenticate
-    // while the guest bypass is active for dashboard crawling.
-    if (isAuthPath(path) && USER && USER.adsense_guest) {
-      toggleAuthMode(path !== "/signup");
-      return;
+
+    // Guest (or any session) hitting /login|/signup → dashboard, skip forms.
+    if (isAuthPath(location.pathname)) {
+      history.replaceState({ tab: "portfolio" }, "", "/dashboard/portfolio");
+    } else if (!isDashboardPath(location.pathname) && normalizePath(location.pathname) !== "/admin") {
+      // App shell loaded on an unexpected path — normalize to portfolio.
+      if (!tabFromPath(location.pathname)) {
+        history.replaceState({ tab: "portfolio" }, "", "/dashboard/portfolio");
+      }
     }
+
     if (await redirectAfterAuthIfNeeded()) return;
     await enterApp();
   } catch (_) {
-    // Unauthenticated: show login/signup. Preserve deep-linked dashboard paths
-    // so post-login restore works; AdSense stays off the public landing `/`.
     // TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
-    // With ADSENSE_AUTH_BYPASS this catch should rarely run for /dashboard/*.
-    const path = normalizePath(location.pathname);
-    if (isDashboardPath(path) || path === "/admin" || path === "/checkout/success" || path === "/upgrade-plans") {
-      try {
-        const full = path + (location.search || "");
-        if (!sessionStorage.getItem("post_login_path")) {
-          sessionStorage.setItem("post_login_path", full);
-        }
-      } catch (_) {}
-      history.replaceState({ auth: "login" }, "", "/login");
-      toggleAuthMode(true);
-    } else {
-      toggleAuthMode(path !== "/signup");
+    // Even if /auth/me fails unexpectedly, keep the dashboard shell visible and
+    // paint safe placeholder guest UI instead of flipping to the login wall.
+    USER = {
+      id: 0,
+      email: "guest_trader@adsense-review.invalid",
+      name: "guest_trader",
+      is_admin: false,
+      email_verified: true,
+      trading_mode: "paper",
+      active_broker: "alpaca",
+      total_deposited: 10000,
+      total_withdrawn: 0,
+      balance: 10000,
+      bot_count: 0,
+      bot_limit: 5,
+      subscription_plan: "growth",
+      subscription_plan_name: "Growth",
+      plan_level: "Growth",
+      can_upgrade: true,
+      adsense_guest: true,
+    };
+    if (!isDashboardPath(location.pathname)) {
+      history.replaceState({ tab: "portfolio" }, "", "/dashboard/portfolio");
+    }
+    try {
+      await enterApp();
+    } catch (err) {
+      console.error("AdSense guest dashboard boot failed:", err);
     }
   }
 })();

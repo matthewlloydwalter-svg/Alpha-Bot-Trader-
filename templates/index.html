@@ -23,7 +23,11 @@
 
 <div id="toast-container" class="toast-wrap"></div>
 
-<div id="auth-screen">
+<!-- TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+     AdSense review: keep the dashboard shell visible by default so crawlers
+     (and guests) never land on the login form. Restore: remove "hidden" from
+     auth-screen and add class="hidden" back on main-app. -->
+<div id="auth-screen" class="hidden">
   <div class="page dash-shell auth-shell">
     <div class="dash-main">
       <div class="tab-stage auth-stage">
@@ -99,7 +103,7 @@
   </div>
 </div>
 
-<div id="main-app" class="hidden">
+<div id="main-app">
   <div class="topbar">
     <div class="topbar-left">
       <img src="/static/images/alphabot-trading-logo.png" alt="{{ PLATFORM_NAME }} logo" class="brand-logo">

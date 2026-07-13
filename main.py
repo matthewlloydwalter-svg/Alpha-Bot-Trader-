@@ -516,6 +516,11 @@ DASHBOARD_SECTIONS = frozenset({
 @app.get("/signup", response_class=HTMLResponse)
 def auth_pane(request: Request):
     """Auth screens only — separate URLs from the public landing page."""
+    # TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+    # AdSense review: never serve the login/signup shell — send crawlers straight
+    # to the dashboard guest experience instead.
+    if ADSENSE_AUTH_BYPASS:
+        return RedirectResponse(url="/dashboard/portfolio", status_code=307)
     return _html_page(request, "index.html")
 
 
