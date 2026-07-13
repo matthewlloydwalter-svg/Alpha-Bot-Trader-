@@ -19,26 +19,6 @@ from sse_starlette.sse import EventSourceResponse
 
 load_dotenv()
 
-VERIFICATION_CODE_TTL_HOURS = int(os.getenv("VERIFICATION_CODE_TTL_HOURS", "24"))
-
-
-def _iso_utc(dt) -> Optional[str]:
-    """Naive UTC datetimes → ISO-8601 with explicit Z suffix for browsers."""
-    if not dt:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
-    return dt.isoformat().replace("+00:00", "Z")
-
-
-def _verification_code_expired(user: User) -> bool:
-    sent = getattr(user, "verification_code_sent_at", None)
-    if not sent:
-        return False
-    return (datetime.utcnow() - sent) > timedelta(hours=VERIFICATION_CODE_TTL_HOURS)
-
 from app.database import engine, Base, init_db, get_db, SessionLocal, User, Bot, Trade, ActivityLog, MarketQuote
 from app.auth import (
     hash_password, verify_password, create_session_token, decode_session_token,
@@ -70,6 +50,26 @@ from app import scheduler as engine_scheduler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("alphabot")
+
+VERIFICATION_CODE_TTL_HOURS = int(os.getenv("VERIFICATION_CODE_TTL_HOURS", "24"))
+
+
+def _iso_utc(dt) -> Optional[str]:
+    """Naive UTC datetimes → ISO-8601 with explicit Z suffix for browsers."""
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _verification_code_expired(user: User) -> bool:
+    sent = getattr(user, "verification_code_sent_at", None)
+    if not sent:
+        return False
+    return (datetime.utcnow() - sent) > timedelta(hours=VERIFICATION_CODE_TTL_HOURS)
 
 
 def _assert_production_config() -> None:
