@@ -9,6 +9,8 @@
   --gdim:rgba(0,214,143,0.13);--rdim:rgba(255,77,106,0.13);--bdim:rgba(77,159,255,0.1);
   --topbar-h:64px;
   --nav-h:52px;
+  /* TODO: REVERT THIS AFTER 60 DAYS — AdSense maintenance banner height */
+  --adsense-maint-h:44px;
 }
   
 body{  
@@ -20,9 +22,30 @@ body{
 /* ════════════════════════════════════════
    TOPBAR & NAV 
 ════════════════════════════════════════ */
-.topbar{
+/* TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL — remove AdSense maintenance banner */
+.adsense-maint-banner{
+  width:100%;
+  text-align:center;
+  background:#7f0000;
+  color:#ff1f1f;
+  font-weight:800;
+  letter-spacing:.03em;
+  text-transform:uppercase;
+  line-height:1.3;
+  border-bottom:2px solid #ff0000;
+  z-index:210;
+}
+.adsense-maint-banner--dash{
   position:sticky;
   top:0;
+  min-height:var(--adsense-maint-h);
+  padding:10px 14px;
+  font-size:clamp(12px,1.6vw,15px);
+  color:#ff2a2a;
+}
+.topbar{
+  position:sticky;
+  top:var(--adsense-maint-h);
   z-index:200;
   height:var(--topbar-h);
   display:flex;
@@ -38,7 +61,7 @@ body{
 
 .nav{
   position:sticky;
-  top:var(--topbar-h);
+  top:calc(var(--adsense-maint-h) + var(--topbar-h));
   z-index:199;
   height:var(--nav-h);
   margin: 0;
@@ -248,8 +271,9 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
    top:64px into a relative offset (the visible gap).
    These rules have specificity 1,1,0 / 1,0,1 → win.
 ══════════════════════════════════════════════ */
-#main-app .topbar { position: sticky; top: 0; }
-#main-app .nav    { position: sticky; top: var(--topbar-h); }
+#main-app .adsense-maint-banner--dash { position: sticky; top: 0; z-index: 210; }
+#main-app .topbar { position: sticky; top: var(--adsense-maint-h); }
+#main-app .nav    { position: sticky; top: calc(var(--adsense-maint-h) + var(--topbar-h)); }
 
 /* ══ Mode-toggle buttons (Trading Mode & Broker cards) ══ */
 .mode-toggle { display:flex; border:1px solid var(--border2); border-radius:8px; overflow:hidden; width:fit-content; }

@@ -39,6 +39,32 @@
   }
   a { color: #8ec2ff; text-decoration: none; }
   a:hover { text-decoration: underline; }
+  /* TODO: REVERT THIS AFTER 60 DAYS — AdSense maintenance banner */
+  .adsense-maint-banner {
+    width: 100%;
+    text-align: center;
+    background: #8b0000;
+    color: #ff2a2a;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 18px 16px;
+    line-height: 1.25;
+    border-bottom: 3px solid #ff0000;
+    box-shadow: 0 4px 24px rgba(255, 0, 0, 0.25);
+  }
+  .adsense-maint-banner--landing {
+    font-size: clamp(22px, 4.5vw, 40px);
+  }
+  .adsense-maint-banner__sub {
+    display: block;
+    margin-top: 8px;
+    font-size: clamp(14px, 2.2vw, 20px);
+    font-weight: 700;
+    color: #ffb4b4;
+    letter-spacing: 0.02em;
+    text-transform: none;
+  }
   .page {
     width: min(1180px, calc(100% - 40px));
     margin: 0 auto;
@@ -304,6 +330,11 @@
      crossorigin="anonymous"></script>
 </head>
 <body>
+  <!-- TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL / remove AdSense maintenance banners -->
+  <div class="adsense-maint-banner adsense-maint-banner--landing" role="status" aria-live="polite">
+    SITE TEMPORARILY DOWN FOR MAINTENANCE<br>
+    <span class="adsense-maint-banner__sub">While we await Google AdSense approval</span>
+  </div>
   <div class="page">
     <header class="top">
       <div class="brand-lockup">
