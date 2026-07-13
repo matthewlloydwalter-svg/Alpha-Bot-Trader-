@@ -2055,10 +2055,13 @@ async function openMarketDashboard(exchange, symbol) {
   bindDashControls();
   DASH_STATE = { exchange, symbol, preset: "1D", chartType: "candles" };
   DASH_LAST = null;
-  document.getElementById("market-dash-modal").classList.remove("hidden");
-  document.getElementById("dash-symbol").textContent = symbol;
-  document.getElementById("dash-name").textContent = "Loading asset…";
-  document.getElementById("dash-price").textContent = "—";
+  const modal = document.getElementById("market-dash-modal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+  const setTxt = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  setTxt("dash-symbol", symbol);
+  setTxt("dash-name", "Loading asset…");
+  setTxt("dash-price", "—");
   syncDashPresetButtons("1D");
   syncDashChartTypeSelect("candles");
   startDashRefreshTimer();
@@ -2066,7 +2069,8 @@ async function openMarketDashboard(exchange, symbol) {
 }
 
 function closeMarketDashboard() {
-  document.getElementById("market-dash-modal").classList.add("hidden");
+  const modal = document.getElementById("market-dash-modal");
+  if (modal) modal.classList.add("hidden");
   stopDashRefreshTimer();
   _setDashFetchStatus(false);
   DASH_LAST = null;
@@ -2449,6 +2453,7 @@ function filterNews(f) { NEWS_FILTER = f; renderNews(); }
 
 function renderNews() {
   const list = document.getElementById("news-list");
+  if (!list) return;
   const filtered = NEWS_FILTER === "all" ? ALL_NEWS : ALL_NEWS.filter(n => n.sentiment === NEWS_FILTER);
   const hdr = document.getElementById("news-header-count");
   if (hdr) hdr.textContent = String((ALL_NEWS && ALL_NEWS.length) || 0);
