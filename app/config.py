@@ -9,9 +9,18 @@ def _env_flag(name: str, default: str = "0") -> bool:
 # ────────────────────────────────────────────────────────────────────
 # TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
 # Temporary Google AdSense review bypass (added 2026-07-13, target undo 2026-09-11).
-# When enabled, unauthenticated visitors receive a dedicated mock guest profile —
-# NEVER a real customer/admin account. Set ADSENSE_AUTH_BYPASS=0 to turn off early.
-# After the deadline this flag is ignored even if left at "1".
+#
+# HOW TO REVERT (after AdSense approval):
+#   1. Set env ADSENSE_AUTH_BYPASS=0  (instant), OR
+#   2. Tell the agent "revert AdSense bypass", OR
+#   3. Search codebase for: TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+#
+# Behavior while enabled:
+#   - Login/signup pages are disabled (redirect to dashboard)
+#   - Every visitor is the mock guest_trader profile ONLY
+#   - Real user accounts (you + others) are NEVER returned to the UI/API
+#   - /admin stays locked (guest is not admin)
+#   - Auto-disables after ADSENSE_AUTH_BYPASS_DEADLINE even if flag left on
 # ────────────────────────────────────────────────────────────────────
 ADSENSE_AUTH_BYPASS_DEADLINE = date(2026, 9, 11)
 ADSENSE_GUEST_EMAIL = "guest_trader@adsense-review.invalid"

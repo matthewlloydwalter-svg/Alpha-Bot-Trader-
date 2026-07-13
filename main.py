@@ -292,27 +292,10 @@ def _cookie_kwargs(request: Request | None = None) -> dict:
 
 def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)) -> User:
     # TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
-    # Temporary AdSense review bypass: unauthenticated requests get a mock guest
-    # profile (guest_trader) — never a real customer/admin account. Valid session
-    # cookies still resolve to the signed-in user so owners can keep working.
+    # Temporary AdSense review bypass: EVERY request resolves to the mock
+    # guest_trader profile only. Real customer sessions are ignored so reviewers
+    # (and the public) never see your account or any other real user's data.
     if ADSENSE_AUTH_BYPASS:
-        token = request.cookies.get("session_token")
-        if token:
-            payload = decode_session_token(token)
-            if payload:
-                try:
-                    user_id = int(payload["sub"])
-                except (KeyError, TypeError, ValueError):
-                    user_id = None
-                if user_id is not None:
-                    user = db.query(User).filter(User.id == user_id).first()
-                    if user:
-                        try:
-                            token_sv = int(payload.get("sv", 0))
-                        except (TypeError, ValueError):
-                            token_sv = 0
-                        if token_sv == int(user.session_version or 0):
-                            return user
         return get_or_create_adsense_guest_user(db)
 
     token = request.cookies.get("session_token")
@@ -909,6 +892,26 @@ def admin_pane(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/auth/signup")
 def register_endpoint(body: AuthModel, response: Response, request: Request, db: Session = Depends(get_db)):
+    # TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+    # Password auth disabled during AdSense review — return dummy guest only.
+    if ADSENSE_AUTH_BYPASS:
+        guest = get_or_create_adsense_guest_user(db)
+        return {
+            "id": guest.id,
+            "email": guest.email,
+            "name": guest.name,
+            "is_admin": False,
+            "email_verified": True,
+            "trading_mode": guest.trading_mode or "paper",
+            "active_broker": guest.active_broker or "alpaca",
+            "total_deposited": float(ADSENSE_GUEST_BALANCE),
+            "total_withdrawn": 0.0,
+            "bot_count": 0,
+            "bot_limit": _user_bot_limit(guest),
+            "adsense_guest": True,
+            "balance": float(ADSENSE_GUEST_BALANCE),
+            **_user_plan_payload(guest),
+        }
     limit_auth(request)
     normalized_email = body.email.strip().lower()
     if not normalized_email or "@" not in normalized_email:

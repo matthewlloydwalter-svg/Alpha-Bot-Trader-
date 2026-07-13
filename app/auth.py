@@ -151,12 +151,9 @@ def _resolve_session_user(request: Request, db: Session, *, missing_detail: str)
 
 def get_current_user(request: Request, db: Session = Depends(get_db)):
     # TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
-    # AdSense review: prefer a real session when present; otherwise serve mock guest.
+    # AdSense review: ALWAYS serve the mock guest — never a real customer session.
     if ADSENSE_AUTH_BYPASS:
-        try:
-            return _resolve_session_user(request, db, missing_detail="Not authenticated")
-        except HTTPException:
-            return get_or_create_adsense_guest_user(db)
+        return get_or_create_adsense_guest_user(db)
 
     return _resolve_session_user(request, db, missing_detail="Not authenticated")
 
