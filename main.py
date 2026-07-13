@@ -24,12 +24,14 @@ from app.auth import (
     hash_password, verify_password, create_session_token, decode_session_token,
     generate_verification_code, send_verification_email, send_password_reset_email,
     create_password_reset_token, decode_password_reset_token,
-    is_user_admin, PLATFORM_NAME, get_current_user, EmailError
+    is_user_admin, PLATFORM_NAME, get_current_user, EmailError,
+    get_or_create_adsense_guest_user, is_adsense_guest_user,
 )
 from app.config import (
     SESSION_COOKIE_SECURE, FRONTEND_ORIGINS, DOCS_ENABLED, APP_ENV, IS_PROD,
     ADMIN_AI_WRITES, FREE_BOT_LIMIT, RESEND_API_KEY,
     STRIPE_SECRET_KEY, PUBLIC_BASE_URL,
+    ADSENSE_AUTH_BYPASS, ADSENSE_GUEST_BALANCE, ADSENSE_GUEST_EMAIL,
 )
 from app.plans import (
     DEFAULT_PLAN, normalize_plan, plan_display_name, bot_limit_for_plan,
@@ -289,6 +291,30 @@ def _cookie_kwargs(request: Request | None = None) -> dict:
 
 
 def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)) -> User:
+    # TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+    # Temporary AdSense review bypass: unauthenticated requests get a mock guest
+    # profile (guest_trader) — never a real customer/admin account. Valid session
+    # cookies still resolve to the signed-in user so owners can keep working.
+    if ADSENSE_AUTH_BYPASS:
+        token = request.cookies.get("session_token")
+        if token:
+            payload = decode_session_token(token)
+            if payload:
+                try:
+                    user_id = int(payload["sub"])
+                except (KeyError, TypeError, ValueError):
+                    user_id = None
+                if user_id is not None:
+                    user = db.query(User).filter(User.id == user_id).first()
+                    if user:
+                        try:
+                            token_sv = int(payload.get("sv", 0))
+                        except (TypeError, ValueError):
+                            token_sv = 0
+                        if token_sv == int(user.session_version or 0):
+                            return user
+        return get_or_create_adsense_guest_user(db)
+
     token = request.cookies.get("session_token")
     if not token:
         raise HTTPException(status_code=401, detail="Session expired. Please sign in again.")
@@ -519,7 +545,11 @@ def upgrade_plans_pane(request: Request, db: Session = Depends(get_db)):
     try:
         user = get_current_user_from_cookie(request, db)
     except Exception:
-        return RedirectResponse(url="/login?next=/upgrade-plans", status_code=303)
+        # TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+        if ADSENSE_AUTH_BYPASS:
+            user = get_or_create_adsense_guest_user(db)
+        else:
+            return RedirectResponse(url="/login?next=/upgrade-plans", status_code=303)
     plans = public_plan_payload()
     return _html_page(
         request,
@@ -859,7 +889,9 @@ def privacy_pane(request: Request):
 def admin_pane(request: Request, db: Session = Depends(get_db)):
     try:
         u = get_current_user_from_cookie(request, db)
-        if not _is_platform_admin(u):
+        # TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+        # Keep /admin behind a real admin session — never open it to the guest mock.
+        if is_adsense_guest_user(u) or not _is_platform_admin(u):
             return RedirectResponse(url="/dashboard/portfolio")
         # Keep DB flag in sync with ADMIN_EMAILS so /auth/me matches gate checks.
         if not u.is_admin and is_user_admin(u.email or ""):
@@ -876,6 +908,9 @@ def register_endpoint(body: AuthModel, response: Response, request: Request, db:
     normalized_email = body.email.strip().lower()
     if not normalized_email or "@" not in normalized_email:
         raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    # TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+    if normalized_email == ADSENSE_GUEST_EMAIL.lower():
+        raise HTTPException(status_code=400, detail="That email is reserved.")
     if not body.agreed_to_tos:
         raise HTTPException(status_code=400, detail="You must agree to the Terms of Service and Privacy Policy.")
     if len(body.password or "") < 8:
@@ -947,16 +982,18 @@ def login_endpoint(body: AuthModel, response: Response, request: Request, db: Se
 
 @app.get("/auth/me")
 def current_user_endpoint(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
-    if _is_platform_admin(u) and not u.is_admin:
+    # Guest mock must never inherit admin via ADMIN_EMAILS misconfiguration.
+    if not is_adsense_guest_user(u) and _is_platform_admin(u) and not u.is_admin:
         u.is_admin = True
         db.add(u)
         db.commit()
     limit = _user_bot_limit(u)
     bot_count = db.query(Bot).filter(Bot.owner_id == u.id).count()
-    return {
+    payload = {
         "id": u.id,
         "email": u.email,
-        "is_admin": _is_platform_admin(u),
+        "name": u.name or None,
+        "is_admin": False if is_adsense_guest_user(u) else _is_platform_admin(u),
         "email_verified": u.email_verified,
         "trading_mode": u.trading_mode or "paper",
         "active_broker": u.active_broker or "alpaca",
@@ -966,6 +1003,11 @@ def current_user_endpoint(u: User = Depends(get_current_user_from_cookie), db: S
         "bot_limit": limit,  # null = unlimited
         **_user_plan_payload(u),
     }
+    # TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+    if is_adsense_guest_user(u):
+        payload["adsense_guest"] = True
+        payload["balance"] = float(ADSENSE_GUEST_BALANCE)
+    return payload
 
 @app.post("/auth/logout")
 def logout_endpoint(response: Response, request: Request, db: Session = Depends(get_db)):
@@ -1249,6 +1291,20 @@ async def switch_broker(request: Request, u: User = Depends(get_current_user_fro
 
 @app.get("/broker/account")
 def get_broker_account(u: User = Depends(get_current_user_from_cookie)):
+    # TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+    # AdSense guest has no real broker keys — return placeholder balances only.
+    if is_adsense_guest_user(u):
+        bal = float(ADSENSE_GUEST_BALANCE)
+        return {
+            "broker": u.active_broker or "alpaca",
+            "equity": bal,
+            "cash": bal,
+            "buying_power": bal,
+            "non_marginable_buying_power": bal,
+            "multiplier": 2,
+            "account_type": "margin",
+            "adsense_guest": True,
+        }
     broker = u.active_broker or "alpaca"
     paper  = (u.trading_mode or "paper") == "paper"
     mode_label = "Paper" if paper else "Live"
@@ -2428,7 +2484,9 @@ class AIProposalModel(BaseModel):
 
 def _require_admin(request: Request, db: Session) -> User:
     u = get_current_user_from_cookie(request, db)
-    if not _is_platform_admin(u):
+    # TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+    # Guest mock must never unlock admin / user-list endpoints.
+    if is_adsense_guest_user(u) or not _is_platform_admin(u):
         raise HTTPException(status_code=403, detail="Admin access required.")
     if not u.is_admin:
         u.is_admin = True

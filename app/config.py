@@ -1,8 +1,26 @@
 import os
+from datetime import date
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+# ────────────────────────────────────────────────────────────────────
+# TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+# Temporary Google AdSense review bypass (added 2026-07-13, target undo 2026-09-11).
+# When enabled, unauthenticated visitors receive a dedicated mock guest profile —
+# NEVER a real customer/admin account. Set ADSENSE_AUTH_BYPASS=0 to turn off early.
+# After the deadline this flag is ignored even if left at "1".
+# ────────────────────────────────────────────────────────────────────
+ADSENSE_AUTH_BYPASS_DEADLINE = date(2026, 9, 11)
+ADSENSE_GUEST_EMAIL = "guest_trader@adsense-review.invalid"
+ADSENSE_GUEST_NAME = "guest_trader"
+ADSENSE_GUEST_BALANCE = 10000.00
+_ADSENSE_AUTH_BYPASS_FLAG = _env_flag("ADSENSE_AUTH_BYPASS", "1")  # temporary default ON
+ADSENSE_AUTH_BYPASS = bool(
+    _ADSENSE_AUTH_BYPASS_FLAG and date.today() <= ADSENSE_AUTH_BYPASS_DEADLINE
+)
 
 
 # Resend transactional email (replaces Google SMTP).

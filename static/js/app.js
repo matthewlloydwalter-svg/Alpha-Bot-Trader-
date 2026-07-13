@@ -494,7 +494,12 @@ async function handleLogoutClick() {
 async function enterApp() {
   document.getElementById("auth-screen").classList.add("hidden");
   document.getElementById("main-app").classList.remove("hidden");
-  document.getElementById("user-email-display").textContent = USER.email;
+  // TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+  // Guest mock may expose name "guest_trader" for AdSense reviewers.
+  const emailEl = document.getElementById("user-email-display");
+  if (emailEl) {
+    emailEl.textContent = (USER && (USER.name || USER.email)) || "";
+  }
   updatePlanUI();
   
   if (USER.is_admin) {
@@ -2533,12 +2538,24 @@ function renderNews() {
         if (!existing) sessionStorage.setItem("post_login_path", next);
       }
     } catch (_) {}
+    // TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+    // Backend AdSense bypass makes /auth/me succeed without a cookie (mock guest_trader).
+    // That lets reviewers open /dashboard/* with no login redirect.
     USER = await api("/auth/me");
+    const path = normalizePath(location.pathname);
+    // Keep /login and /signup usable so real owners can still authenticate
+    // while the guest bypass is active for dashboard crawling.
+    if (isAuthPath(path) && USER && USER.adsense_guest) {
+      toggleAuthMode(path !== "/signup");
+      return;
+    }
     if (await redirectAfterAuthIfNeeded()) return;
     await enterApp();
   } catch (_) {
     // Unauthenticated: show login/signup. Preserve deep-linked dashboard paths
     // so post-login restore works; AdSense stays off the public landing `/`.
+    // TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+    // With ADSENSE_AUTH_BYPASS this catch should rarely run for /dashboard/*.
     const path = normalizePath(location.pathname);
     if (isDashboardPath(path) || path === "/admin" || path === "/checkout/success" || path === "/upgrade-plans") {
       try {
