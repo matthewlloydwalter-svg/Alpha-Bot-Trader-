@@ -891,6 +891,10 @@ async function setTradingMode(mode) {
     if (av && !av.classList.contains("hidden") && typeof loadBrokerAccount === "function") {
       loadBrokerAccount();
     }
+    const hv = document.getElementById("view-history");
+    if (hv && !hv.classList.contains("hidden") && typeof loadTradeHistory === "function") {
+      loadTradeHistory();
+    }
     const resumed = Number(data.resumed_count || 0);
     if (resumed > 0) {
       toast(
@@ -969,6 +973,10 @@ async function setBroker(broker) {
     const sv = document.getElementById("view-stocks");
     if (sv && !sv.classList.contains("hidden") && typeof loadStocks === "function") {
       loadStocks();
+    }
+    const hv = document.getElementById("view-history");
+    if (hv && !hv.classList.contains("hidden") && typeof loadTradeHistory === "function") {
+      loadTradeHistory();
     }
     toast(`Switched to ${next === "okx" ? "OKX" : "Alpaca"} broker`, "success");
   } catch (e) { toast(e, "error"); }

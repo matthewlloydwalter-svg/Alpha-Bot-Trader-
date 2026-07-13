@@ -167,10 +167,13 @@ def customer_has_blocking_subscription(user) -> bool:
     """
     True when Stripe already has an open subscription for this customer.
     Prefer live Stripe state so webhook lag cannot allow a second Checkout.
+
+    ``incomplete`` is NOT blocking — abandoned checkouts must be retryable.
     """
     local_status = (getattr(user, "subscription_status", None) or "").lower()
     local_sub = getattr(user, "stripe_subscription_id", None)
-    if local_sub and local_status not in {"", "canceled", "incomplete_expired"}:
+    blocking_local = {"active", "trialing", "past_due", "unpaid"}
+    if local_sub and local_status in blocking_local:
         return True
 
     customer_id = getattr(user, "stripe_customer_id", None)
@@ -181,14 +184,34 @@ def customer_has_blocking_subscription(user) -> bool:
         subs = stripe.Subscription.list(customer=customer_id, status="all", limit=20)
         for sub in (subs.get("data") or []):
             st = (sub.get("status") or "").lower()
-            if st in {"active", "trialing", "past_due", "unpaid", "incomplete"}:
+            if st in blocking_local:
                 return True
     except Exception as exc:
         logger.warning("Could not list Stripe subscriptions for customer %s: %s", customer_id, exc)
         # Only block when local DB already shows an active subscription; do not
         # deny checkout on transient Stripe API failures.
-        return bool(local_sub and local_status not in {"", "canceled", "incomplete_expired"})
+        return bool(local_sub and local_status in blocking_local)
     return False
+
+
+def _cancel_incomplete_subscriptions(customer_id: str) -> None:
+    """Best-effort cleanup so abandoned Checkouts don't linger and confuse upgrades."""
+    if not customer_id or not STRIPE_SECRET_KEY:
+        return
+    try:
+        stripe = _client()
+        subs = stripe.Subscription.list(customer=customer_id, status="incomplete", limit=20)
+        for sub in (subs.get("data") or []):
+            sid = sub.get("id")
+            if not sid:
+                continue
+            try:
+                stripe.Subscription.cancel(sid)
+                logger.info("Canceled incomplete Stripe subscription %s for customer %s", sid, customer_id)
+            except Exception as exc:
+                logger.warning("Could not cancel incomplete sub %s: %s", sid, exc)
+    except Exception as exc:
+        logger.warning("Could not list incomplete subscriptions for %s: %s", customer_id, exc)
 
 
 def create_checkout_session(
@@ -207,6 +230,7 @@ def create_checkout_session(
         price_id=price_id, lookup_key=lookup_key,
     )
     customer_id = ensure_customer(user)
+    _cancel_incomplete_subscriptions(customer_id)
     plan_level = plan_level_label(plan_key)
 
     session = stripe.checkout.Session.create(
@@ -296,6 +320,11 @@ def apply_plan_to_user(
     if end is not None:
         user.subscription_current_period_end = end
     elif status in {"canceled", "unpaid", "incomplete_expired"}:
+        user.subscription_current_period_end = None
+        user.subscription_plan = "starter"
+        user.plan_level = "Starter"
+    elif status == "incomplete":
+        # Abandoned checkout — keep starter entitlements and clear stale period.
         user.subscription_current_period_end = None
         user.subscription_plan = "starter"
         user.plan_level = "Starter"
