@@ -8,7 +8,7 @@ always compute against America/New_York so DST (EST/EDT) is handled correctly.
 Crypto (OKX) trades 24/7, so ``market_open_for_broker`` only gates Alpaca.
 
 NOTE: Full-day NYSE holidays through 2027 are modeled in ``NYSE_HOLIDAYS``.
-Early-close half-days (e.g. day after Thanksgiving) are not modeled yet.
+Early-close (1:00 PM ET) half-days are modeled in ``NYSE_EARLY_CLOSE``.
 """
 
 from __future__ import annotations
@@ -20,8 +20,9 @@ import pytz
 ET = pytz.timezone("America/New_York")
 OPEN_H, OPEN_M = 9, 30
 CLOSE_H, CLOSE_M = 16, 0
+EARLY_CLOSE_H, EARLY_CLOSE_M = 13, 0
 
-# Full-day NYSE closures (ET calendar dates). Early-close half-days are not modeled.
+# Full-day NYSE closures (ET calendar dates).
 NYSE_HOLIDAYS = {
     # 2025
     "2025-01-01", "2025-01-20", "2025-02-17", "2025-04-18", "2025-05-26",
@@ -34,10 +35,29 @@ NYSE_HOLIDAYS = {
     "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
 }
 
+# NYSE early closes at 1:00 PM ET (day before Independence Day when applicable,
+# day after Thanksgiving, Christmas Eve when weekday and not already a holiday).
+NYSE_EARLY_CLOSE = {
+    "2025-07-03", "2025-11-28", "2025-12-24",
+    "2026-11-27", "2026-12-24",
+    "2027-11-26", "2027-12-23",
+}
+
 
 def is_us_market_holiday(day_et) -> bool:
     """True when ``day_et`` (ET-aware) falls on a full NYSE holiday."""
     return day_et.strftime("%Y-%m-%d") in NYSE_HOLIDAYS
+
+
+def is_us_early_close(day_et) -> bool:
+    """True when ``day_et`` is an NYSE 1:00 PM ET early-close session."""
+    return day_et.strftime("%Y-%m-%d") in NYSE_EARLY_CLOSE
+
+
+def _session_close_hm(day_et) -> tuple[int, int]:
+    if is_us_early_close(day_et):
+        return EARLY_CLOSE_H, EARLY_CLOSE_M
+    return CLOSE_H, CLOSE_M
 
 
 def _now_et(now_utc: datetime | None = None) -> datetime:
@@ -55,7 +75,8 @@ def is_market_open(now_utc: datetime | None = None) -> bool:
     if is_us_market_holiday(et):
         return False
     open_t = et.replace(hour=OPEN_H, minute=OPEN_M, second=0, microsecond=0)
-    close_t = et.replace(hour=CLOSE_H, minute=CLOSE_M, second=0, microsecond=0)
+    ch, cm = _session_close_hm(et)
+    close_t = et.replace(hour=ch, minute=cm, second=0, microsecond=0)
     return open_t <= et < close_t
 
 
@@ -90,19 +111,21 @@ def minutes_since_open(now_utc: datetime | None = None) -> float | None:
     if et.weekday() >= 5 or is_us_market_holiday(et):
         return None
     open_t = et.replace(hour=OPEN_H, minute=OPEN_M, second=0, microsecond=0)
-    close_t = et.replace(hour=CLOSE_H, minute=CLOSE_M, second=0, microsecond=0)
+    ch, cm = _session_close_hm(et)
+    close_t = et.replace(hour=ch, minute=cm, second=0, microsecond=0)
     if et < open_t or et >= close_t:
         return None
     return (et - open_t).total_seconds() / 60.0
 
 
 def minutes_until_close(now_utc: datetime | None = None) -> float | None:
-    """Minutes remaining until today's 16:00 ET close, or None if the market is closed."""
+    """Minutes remaining until today's session close, or None if the market is closed."""
     et = _now_et(now_utc)
     if et.weekday() >= 5 or is_us_market_holiday(et):
         return None
     open_t = et.replace(hour=OPEN_H, minute=OPEN_M, second=0, microsecond=0)
-    close_t = et.replace(hour=CLOSE_H, minute=CLOSE_M, second=0, microsecond=0)
+    ch, cm = _session_close_hm(et)
+    close_t = et.replace(hour=ch, minute=cm, second=0, microsecond=0)
     if et < open_t or et >= close_t:
         return None
     return (close_t - et).total_seconds() / 60.0
@@ -115,15 +138,16 @@ def is_open_entry_window(window_minutes: int = 45, now_utc: datetime | None = No
 
 
 def is_eod_exit_window(window_minutes: int = 20, now_utc: datetime | None = None) -> bool:
-    """True during the final ``window_minutes`` before the regular session close."""
+    """True during the final ``window_minutes`` before the session close."""
     mins = minutes_until_close(now_utc)
     return mins is not None and 0 <= mins <= window_minutes
 
 
 def _session_open_close_et(day_et) -> tuple:
-    """09:30 and 16:00 ET on the calendar day of ``day_et`` (ET-aware)."""
+    """09:30 and session close ET on the calendar day of ``day_et`` (ET-aware)."""
     open_et = day_et.replace(hour=OPEN_H, minute=OPEN_M, second=0, microsecond=0)
-    close_et = day_et.replace(hour=CLOSE_H, minute=CLOSE_M, second=0, microsecond=0)
+    ch, cm = _session_close_hm(day_et)
+    close_et = day_et.replace(hour=ch, minute=cm, second=0, microsecond=0)
     return open_et, close_et
 
 
@@ -185,11 +209,17 @@ def market_status(now_utc: datetime | None = None) -> dict:
     now = now_utc or datetime.now(pytz.utc)
     et = _now_et(now)
     nxt = next_market_open(now)
+    ch, cm = _session_close_hm(et)
     return {
         "open": is_market_open(now),
         "now_utc": now.astimezone(pytz.utc).isoformat(),
         "now_et": et.isoformat(),
         "next_open_utc": nxt.isoformat(),
         "next_open_epoch": int(nxt.timestamp()),
-        "session": {"open_et": "09:30", "close_et": "16:00", "tz": "America/New_York"},
+        "early_close": is_us_early_close(et) if et.weekday() < 5 and not is_us_market_holiday(et) else False,
+        "session": {
+            "open_et": "09:30",
+            "close_et": f"{ch:02d}:{cm:02d}",
+            "tz": "America/New_York",
+        },
     }

@@ -1024,7 +1024,7 @@ async function loadBrokerKeys() {
 /* --- EMAIL VERIFICATION --- */
 async function triggerEmailVerification() {
   const btn = document.getElementById("verify-email-btn");
-  btn.disabled = true; btn.textContent = "Sending...";
+  if (btn) { btn.disabled = true; btn.textContent = "Sending..."; }
   try {
     const res = await api("/auth/trigger-verification", { method: "POST" });
     if (res && (res.email_not_configured || res.smtp_not_configured)) {
@@ -1036,12 +1036,13 @@ async function triggerEmailVerification() {
       toast("Email delivery is not configured — Live trading still requires verification when email is available.", "");
     } else {
       toast("Verification code sent to your inbox!", "success");
-      document.getElementById("verify-modal").classList.remove("hidden");
+      const modal = document.getElementById("verify-modal");
+      if (modal) modal.classList.remove("hidden");
     }
   } catch (e) {
     toast((e && e.message) || "Failed to send verification email.", "error");
   }
-  finally { btn.disabled = false; btn.textContent = "📧 Send Verification Code"; }
+  finally { if (btn) { btn.disabled = false; btn.textContent = "📧 Send Verification Code"; } }
 }
 
 function closeVerificationModal() { document.getElementById("verify-modal").classList.add("hidden"); }
@@ -1156,7 +1157,7 @@ async function loadPortfolioForMode(mode) {
   let perf, bots;
   try {
     [perf, bots] = await Promise.all([
-      api(`/api/portfolio/performance?mode=${encodeURIComponent(mode)}`),
+      api(`/api/portfolio/performance?mode=${encodeURIComponent(mode)}&broker=${encodeURIComponent(USER && USER.active_broker ? USER.active_broker : "alpaca")}`),
       api("/bots"),
     ]);
   } catch (e) {
@@ -1359,6 +1360,7 @@ function renderActiveBots() {
   // executions in this mode (its markers are already mode-filtered by the API),
   // or it is currently holding a position in the account you're live in.
   const mode = PF_DATA.mode || (USER && USER.trading_mode) || "paper";
+  const broker = (PF_DATA.perf && PF_DATA.perf.broker) || (USER && USER.active_broker) || "alpaca";
   const isActiveMode = mode === ((USER && USER.trading_mode) || "paper");
   const markers = (PF_DATA.perf && PF_DATA.perf.markers) || [];
   const pnlByBot = {}, activeIds = new Set();
@@ -1369,7 +1371,11 @@ function renderActiveBots() {
       pnlByBot[m.bot_id] = (pnlByBot[m.bot_id] || 0) + Number(m.pnl);
     }
   }
-  const bots = (PF_DATA.bots || []).filter(b => activeIds.has(b.id) || (isActiveMode && b.in_position));
+  const bots = (PF_DATA.bots || []).filter(b => {
+    if ((b.broker || "alpaca").toLowerCase() !== String(broker).toLowerCase()) return false;
+    if ((b.mode || "paper").toLowerCase() !== String(mode).toLowerCase()) return false;
+    return activeIds.has(b.id) || (isActiveMode && b.in_position);
+  });
   if (cnt) cnt.textContent = bots.length;
   if (!bots.length) {
     const label = mode === "live" ? "live" : "paper";
@@ -1507,12 +1513,17 @@ async function loadBrokerAccount() {
 /* --- BOTS --- */
 function setBotMode(m) {
   BOT_MODE = m;
-  document.getElementById("botmode-auto").classList.toggle("active", m === "auto");
-  document.getElementById("botmode-manual").classList.toggle("active", m === "manual");
-  document.getElementById("manual-limits").classList.toggle("hidden", m === "auto");
+  const auto = document.getElementById("botmode-auto");
+  const man = document.getElementById("botmode-manual");
+  const limits = document.getElementById("manual-limits");
+  const ticker = document.getElementById("ticker-field");
+  const explainer = document.getElementById("auto-explainer");
+  if (auto) auto.classList.toggle("active", m === "auto");
+  if (man) man.classList.toggle("active", m === "manual");
+  if (limits) limits.classList.toggle("hidden", m === "auto");
   // Fully autonomous mode needs only a funds amount — hide the ticker field.
-  document.getElementById("ticker-field").classList.toggle("hidden", m === "auto");
-  document.getElementById("auto-explainer").classList.toggle("hidden", m !== "auto");
+  if (ticker) ticker.classList.toggle("hidden", m === "auto");
+  if (explainer) explainer.classList.toggle("hidden", m !== "auto");
 }
 function updateLowBalanceStrategyHint() {
   const el = document.getElementById("b-low-balance-strategy");
@@ -1922,6 +1933,7 @@ function renderMarkets() {
 
   if (!items.length) {
     tbody.innerHTML = `<tr><td colspan="5" style="color:var(--t2)">No matching assets.</td></tr>`;
+    bindMarketsTableClicks();
     return;
   }
   tbody.innerHTML = items.map(m => `
@@ -2143,8 +2155,10 @@ async function reloadDashboard(opts) {
       msg.classList.remove("hidden");
       msg.textContent = `⚠ ${e.message}`;
     }
-    document.getElementById("dash-bot-status").innerHTML =
-      `<span style="color:var(--red)">${esc(e.message)}</span>`;
+    const botStatus = document.getElementById("dash-bot-status");
+    if (botStatus) {
+      botStatus.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`;
+    }
   } finally {
     if (seq === DASH_FETCH_SEQ) _setDashFetchStatus(false);
   }
@@ -2271,6 +2285,7 @@ function renderDashChart(d) {
 
 function renderDashPatterns(patterns) {
   const el = document.getElementById("dash-patterns");
+  if (!el) return;
   if (!patterns.length) { el.innerHTML = `<span style="color:var(--t3);font-size:12px">No structural pattern triggered on the current chart.</span>`; return; }
   el.innerHTML = patterns.map(p => `
     <div class="pattern-chip ${esc(p.bias)}">
@@ -2283,6 +2298,7 @@ function renderDashPatterns(patterns) {
 
 function renderDashIndicators(ind) {
   const el = document.getElementById("dash-indicators");
+  if (!el) return;
   const fmt = v => (v == null ? "—" : (typeof v === "number" ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }) : v));
   const rsi = ind.rsi;
   const rsiColor = rsi == null ? "var(--t1)" : rsi <= 30 ? "var(--green)" : rsi >= 70 ? "var(--red)" : "var(--t1)";
@@ -2357,9 +2373,12 @@ async function loadTradeHistory() {
         : (st === "filled" || st === "accepted" || st === "closed")
           ? `<span class="badge badge-green">Filled</span>`
           : `<span class="badge badge-blue" title="${esc(t.status || "")}">${esc(String(t.status || "submitted"))}</span>`;
+      const when = t.created_at
+        ? new Date(/Z|[+-]\d{2}:?\d{2}$/.test(t.created_at) ? t.created_at : t.created_at + "Z").toLocaleString()
+        : "—";
       return `
       <tr>
-        <td style="color:var(--t2)">${new Date(/Z|[+-]\d{2}:?\d{2}$/.test(t.created_at) ? t.created_at : t.created_at + "Z").toLocaleString()}</td>
+        <td style="color:var(--t2)">${when}</td>
         <td style="font-weight:600">${esc(t.bot_name || "—")}</td>
         <td style="font-weight:600">${esc(t.ticker)}</td>
         <td><span class="badge ${t.side === 'buy' ? 'badge-green' : 'badge-red'}">${esc(String(t.side || "—").toUpperCase())}</span></td>
@@ -2376,6 +2395,7 @@ async function loadNews() {
   const status = document.getElementById("news-status");
   const list   = document.getElementById("news-list");
   const btn    = document.getElementById("news-refresh-btn");
+  if (!status || !list) return;
   status.innerHTML = '<div style="font-size:24px;margin-bottom:8px">⏳</div><div>Fetching latest headlines…</div>';
   status.style.display = "block";
   list.innerHTML = "";

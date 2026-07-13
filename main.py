@@ -67,8 +67,9 @@ def _iso_utc(dt) -> Optional[str]:
 
 def _verification_code_expired(user: User) -> bool:
     sent = getattr(user, "verification_code_sent_at", None)
+    # Missing timestamp = legacy / unknown age → treat as expired for safety.
     if not sent:
-        return False
+        return True
     return (datetime.utcnow() - sent) > timedelta(hours=VERIFICATION_CODE_TTL_HOURS)
 
 
@@ -529,7 +530,7 @@ def checkout_success_pane(request: Request, db: Session = Depends(get_db), sessi
             )
             if not owns:
                 error = "This Checkout session does not belong to your account."
-            elif session.get("payment_status") in {"paid", "no_payment_required"} or session.get("status") == "complete":
+            elif session.get("payment_status") in {"paid", "no_payment_required"}:
                 stripe_billing.sync_user_from_checkout_session(user, session)
                 _enforce_running_bot_limit(user, db)
                 db.add(user)
@@ -734,6 +735,7 @@ async def _handle_stripe_webhook(request: Request, db: Session):
     # stop retrying after a 2xx — leave unpaid plan upgrades silent.
     critical = etype in {
         "checkout.session.completed",
+        "checkout.session.async_payment_succeeded",
         "customer.subscription.updated",
         "customer.subscription.created",
         "customer.subscription.deleted",
@@ -749,6 +751,15 @@ async def _handle_stripe_webhook(request: Request, db: Session):
         )
 
     if etype == "checkout.session.completed" and user:
+        payment_status = (data.get("payment_status") or "").lower()
+        if payment_status in {"paid", "no_payment_required"}:
+            stripe_billing.sync_user_from_checkout_session(user, data)
+        else:
+            logger.info(
+                "Stripe checkout.session.completed ignored until paid (status=%s event=%s)",
+                payment_status or "unknown", event.get("id"),
+            )
+    elif etype == "checkout.session.async_payment_succeeded" and user:
         stripe_billing.sync_user_from_checkout_session(user, data)
     elif etype in {
         "customer.subscription.updated",
@@ -1074,6 +1085,7 @@ def password_reset_confirm(body: PasswordResetConfirmModel, request: Request, db
 
     user.hashed_password = hash_password(body.password)
     user.verification_code = None
+    user.verification_code_sent_at = None
     _bump_session_version(user)
     db.commit()
     logger.info("[AUTH] Password reset completed for user %s (sessions invalidated)", user.id)
@@ -1155,19 +1167,15 @@ async def set_trading_mode(request: Request, u: User = Depends(get_current_user_
 
     # Mode switch is a UI/account view only — bots keep trading in the
     # background in whichever Paper/Live account they belong to.
-    # One-time recovery: resume anything still marked from the old
-    # "pause on switch" behavior so users aren't stuck needing Play.
-    from sqlalchemy import or_
+    # One-time recovery: resume only bots still flagged paused_by_mode_switch
+    # (do NOT resume from stale last_pattern_summary — that restarts manual pauses).
     resumed_ids: list[int] = []
     stuck = (
         db.query(Bot)
         .filter(
             Bot.owner_id == u.id,
             Bot.running == False,  # noqa: E712
-            or_(
-                Bot.paused_by_mode_switch == True,  # noqa: E712
-                Bot.last_pattern_summary.like("Paused automatically — account switched%"),
-            ),
+            Bot.paused_by_mode_switch == True,  # noqa: E712
         )
         .all()
     )
@@ -1306,20 +1314,42 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
         entry_price = b.avg_entry_price
         current_price = None
         unrealized_pl = None
+        strategy_name = (b.low_balance_strategy or "standard").lower()
+        state = bot_engine._load_strategy_state(b)
+        scattershot_legs = (state.get("legs") or []) if strategy_name == "scattershot" else []
 
         # Prefer the always-on market store quote (no broker round-trip).
-        if b.in_position and b.ticker:
-            q = market_store.get_quote(db, broker, b.ticker)
-            if q and q.price:
-                current_price = float(q.price)
+        # Scattershot stores comma-joined tickers — mark from per-leg quotes.
+        if b.in_position:
+            if scattershot_legs:
+                leg_marks = []
+                for leg in scattershot_legs:
+                    sym = (leg.get("ticker") or "").upper().strip()
+                    if not sym:
+                        continue
+                    q = market_store.get_quote(db, broker, sym)
+                    if q and q.price:
+                        leg_marks.append(float(q.price))
+                if leg_marks:
+                    current_price = sum(leg_marks) / len(leg_marks)
+            elif b.ticker:
+                q = market_store.get_quote(db, broker, b.ticker)
+                if q and q.price:
+                    current_price = float(q.price)
 
         # Optional live broker snapshot when keys are present and store has no mark.
-        if b.in_position and b.ticker and current_price is None and has_credentials(u, broker, paper):
+        # Skip for multi-leg scattershot (comma ticker is not a valid broker symbol).
+        quote_symbol = None
+        if scattershot_legs:
+            quote_symbol = None
+        elif b.ticker and "," not in (b.ticker or ""):
+            quote_symbol = b.ticker
+        if b.in_position and quote_symbol and current_price is None and has_credentials(u, broker, paper):
             try:
                 creds = resolve_credentials(u, broker, paper)
                 position_snapshot = get_position_snapshot(
                     broker=broker,
-                    symbol=b.ticker,
+                    symbol=quote_symbol,
                     paper=paper,
                     **creds,
                 )
@@ -1327,7 +1357,7 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
                     current_price = position_snapshot.get("current_price")
                     unrealized_pl = position_snapshot.get("unrealized_pl")
             except Exception as e:
-                logger.debug("bot position snapshot failed for %s: %s", b.ticker, e)
+                logger.debug("bot position snapshot failed for %s: %s", quote_symbol, e)
 
         if current_price is None and entry_price is not None:
             current_price = entry_price
@@ -1345,9 +1375,6 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             if display_take_profit_price is None:
                 display_take_profit_price = calc_tp
 
-        strategy_name = (b.low_balance_strategy or "standard").lower()
-        state = bot_engine._load_strategy_state(b)
-        scattershot_legs = (state.get("legs") or []) if strategy_name == "scattershot" else []
         swing_hold_days = None
         if strategy_name == "swing_trader" and b.in_position and b.position_opened_at:
             swing_hold_days = max(
@@ -1719,7 +1746,8 @@ def market_status_endpoint():
 
 
 @app.get("/api/portfolio/performance")
-def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+def portfolio_performance(mode: Optional[str] = None, broker: Optional[str] = None,
+                          u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     """
     Build the bot-performance dataset for the Portfolio graph:
       - funds_allocated : capital currently deployed in open bot positions
@@ -1736,6 +1764,9 @@ def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_curr
     active_mode = (mode or u.trading_mode or "paper").lower()
     if active_mode not in ("paper", "live"):
         active_mode = "paper"
+    active_broker = (broker or u.active_broker or "alpaca").lower()
+    if active_broker not in ("alpaca", "okx"):
+        active_broker = "alpaca"
     # Open positions are only actually "held" in the account the user is live in,
     # so they only count toward the mode matching the current account state.
     include_open = active_mode == (u.trading_mode or "paper").lower()
@@ -1743,17 +1774,24 @@ def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_curr
     bots = db.query(Bot).filter(Bot.owner_id == u.id).all()
     bot_names = {b.id: b.name for b in bots}
 
-    # funds_allocated = capital currently deployed in open bot positions (this mode)
+    # funds_allocated = capital currently deployed in open bot positions (this mode+broker)
     mode_bots = [
         b for b in bots
         if (b.mode or u.trading_mode or "paper").lower() == active_mode
+        and (b.broker or "alpaca").lower() == active_broker
     ]
     funds_allocated = sum(
         float(b.funds_allocated or 0.0) for b in mode_bots if b.in_position
     ) if include_open else 0.0
 
+    trade_filters = [Trade.owner_id == u.id, Trade.mode == active_mode]
+    if active_broker == "alpaca":
+        from sqlalchemy import or_
+        trade_filters.append(or_(Trade.broker == "alpaca", Trade.broker.is_(None)))
+    else:
+        trade_filters.append(Trade.broker == active_broker)
     trades = (db.query(Trade)
-                .filter(Trade.owner_id == u.id, Trade.mode == active_mode)
+                .filter(*trade_filters)
                 .order_by(Trade.created_at.asc(), Trade.id.asc())
                 .all())
 
@@ -1815,10 +1853,28 @@ def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_curr
     if include_open:
         for b in mode_bots:
             if b.in_position and b.avg_entry_price and b.shares_held:
-                # Scattershot may store comma-joined tickers; skip unusable marks.
-                ticker = (b.ticker or "").split(",")[0].strip()
-                q = market_store.get_quote(db, b.broker or "alpaca", ticker) if ticker else None
-                mark = float(q.price) if (q and q.price) else float(b.avg_entry_price)
+                mark = float(b.avg_entry_price)
+                if (b.low_balance_strategy or "").lower() == "scattershot":
+                    try:
+                        state = json.loads(b.strategy_state or "{}") if b.strategy_state else {}
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        state = {}
+                    legs = state.get("legs") or []
+                    leg_marks = []
+                    for leg in legs:
+                        sym = (leg.get("ticker") or "").upper().strip()
+                        if not sym:
+                            continue
+                        q = market_store.get_quote(db, b.broker or "alpaca", sym)
+                        if q and q.price:
+                            leg_marks.append(float(q.price))
+                    if leg_marks:
+                        mark = sum(leg_marks) / len(leg_marks)
+                else:
+                    ticker = (b.ticker or "").split(",")[0].strip()
+                    q = market_store.get_quote(db, b.broker or "alpaca", ticker) if ticker else None
+                    if q and q.price:
+                        mark = float(q.price)
                 unrealized += (mark - float(b.avg_entry_price)) * float(b.shares_held)
 
     live_value = round(cumulative + unrealized, 2)
@@ -1833,6 +1889,7 @@ def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_curr
 
     return {
         "mode": active_mode,
+        "broker": active_broker,
         "funds_allocated": round(funds_allocated, 2),
         "net_position": round(cumulative, 2),
         "unrealized": round(unrealized, 2),
@@ -1943,9 +2000,20 @@ def _validate_cash_account_strategy_allocation(user: User, broker: str, strategy
     try:
         acct_ctx = bot_engine._get_alpaca_account_context(user, broker)
     except Exception:
-        # No keys / broker unreachable — skip GFV checks (common for paper / new accounts).
+        acct_ctx = None
+    if not acct_ctx:
         return
-    if not acct_ctx or acct_ctx.get("account_type") != "cash":
+    account_type = acct_ctx.get("account_type")
+    # Keys present but account type unknown — fail closed for cash-sensitive strategies.
+    if account_type == "unknown":
+        if strategy in ("one_shot_daily", "micro_trader", "scattershot"):
+            if has_credentials(user, broker, paper=(user.trading_mode or "paper") == "paper"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Unable to verify Alpaca account type for this strategy. Try again in a moment.",
+                )
+        return
+    if account_type != "cash":
         return
     non_marginable = acct_ctx.get("non_marginable_buying_power")
     if strategy == "one_shot_daily":

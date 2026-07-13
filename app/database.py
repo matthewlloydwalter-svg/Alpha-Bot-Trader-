@@ -387,6 +387,20 @@ def _backfill_integrity():
 
             if "users" in tables:
                 cols = {c["name"] for c in inspector.get_columns("users")}
+                if "verification_code" in cols and "verification_code_sent_at" in cols:
+                    # Invalidate legacy codes that have no send timestamp — they
+                    # would otherwise never expire under the TTL check.
+                    cleared = conn.execute(text(
+                        "UPDATE users SET verification_code = NULL "
+                        "WHERE verification_code IS NOT NULL "
+                        "AND verification_code_sent_at IS NULL"
+                    ))
+                    try:
+                        n = cleared.rowcount
+                        if n:
+                            logger.info("[BACKFILL] Cleared %d legacy verification code(s) without sent_at", n)
+                    except Exception:
+                        pass
                 if "subscription_plan" in cols:
                     updated = conn.execute(text(
                         "UPDATE users SET subscription_plan = 'starter' "
