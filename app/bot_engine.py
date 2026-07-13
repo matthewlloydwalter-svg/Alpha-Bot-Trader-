@@ -519,19 +519,7 @@ def _pick_scattershot_symbols(db: Session, owner: User, bot: Bot, count: int) ->
 
     ranked.sort(key=lambda x: x[0], reverse=True)
     picks = [sym for _, sym in ranked[:count]]
-    if len(picks) >= count:
-        return picks[:count]
-
-    for item in items:
-        sym = item["symbol"]
-        if sym in seen or sym in picks:
-            continue
-        blocked, _ = _market_collision_blocked(db, owner, bot, sym, 0.5)
-        if blocked:
-            continue
-        picks.append(sym)
-        if len(picks) >= count:
-            break
+    # Prefer underfilled baskets over deploying into names with no BUY signal.
     return picks[:count]
 
 

@@ -7,7 +7,7 @@ always compute against America/New_York so DST (EST/EDT) is handled correctly.
 
 Crypto (OKX) trades 24/7, so ``market_open_for_broker`` only gates Alpaca.
 
-NOTE: Full-day NYSE holidays through 2027 are modeled in ``NYSE_HOLIDAYS``.
+NOTE: Full-day NYSE holidays through 2028 are modeled in ``NYSE_HOLIDAYS``.
 Early-close (1:00 PM ET) half-days are modeled in ``NYSE_EARLY_CLOSE``.
 """
 
@@ -33,6 +33,9 @@ NYSE_HOLIDAYS = {
     # 2027
     "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
     "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+    # 2028
+    "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19",
+    "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25",
 }
 
 # NYSE early closes at 1:00 PM ET (day before Independence Day when applicable,
@@ -41,6 +44,7 @@ NYSE_EARLY_CLOSE = {
     "2025-07-03", "2025-11-28", "2025-12-24",
     "2026-11-27", "2026-12-24",
     "2027-11-26", "2027-12-23",
+    "2028-07-03", "2028-11-24", "2028-12-22",
 }
 
 

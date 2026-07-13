@@ -385,7 +385,7 @@ def sync_user_from_subscription(user, subscription: dict) -> None:
 
     period_end = _period_end_from_subscription(subscription)
 
-    if status in {"canceled", "unpaid", "incomplete_expired"}:
+    if status in {"canceled", "unpaid", "incomplete_expired", "incomplete"}:
         apply_plan_to_user(
             user,
             "starter",
@@ -396,7 +396,8 @@ def sync_user_from_subscription(user, subscription: dict) -> None:
             current_period_end=None,
             plan_level="Starter",
         )
-    else:
+    elif status in {"active", "trialing", "past_due"}:
+        # past_due keeps entitlements during Stripe's grace period; unpaid/incomplete do not.
         access_status = "active" if status in {"active", "trialing"} else status
         apply_plan_to_user(
             user,
@@ -407,6 +408,11 @@ def sync_user_from_subscription(user, subscription: dict) -> None:
             subscription_id=subscription.get("id"),
             current_period_end=period_end,
             plan_level=plan_level,
+        )
+    else:
+        logger.warning(
+            "Unhandled Stripe subscription status=%s for user_id=%s — leaving plan unchanged",
+            status, getattr(user, "id", None),
         )
 
 

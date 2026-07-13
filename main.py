@@ -54,6 +54,44 @@ logger = logging.getLogger("alphabot")
 VERIFICATION_CODE_TTL_HOURS = int(os.getenv("VERIFICATION_CODE_TTL_HOURS", "24"))
 
 
+def _scattershot_unrealized(db: Session, bot: Bot, legs: list | None = None) -> tuple[float | None, float | None]:
+    """
+    Qty-weighted mark and unrealized P/L for a scattershot basket.
+    Returns (mark_price, unrealized_pl). Either may be None if no usable legs.
+    """
+    if legs is None:
+        try:
+            state = json.loads(bot.strategy_state or "{}") if bot.strategy_state else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            state = {}
+        legs = state.get("legs") or []
+    broker = (bot.broker or "alpaca").lower()
+    total_qty = 0.0
+    total_cost = 0.0
+    total_mark = 0.0
+    marked = 0
+    for leg in legs:
+        sym = (leg.get("ticker") or "").upper().strip()
+        try:
+            qty = float(leg.get("qty") or 0)
+            entry = float(leg.get("entry_price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not sym or qty <= 0 or entry <= 0:
+            continue
+        q = market_store.get_quote(db, broker, sym)
+        price = float(q.price) if (q and q.price) else entry
+        total_qty += qty
+        total_cost += entry * qty
+        total_mark += price * qty
+        marked += 1
+    if not marked or total_qty <= 0:
+        return None, None
+    mark = total_mark / total_qty
+    unrealized = total_mark - total_cost
+    return mark, unrealized
+
+
 def _iso_utc(dt) -> Optional[str]:
     """Naive UTC datetimes → ISO-8601 with explicit Z suffix for browsers."""
     if not dt:
@@ -1234,9 +1272,24 @@ def get_broker_account(u: User = Depends(get_current_user_from_cookie)):
         raise HTTPException(status_code=400, detail=detail)
 
 @app.get("/broker/trades-ledger")
-def get_trades_ledger(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+def get_trades_ledger(mode: Optional[str] = None, broker: Optional[str] = None,
+                      u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     # Query database and map trade results with full quantity + bot attribution.
-    records = db.query(Trade).filter(Trade.owner_id == u.id).order_by(Trade.created_at.desc()).all()
+    # Defaults to the account's current trading mode + active broker (matches Bots/Portfolio).
+    active_mode = (mode or u.trading_mode or "paper").lower()
+    if active_mode not in ("paper", "live"):
+        active_mode = "paper"
+    active_broker = (broker or u.active_broker or "alpaca").lower()
+    if active_broker not in ("alpaca", "okx"):
+        active_broker = "alpaca"
+
+    q = db.query(Trade).filter(Trade.owner_id == u.id, Trade.mode == active_mode)
+    if active_broker == "alpaca":
+        from sqlalchemy import or_
+        q = q.filter(or_(Trade.broker == "alpaca", Trade.broker.is_(None)))
+    else:
+        q = q.filter(Trade.broker == active_broker)
+    records = q.order_by(Trade.created_at.desc()).all()
     bot_names = {b.id: b.name for b in db.query(Bot).filter(Bot.owner_id == u.id).all()}
 
     def _qty(r):
@@ -1322,16 +1375,11 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
         # Scattershot stores comma-joined tickers — mark from per-leg quotes.
         if b.in_position:
             if scattershot_legs:
-                leg_marks = []
-                for leg in scattershot_legs:
-                    sym = (leg.get("ticker") or "").upper().strip()
-                    if not sym:
-                        continue
-                    q = market_store.get_quote(db, broker, sym)
-                    if q and q.price:
-                        leg_marks.append(float(q.price))
-                if leg_marks:
-                    current_price = sum(leg_marks) / len(leg_marks)
+                mark, leg_u = _scattershot_unrealized(db, b, scattershot_legs)
+                if mark is not None:
+                    current_price = mark
+                if leg_u is not None:
+                    unrealized_pl = leg_u
             elif b.ticker:
                 q = market_store.get_quote(db, broker, b.ticker)
                 if q and q.price:
@@ -1663,10 +1711,19 @@ def _collect_bot_status(user_id: int, exchange: str, symbol: str) -> dict:
 
 @app.post("/bots/scan-all")
 def scan_all_bots(u: User = Depends(get_current_user_from_cookie)):
-    """Run one decision cycle for every running bot owned by this user."""
+    """Run one decision cycle for every running bot owned by this user.
+
+    Also includes paused bots that still hold risk so mandatory exits can fire.
+    """
     db = SessionLocal()
     try:
-        bots = db.query(Bot).filter(Bot.owner_id == u.id, Bot.running == True).order_by(Bot.id.asc()).all()  # noqa: E712
+        all_bots = (
+            db.query(Bot)
+            .filter(Bot.owner_id == u.id)
+            .order_by(Bot.id.asc())
+            .all()
+        )
+        bots = [b for b in all_bots if b.running or bot_engine.bot_needs_liquidation(b)]
     finally:
         db.close()
     max_batch = int(os.getenv("BOT_SCAN_ALL_LIMIT", "10"))
@@ -1698,30 +1755,15 @@ def _bot_performance_highlights(db: Session, bots: list) -> Optional[dict]:
         realized = float(b.realized_pnl or 0.0)
         unrealized = 0.0
         if b.in_position and b.avg_entry_price and b.shares_held:
-            mark = b.avg_entry_price
             if (b.low_balance_strategy or "").lower() == "scattershot":
-                state = {}
-                try:
-                    state = json.loads(b.strategy_state or "{}") if b.strategy_state else {}
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    state = {}
-                legs = state.get("legs") or []
-                if legs:
-                    leg_marks = []
-                    for leg in legs:
-                        sym = (leg.get("ticker") or "").upper().strip()
-                        if not sym:
-                            continue
-                        q = market_store.get_quote(db, b.broker or "alpaca", sym)
-                        if q and q.price:
-                            leg_marks.append(float(q.price))
-                    if leg_marks:
-                        mark = sum(leg_marks) / len(leg_marks)
+                _, u_pl = _scattershot_unrealized(db, b)
+                unrealized = float(u_pl) if u_pl is not None else 0.0
             else:
+                mark = b.avg_entry_price
                 q = market_store.get_quote(db, b.broker or "alpaca", b.ticker or "")
                 if q and q.price:
                     mark = q.price
-            unrealized = (float(mark) - float(b.avg_entry_price)) * float(b.shares_held)
+                unrealized = (float(mark) - float(b.avg_entry_price)) * float(b.shares_held)
         net = round(realized + unrealized, 2)
         funds = float(b.funds_allocated or 0.0)
         roi = round((net / funds * 100.0), 2) if funds > 0 else 0.0
@@ -1805,7 +1847,8 @@ def portfolio_performance(mode: Optional[str] = None, broker: Optional[str] = No
     markers = []
 
     for t in trades:
-        key = t.bot_id if t.bot_id is not None else f"manual:{t.ticker}"
+        # Per-ticker cost basis so scattershot multi-leg bots don't blend unrelated symbols.
+        key = (t.bot_id if t.bot_id is not None else f"manual:{t.ticker}", (t.ticker or "").upper())
         pos = positions.setdefault(key, {"qty": 0.0, "cost": 0.0})
         price = float(t.price or 0)
         side = (t.side or "").lower()
@@ -1831,6 +1874,9 @@ def portfolio_performance(mode: Optional[str] = None, broker: Optional[str] = No
             cumulative += realized
             pos["qty"] = max(0.0, pos["qty"] - qty)
             pos["cost"] = max(0.0, pos["cost"] - avg * qty)
+            if pos["qty"] <= 1e-12:
+                pos["qty"] = 0.0
+                pos["cost"] = 0.0
             markers.append({
                 "time": ts, "datetime_utc": dt_iso,
                 "type": "sell_profit" if realized >= 0 else "sell_loss",
@@ -1853,29 +1899,17 @@ def portfolio_performance(mode: Optional[str] = None, broker: Optional[str] = No
     if include_open:
         for b in mode_bots:
             if b.in_position and b.avg_entry_price and b.shares_held:
-                mark = float(b.avg_entry_price)
                 if (b.low_balance_strategy or "").lower() == "scattershot":
-                    try:
-                        state = json.loads(b.strategy_state or "{}") if b.strategy_state else {}
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        state = {}
-                    legs = state.get("legs") or []
-                    leg_marks = []
-                    for leg in legs:
-                        sym = (leg.get("ticker") or "").upper().strip()
-                        if not sym:
-                            continue
-                        q = market_store.get_quote(db, b.broker or "alpaca", sym)
-                        if q and q.price:
-                            leg_marks.append(float(q.price))
-                    if leg_marks:
-                        mark = sum(leg_marks) / len(leg_marks)
+                    _, u_pl = _scattershot_unrealized(db, b)
+                    if u_pl is not None:
+                        unrealized += float(u_pl)
                 else:
+                    mark = float(b.avg_entry_price)
                     ticker = (b.ticker or "").split(",")[0].strip()
                     q = market_store.get_quote(db, b.broker or "alpaca", ticker) if ticker else None
                     if q and q.price:
                         mark = float(q.price)
-                unrealized += (mark - float(b.avg_entry_price)) * float(b.shares_held)
+                    unrealized += (mark - float(b.avg_entry_price)) * float(b.shares_held)
 
     live_value = round(cumulative + unrealized, 2)
     series = [{"time": ts, "value": v} for ts, v in sorted(series_map.items())]
@@ -1991,14 +2025,19 @@ def _broker_available_funds(
     return total if found else None
 
 
-def _validate_cash_account_strategy_allocation(user: User, broker: str, strategy: str, funds: float) -> None:
+def _validate_cash_account_strategy_allocation(
+    user: User, broker: str, strategy: str, funds: float, *, mode: Optional[str] = None
+) -> None:
     """Reject allocations that would violate GFV-safe low-balance strategy limits."""
     if strategy == "scattershot" and (broker or "alpaca").lower() != "alpaca":
         raise HTTPException(status_code=400, detail="Scattershot is available for Alpaca equities only.")
     if (broker or "alpaca").lower() != "alpaca":
         return
+    paper = ((mode or user.trading_mode or "paper").lower() == "paper")
+    from types import SimpleNamespace
+    hint = SimpleNamespace(mode="paper" if paper else "live")
     try:
-        acct_ctx = bot_engine._get_alpaca_account_context(user, broker)
+        acct_ctx = bot_engine._get_alpaca_account_context(user, broker, bot=hint)  # type: ignore[arg-type]
     except Exception:
         acct_ctx = None
     if not acct_ctx:
@@ -2007,7 +2046,7 @@ def _validate_cash_account_strategy_allocation(user: User, broker: str, strategy
     # Keys present but account type unknown — fail closed for cash-sensitive strategies.
     if account_type == "unknown":
         if strategy in ("one_shot_daily", "micro_trader", "scattershot"):
-            if has_credentials(user, broker, paper=(user.trading_mode or "paper") == "paper"):
+            if has_credentials(user, broker, paper=paper):
                 raise HTTPException(
                     status_code=400,
                     detail="Unable to verify Alpaca account type for this strategy. Try again in a moment.",
@@ -2081,7 +2120,7 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
         if funds > (available - already_allocated) + 1e-6:
             raise HTTPException(status_code=400, detail=_insufficient_funds_detail(broker_selected))
 
-    _validate_cash_account_strategy_allocation(u, broker_selected, strategy, funds)
+    _validate_cash_account_strategy_allocation(u, broker_selected, strategy, funds, mode=mode_now)
 
     new_bot = Bot(
         owner_id=u.id,
@@ -2276,7 +2315,7 @@ async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_
             raise HTTPException(status_code=400, detail=_insufficient_funds_detail(bot_broker))
 
     strategy = (bot.low_balance_strategy or "standard").lower()
-    _validate_cash_account_strategy_allocation(u, bot_broker, strategy, new_funds)
+    _validate_cash_account_strategy_allocation(u, bot_broker, strategy, new_funds, mode=bot_mode)
 
     previous = float(bot.funds_allocated or 0.0)
     bot.funds_allocated = new_funds

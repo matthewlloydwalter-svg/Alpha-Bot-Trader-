@@ -1175,25 +1175,35 @@ async function loadPortfolioForMode(mode) {
     if (dEl) { dEl.textContent = ""; dEl.className = "pf-delta"; }
     if (PF_MAIN_CHART) { try { PF_MAIN_CHART.remove(); } catch (_) {} PF_MAIN_CHART = null; }
     const win = document.getElementById("pf-winner");
-    if (win) win.innerHTML = "";
+    if (win) {
+      const n = win.querySelector(".perf-wl-name");
+      const v = win.querySelector(".perf-wl-val");
+      if (n) n.textContent = "—";
+      if (v) v.textContent = "—";
+    }
     const lose = document.getElementById("pf-loser");
-    if (lose) lose.innerHTML = "";
+    if (lose) {
+      const n = lose.querySelector(".perf-wl-name");
+      const v = lose.querySelector(".perf-wl-val");
+      if (n) n.textContent = "—";
+      if (v) v.textContent = "—";
+    }
     const abl = document.getElementById("active-bots-list");
     if (abl) abl.innerHTML = `<div style="color:var(--t2);padding:8px">Portfolio data unavailable.</div>`;
     return;
   }
   PF_DATA = { perf: perf || {}, bots: Array.isArray(bots) ? bots : (bots && bots.bots) || [], mode };
 
-  // Total current asset valuation held by active bots = open-position cost
-  // basis + live unrealized mark-to-market.
-  const total = Number(perf.funds_allocated || 0) + Number(perf.unrealized || 0);
+  // Total AlphaBotix Valuation = realized P/L + open-position mark-to-market
+  // (live_value). Do NOT use funds_allocated alone — that is $0 when flat.
+  const total = (perf.live_value != null)
+    ? Number(perf.live_value)
+    : (Number(perf.net_position || 0) + Number(perf.unrealized || 0));
   const tEl = document.getElementById("pf-total-value");
   if (tEl) tEl.textContent = money(total);
 
   // Overall P/L (realized + unrealized) — sticky header figure.
-  const totalPnl = (perf.live_value != null)
-    ? Number(perf.live_value)
-    : (Number(perf.net_position || 0) + Number(perf.unrealized || 0));
+  const totalPnl = total;
   const pnlEl = document.getElementById("pf-total-pnl");
   if (pnlEl) {
     pnlEl.textContent = fmtSignedMoney(totalPnl);
@@ -1328,10 +1338,13 @@ function renderWinnerLoser() {
   const setCard = (id, name, pnl, cls) => {
     const el = document.getElementById(id);
     if (!el) return;
-    el.querySelector(".perf-wl-name").textContent = name;
+    const nameEl = el.querySelector(".perf-wl-name");
     const v = el.querySelector(".perf-wl-val");
-    v.textContent = (pnl == null) ? "—" : fmtSignedMoney(pnl);
-    v.className = "perf-wl-val " + (cls || "");
+    if (nameEl) nameEl.textContent = name;
+    if (v) {
+      v.textContent = (pnl == null) ? "—" : fmtSignedMoney(pnl);
+      v.className = "perf-wl-val " + (cls || "");
+    }
   };
   if (!wl) {
     setCard("pf-winner", "No closed trades in last 24h", null, "");
@@ -2062,6 +2075,8 @@ function setDashPreset(preset) {
     }
     console.log("[DASH] setDashPreset", code);
     DASH_STATE.preset = code;
+    DASH_LAST = null;
+    if (DASH_CHART) { try { DASH_CHART.remove(); } catch (_) {} DASH_CHART = null; }
     syncDashPresetButtons(code);
     // Restart the 15s timer so the next tick is relative to this switch, and
     // immediately fetch with the new date range + timeframe.
@@ -2166,10 +2181,11 @@ async function reloadDashboard(opts) {
 
 function renderDashboard(d) {
   DASH_LAST = d;
-  document.getElementById("dash-symbol").textContent = d.display_symbol || d.symbol;
-  document.getElementById("dash-name").textContent = d.asset_name || "";
-  document.getElementById("dash-class-badge").textContent = d.asset_class || d.exchange;
-  document.getElementById("dash-price").textContent = formatPrice(d.last_price, d.quote);
+  const setTxt = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  setTxt("dash-symbol", d.display_symbol || d.symbol);
+  setTxt("dash-name", d.asset_name || "");
+  setTxt("dash-class-badge", d.asset_class || d.exchange);
+  setTxt("dash-price", formatPrice(d.last_price, d.quote));
 
   const sub = document.getElementById("dash-price-sub");
   if (sub) {
@@ -2186,8 +2202,10 @@ function renderDashboard(d) {
   // Signal badge
   const sig = d.signal || {};
   const sBadge = document.getElementById("dash-signal-badge");
-  sBadge.textContent = `${sig.action || "—"} · ${sig.confidence || ""}`;
-  sBadge.className = "badge " + (sig.bias === "bullish" ? "badge-green" : sig.bias === "bearish" ? "badge-red" : "badge-amber");
+  if (sBadge) {
+    sBadge.textContent = `${sig.action || "—"} · ${sig.confidence || ""}`;
+    sBadge.className = "badge " + (sig.bias === "bullish" ? "badge-green" : sig.bias === "bearish" ? "badge-red" : "badge-amber");
+  }
 
   renderDashChart(d);
   renderDashPatterns(d.patterns || []);
@@ -2317,6 +2335,7 @@ function renderDashIndicators(ind) {
 
 function renderDashBotStatus(status, sig) {
   const el = document.getElementById("dash-bot-status");
+  if (!el) return;
   let html = "";
   if (status.has_bot && status.bots && status.bots.length) {
     html = status.bots.map(b => `
@@ -2359,7 +2378,9 @@ async function loadTradeHistory() {
   const tbody = document.getElementById("history-table-body");
   if (!tbody) return;
   try {
-    const trades = await api("/broker/trades-ledger");
+    const mode = (USER && USER.trading_mode) || "paper";
+    const broker = (USER && USER.active_broker) || "alpaca";
+    const trades = await api(`/broker/trades-ledger?mode=${encodeURIComponent(mode)}&broker=${encodeURIComponent(broker)}`);
     const hdr = document.getElementById("history-header-count");
     if (hdr) hdr.textContent = String((trades && trades.length) || 0);
     if (!trades.length) { tbody.innerHTML = `<tr><td colspan="8" style="color:var(--t2)">No trades logged yet.</td></tr>`; return; }
