@@ -142,6 +142,8 @@ def poll_market_data() -> None:
 
 
 def evaluate_bots() -> None:
+    # AdSense login bypass is HTTP-only — this loop still trades for every real
+    # owner's running bots using credentials stored on their User row.
     try:
         summary = bot_engine.run_all_active_bots()
         if summary.get("scanned"):

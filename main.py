@@ -292,9 +292,12 @@ def _cookie_kwargs(request: Request | None = None) -> dict:
 
 def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)) -> User:
     # TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
-    # Temporary AdSense review bypass: EVERY request resolves to the mock
+    # Temporary AdSense review bypass: EVERY *HTTP* request resolves to the mock
     # guest_trader profile only. Real customer sessions are ignored so reviewers
     # (and the public) never see your account or any other real user's data.
+    #
+    # IMPORTANT: This does NOT touch the background bot engine. APScheduler still
+    # loads every running Bot by owner_id and trades with that owner's broker keys.
     if ADSENSE_AUTH_BYPASS:
         return get_or_create_adsense_guest_user(db)
 

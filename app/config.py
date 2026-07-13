@@ -17,9 +17,11 @@ def _env_flag(name: str, default: str = "0") -> bool:
 #
 # Behavior while enabled:
 #   - Login/signup pages are disabled (redirect to dashboard)
-#   - Every visitor is the mock guest_trader profile ONLY
+#   - Every HTTP visitor is the mock guest_trader profile ONLY
 #   - Real user accounts (you + others) are NEVER returned to the UI/API
 #   - /admin stays locked (guest is not admin)
+#   - Background trading is UNAFFECTED: APScheduler still evaluates every
+#     Bot with running=True for ALL real owners using their stored broker keys
 #   - Auto-disables after ADSENSE_AUTH_BYPASS_DEADLINE even if flag left on
 # ────────────────────────────────────────────────────────────────────
 ADSENSE_AUTH_BYPASS_DEADLINE = date(2026, 9, 11)
