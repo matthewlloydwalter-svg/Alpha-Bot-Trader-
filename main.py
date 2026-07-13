@@ -704,7 +704,7 @@ def billing_confirm_checkout(
     )
     if not owns:
         raise HTTPException(status_code=403, detail="Checkout session does not belong to this account.")
-    if session.get("payment_status") in {"paid", "no_payment_required"} or session.get("status") == "complete":
+    if session.get("payment_status") in {"paid", "no_payment_required"}:
         stripe_billing.sync_user_from_checkout_session(u, session)
         _enforce_running_bot_limit(u, db)
         db.add(u)
