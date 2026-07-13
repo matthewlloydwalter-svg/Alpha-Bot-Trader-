@@ -60,12 +60,12 @@ def _collect_targets() -> dict[tuple[str, str], dict]:
         bots = db.query(Bot).filter(Bot.running == True).all()  # noqa: E712
         owners: dict[int, User] = {}
         for b in bots:
-            broker = (b.broker or "alpaca").lower()
             owner = owners.get(b.owner_id) or db.query(User).filter(User.id == b.owner_id).first()
             if owner is None:
                 continue
             owners[b.owner_id] = owner
-            paper = (owner.trading_mode or "paper") == "paper"
+            broker = (b.broker or owner.active_broker or "alpaca").lower()
+            paper = (b.mode or owner.trading_mode or "paper").lower() == "paper"
             creds = resolve_credentials(owner, broker, paper)
             for symbol in bot_engine._bot_tracked_symbols(b):
                 targets[(broker, symbol)] = {"creds": creds, "paper": paper}

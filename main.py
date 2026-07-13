@@ -426,6 +426,11 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             unrealized_pl = (current_price - entry_price) * (b.shares_held or 0)
 
         display_stop_price, display_take_profit_price = bot_engine._get_display_risk_targets(entry_price)
+        if (b.low_balance_strategy or "standard").lower() == "scattershot" or scattershot_legs:
+            display_stop_price, display_take_profit_price = None, None
+        elif b.in_position and (b.stop_price is not None or b.take_profit_price is not None):
+            display_stop_price = b.stop_price if b.stop_price is not None else display_stop_price
+            display_take_profit_price = b.take_profit_price if b.take_profit_price is not None else display_take_profit_price
         swing_hold_days = None
         if (b.low_balance_strategy or "standard").lower() == "swing_trader" and b.position_opened_at and b.in_position:
             held = (datetime.utcnow() - b.position_opened_at).total_seconds() / 86400.0
@@ -698,11 +703,12 @@ def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_curr
     include_open = active_mode == (u.trading_mode or "paper").lower()
 
     bots = db.query(Bot).filter(Bot.owner_id == u.id).all()
-    bot_names = {b.id: b.name for b in bots}
+    mode_bots = [b for b in bots if (b.mode or "paper").lower() == active_mode]
+    bot_names = {b.id: b.name for b in mode_bots}
 
     # funds_allocated = capital currently deployed in open bot positions (this mode)
     funds_allocated = sum(
-        float(b.funds_allocated or 0.0) for b in bots if b.running and b.in_position
+        float(b.funds_allocated or 0.0) for b in mode_bots if b.running and b.in_position
     ) if include_open else 0.0
 
     trades = (db.query(Trade)
@@ -766,7 +772,7 @@ def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_curr
     # Only counts for the currently-live mode (see include_open above).
     unrealized = 0.0
     if include_open:
-        for b in bots:
+        for b in mode_bots:
             if not (b.running and b.in_position):
                 continue
             if (b.low_balance_strategy or "standard").lower() == "scattershot" and bot_engine._scattershot_active(b):
@@ -798,7 +804,7 @@ def portfolio_performance(mode: Optional[str] = None, u: User = Depends(get_curr
         "trade_count": len(trades),
         "series": series,
         "markers": markers,
-        "highlights": _bot_performance_highlights(db, bots),
+        "highlights": _bot_performance_highlights(db, mode_bots),
     }
 
 
@@ -811,18 +817,13 @@ INSUFFICIENT_FUNDS_MSG = (
 )
 
 
-def _broker_available_funds(user: User) -> Optional[float]:
+def _broker_available_funds(user: User, broker: str | None = None, mode: str | None = None) -> Optional[float]:
     """
-    Verified, allocatable cash from the user's *active* broker session (Alpaca
-    or OKX, paper or live per their current Trading Mode). This is the single
-    source of truth for what can be allocated to a Box.
-
-    Returns the available cash as a float, or ``None`` when it cannot be
-    verified (no/invalid keys, broker unreachable, no quote-currency balance) —
-    callers treat ``None`` as "no verified funds" and block the allocation.
+    Verified, allocatable cash from the user's broker session (Alpaca or OKX,
+    paper or live for the requested trading mode).
     """
-    broker = (user.active_broker or "alpaca").lower()
-    paper = (user.trading_mode or "paper") == "paper"
+    broker = (broker or user.active_broker or "alpaca").lower()
+    paper = ((mode or user.trading_mode or "paper").lower() == "paper")
     creds = resolve_credentials(user, broker, paper)
     try:
         info = get_account_info(broker=broker, paper=paper, **creds)
@@ -920,17 +921,20 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
     # When keys aren't set yet (common in paper mode / new accounts), skip the
     # check and let the user create bots freely — paper trading doesn't risk
     # real money so this is safe.
-    available = _broker_available_funds(u)
+    broker_selected = (data.get("broker") or (u.active_broker or "alpaca")).lower()
+    account_mode = (u.trading_mode or "paper").lower()
+    available = _broker_available_funds(u, broker_selected, account_mode)
     if available is not None:
         already_allocated = sum(
             float(b.funds_allocated or 0.0)
             for b in db.query(Bot).filter(Bot.owner_id == u.id).all()
+            if (b.broker or u.active_broker or "alpaca").lower() == broker_selected
+            and (b.mode or "paper").lower() == account_mode
         )
         if funds > (available - already_allocated) + 1e-6:
             raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)
 
     # ── Alpaca cash-account GFV guard: verify account type and non-marginable buying power
-    broker_selected = (data.get("broker") or (u.active_broker or "alpaca")).lower()
     _validate_cash_account_strategy_allocation(u, broker_selected, strategy, funds)
 
     new_bot = Bot(
@@ -982,10 +986,7 @@ async def delete_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
     # bot is removed. With real keys, a liquidation failure aborts the delete
     # (fail safe) rather than silently dropping the bot while shares remain.
     liquidation = None
-    has_holdings = bot.in_position and (
-        (bot.shares_held or 0) > 0
-        or bot_engine._scattershot_active(bot)
-    )
+    has_holdings = bot_engine._scattershot_active(bot) or bot.in_position
     if has_holdings:
         try:
             liquidation = bot_engine.liquidate_bot(bot.id, reason="bot deleted")
@@ -1026,6 +1027,7 @@ async def liquidate_bot_endpoint(bot_id: int, u: User = Depends(get_current_user
     except Exception as e:
         logger.error("Manual sell failed for bot %s: %s", bot_id, e)
         raise HTTPException(status_code=502, detail=f"Could not sell this bot's holdings: {e}")
+    db.expire_all()
     return {"status": "liquidated", "bot_id": bot_id, "details": result}
 
 @app.post("/bots/{bot_id}/funds")
@@ -1054,11 +1056,13 @@ async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_
         raise HTTPException(status_code=400, detail="Allocated funds must be greater than zero.")
 
     # Same guardrail as bot creation: only enforce when keys are present.
-    available = _broker_available_funds(u)
+    available = _broker_available_funds(u, bot.broker, bot.mode)
     if available is not None:
         others_allocated = sum(
             float(b.funds_allocated or 0.0)
             for b in db.query(Bot).filter(Bot.owner_id == u.id, Bot.id != bot_id).all()
+            if (b.broker or u.active_broker or "alpaca").lower() == (bot.broker or u.active_broker or "alpaca").lower()
+            and (b.mode or "paper").lower() == (bot.mode or "paper").lower()
         )
         if new_funds > (available - others_allocated) + 1e-6:
             raise HTTPException(status_code=400, detail=INSUFFICIENT_FUNDS_MSG)

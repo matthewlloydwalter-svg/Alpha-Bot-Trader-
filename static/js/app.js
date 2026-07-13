@@ -649,7 +649,9 @@ function renderActiveBots() {
       pnlByBot[m.bot_id] = (pnlByBot[m.bot_id] || 0) + Number(m.pnl);
     }
   }
-  const bots = (PF_DATA.bots || []).filter(b => activeIds.has(b.id) || (isActiveMode && b.in_position));
+  const bots = (PF_DATA.bots || []).filter(b =>
+    (b.mode || "paper") === mode &&
+    (activeIds.has(b.id) || (isActiveMode && b.in_position)));
   if (cnt) cnt.textContent = bots.length;
   if (!bots.length) {
     const label = mode === "live" ? "live" : "paper";
@@ -893,8 +895,12 @@ function renderBots() {
     const pnlColor = livePnl >= 0 ? PF_GREEN : PF_RED;
     const assetLabel = b.ticker ? esc(b.ticker) : (b.auto_select ? "🧠 Auto-select (all markets)" : "Auto");
     const strategyLabel = b.low_balance_strategy_label || b.low_balance_strategy || "Standard";
-    const cooldownNote = (b.strategy_cooldown_until && new Date(b.strategy_cooldown_until.endsWith("Z") ? b.strategy_cooldown_until : `${b.strategy_cooldown_until}Z`) > new Date())
-      ? `<span class="badge badge-amber" title="Settlement cooldown active">Cooldown</span>`
+    const isScattershot = (b.low_balance_strategy === "scattershot") || (b.scattershot_legs && b.scattershot_legs.length);
+    const cooldownUntil = b.strategy_cooldown_until
+      ? new Date(b.strategy_cooldown_until.endsWith("Z") ? b.strategy_cooldown_until : `${b.strategy_cooldown_until}Z`)
+      : null;
+    const cooldownNote = (cooldownUntil && cooldownUntil > new Date())
+      ? `<span class="badge badge-amber" title="Cooldown until ${esc(cooldownUntil.toLocaleString())}">Cooldown</span>`
       : "";
     const scattershotNote = (b.scattershot_legs && b.scattershot_legs.length)
       ? `<span class="badge badge-purple" title="${esc(b.scattershot_legs.map(l => l.ticker).join(', '))}">${b.scattershot_legs.length}-leg basket</span>`
@@ -902,11 +908,12 @@ function renderBots() {
     const swingNote = (b.low_balance_strategy === "swing_trader" && b.in_position && typeof b.swing_hold_days === "number")
       ? `<span class="badge badge-blue" title="Minimum 3-day swing hold">Day ${b.swing_hold_days}</span>`
       : "";
-    const chartBtn = b.ticker
+    const chartBtn = (b.ticker && !isScattershot && !String(b.ticker).includes(","))
       ? `<button class="btn btn-sm" onclick="openMarketDashboard('${esc(b.broker||'alpaca')}','${esc(b.ticker)}')">📈 Chart</button>`
       : "";
     // Manual Sell — only meaningful while the bot is actually holding a position.
-    const sellAllBtn = b.in_position
+    const hasHoldings = b.in_position || (isScattershot && b.scattershot_legs && b.scattershot_legs.length);
+    const sellAllBtn = hasHoldings
       ? `<button class="btn btn-sm btn-warning" title="Sell all of this bot's holdings now" onclick="sellBot(${b.id})">💵 Sell All</button>`
       : "";
     return `
@@ -935,8 +942,8 @@ function renderBots() {
       <div style="margin-bottom:8px">${pos}
         ${b.in_position && entryPrice ? `<span class="ind-pill">Entry ${formatPrice(entryPrice)}</span>` : ""}
         ${b.in_position && currentPrice ? `<span class="ind-pill">Current ${formatPrice(currentPrice)}</span>` : ""}
-        ${b.in_position && displayStop ? `<span class="ind-pill">Stop ${formatPrice(displayStop)}</span>` : ""}
-        ${b.in_position && displayTarget ? `<span class="ind-pill">Target ${formatPrice(displayTarget)}</span>` : ""}
+        ${b.in_position && !isScattershot && displayStop ? `<span class="ind-pill">Stop ${formatPrice(displayStop)}</span>` : ""}
+        ${b.in_position && !isScattershot && displayTarget ? `<span class="ind-pill">Target ${formatPrice(displayTarget)}</span>` : ""}
       </div>
       <div class="funds-ctl">
         <span class="funds-ctl-label">Allocated funds</span>

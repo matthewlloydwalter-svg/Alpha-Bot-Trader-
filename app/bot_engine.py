@@ -161,9 +161,15 @@ def _paper(owner: User) -> bool:
     return (owner.trading_mode or "paper") == "paper"
 
 
-def _creds(owner: User, broker: str) -> dict:
+def _bot_paper(owner: User, bot: Bot) -> bool:
+    """Paper vs live for a specific bot row (not the account UI toggle)."""
+    return (bot.mode or owner.trading_mode or "paper").lower() == "paper"
+
+
+def _creds(owner: User, broker: str, bot: Bot | None = None) -> dict:
     """Mode-aware broker credentials (paper vs live, with legacy fallback)."""
-    return resolve_credentials(owner, broker, _paper(owner))
+    paper = _bot_paper(owner, bot) if bot is not None else _paper(owner)
+    return resolve_credentials(owner, broker, paper)
 
 
 def _asset_meta(broker: str, symbol: str) -> tuple[str, str]:
@@ -178,10 +184,11 @@ def _asset_meta(broker: str, symbol: str) -> tuple[str, str]:
 # ────────────────────────────────────────────────────────────────────
 # Buying power lookup (broker-aware, never raises)
 # ────────────────────────────────────────────────────────────────────
-def _get_buying_power(owner: User, broker: str) -> float | None:
+def _get_buying_power(owner: User, broker: str, bot: Bot | None = None) -> float | None:
     """Return available cash/buying power, or None if it can't be determined."""
     try:
-        info = get_account_info(broker=broker, paper=_paper(owner), **_creds(owner, broker))
+        paper = _bot_paper(owner, bot) if bot is not None else _paper(owner)
+        info = get_account_info(broker=broker, paper=paper, **_creds(owner, broker, bot))
         if not isinstance(info, dict) or info.get("error"):
             return None
         if broker == "alpaca":
@@ -230,12 +237,13 @@ def _resolve_non_marginable_buying_power(info: dict, account_type: str) -> float
     return None
 
 
-def _get_alpaca_account_context(owner: User, broker: str) -> dict:
+def _get_alpaca_account_context(owner: User, broker: str, bot: Bot | None = None) -> dict:
     """Inspect Alpaca account metadata needed for cash-account GFV protections."""
     if (broker or "alpaca").lower() != "alpaca":
         return {"account_type": "margin", "equity": None, "non_marginable_buying_power": None}
     try:
-        info = get_account_info(broker=broker, paper=_paper(owner), **_creds(owner, broker))
+        paper = _bot_paper(owner, bot) if bot is not None else _paper(owner)
+        info = get_account_info(broker=broker, paper=paper, **_creds(owner, broker, bot))
         if info.get("error"):
             return {"account_type": "cash", "equity": None, "non_marginable_buying_power": None}
         equity = info.get("equity")
@@ -363,50 +371,60 @@ def _set_next_session_cooldown(bot: Bot) -> None:
     bot.strategy_cooldown_until = datetime.fromtimestamp(nxt.timestamp(), tz=timezone.utc).replace(tzinfo=None)
 
 
-def _enforce_low_balance_strategy(db: Session, owner: User, bot: Bot, price: float, analysis: Analysis | None) -> tuple[bool, dict]:
-    """Apply GFV-safe Low-balance strategy rules for cash accounts and allow margin accounts to opt in voluntarily."""
-    account_context = _get_alpaca_account_context(owner, bot.broker or "alpaca")
-    account_type = account_context.get("account_type", "cash")
-    non_marginable = account_context.get("non_marginable_buying_power")
-    if account_type == "margin" or not _strategy_allows_cash_guard(bot):
-        return True, {"account_type": account_type, "reason": "standard or margin account"}
-
-    strategy = (bot.low_balance_strategy or "standard").lower()
-    if strategy == "standard":
-        return True, {"account_type": account_type, "reason": "standard"}
-
-    if non_marginable is None:
-        return False, {"account_type": account_type, "reason": "cash-account metadata unavailable"}
-
+def _strategy_notional_caps(bot: Bot, strategy: str, account_type: str,
+                            non_marginable: float | None) -> tuple[bool, dict]:
+    """Shared strategy sizing/cooldown rules (GFV checks only on cash accounts)."""
+    base = {"account_type": account_type}
     if strategy == "one_shot_daily":
-        if bot.strategy_cooldown_until and bot.strategy_cooldown_until > datetime.utcnow():
-            return False, {"account_type": account_type, "reason": "cooldown active"}
-        if non_marginable <= 0:
-            return False, {"account_type": account_type, "reason": "no non-marginable buying power"}
-        return True, {"account_type": account_type, "reason": "one-shot allowed", "notional": min(float(bot.funds_allocated or 0), non_marginable)}
+        if _cooldown_active(bot):
+            return False, {**base, "reason": "cooldown active"}
+        if account_type == "cash":
+            if non_marginable is None:
+                return False, {**base, "reason": "cash-account metadata unavailable"}
+            if non_marginable <= 0:
+                return False, {**base, "reason": "no non-marginable buying power"}
+            cap = min(float(bot.funds_allocated or 0), non_marginable)
+        else:
+            cap = float(bot.funds_allocated or 0)
+        return True, {**base, "reason": "one-shot allowed", "notional": cap}
 
     if strategy == "micro_trader":
-        if non_marginable <= 0:
-            return False, {"account_type": account_type, "reason": "no non-marginable buying power"}
-        return True, {"account_type": account_type, "reason": "micro trader", "notional": 1.0}
+        if account_type == "cash":
+            if non_marginable is None:
+                return False, {**base, "reason": "cash-account metadata unavailable"}
+            if non_marginable <= 0 or non_marginable < 1.0 - 1e-6:
+                return False, {**base, "reason": "insufficient non-marginable buying power for micro trade"}
+        return True, {**base, "reason": "micro trader", "notional": 1.0}
 
     if strategy == "swing_trader":
-        return True, {"account_type": account_type, "reason": "swing holds overnight"}
+        return True, {**base, "reason": "swing holds overnight"}
 
     if strategy == "scattershot":
         needed = SCATTERSHOT_LEG_COUNT * SCATTERSHOT_LEG_NOTIONAL
         if _cooldown_active(bot):
-            return False, {"account_type": account_type, "reason": "cooldown active"}
-        if non_marginable is None or non_marginable < needed - 1e-6:
-            return False, {"account_type": account_type, "reason": "insufficient buying power for scattershot basket"}
+            return False, {**base, "reason": "cooldown active"}
+        if account_type == "cash":
+            if non_marginable is None or non_marginable < needed - 1e-6:
+                return False, {**base, "reason": "insufficient buying power for scattershot basket"}
         return True, {
-            "account_type": account_type,
-            "reason": "scattershot",
+            **base, "reason": "scattershot",
             "notional": SCATTERSHOT_LEG_NOTIONAL,
             "leg_count": SCATTERSHOT_LEG_COUNT,
         }
 
-    return True, {"account_type": account_type, "reason": "standard"}
+    return True, {**base, "reason": "standard"}
+
+
+def _enforce_low_balance_strategy(db: Session, owner: User, bot: Bot, price: float, analysis: Analysis | None) -> tuple[bool, dict]:
+    """Apply GFV-safe Low-balance strategy rules for cash accounts and allow margin accounts to opt in voluntarily."""
+    account_context = _get_alpaca_account_context(owner, bot.broker or "alpaca", bot)
+    account_type = account_context.get("account_type", "cash")
+    non_marginable = account_context.get("non_marginable_buying_power")
+    strategy = (bot.low_balance_strategy or "standard").lower()
+    if strategy == "standard" or not _strategy_allows_cash_guard(bot):
+        return True, {"account_type": account_type, "reason": "standard"}
+
+    return _strategy_notional_caps(bot, strategy, account_type, non_marginable)
 
 
 def _scattershot_unrealized_pl(db: Session, bot: Bot, broker: str) -> float | None:
@@ -500,6 +518,7 @@ def _close_scattershot_basket(db: Session, owner: User, bot: Bot, reason: str) -
     total_gain = 0.0
     total_notional = 0.0
     closed_symbols: list[str] = []
+    remaining_legs: list[dict] = []
     for leg in legs:
         sym = leg.get("ticker")
         qty = float(leg.get("qty") or 0)
@@ -507,7 +526,12 @@ def _close_scattershot_basket(db: Session, owner: User, bot: Bot, reason: str) -
         if not sym or qty <= 0:
             continue
         price = _resolve_leg_exit_price(db, owner, bot, sym) or entry
-        order = _liquidate(owner, bot.broker, sym)
+        try:
+            order = _liquidate(owner, bot.broker, sym, bot=bot)
+        except Exception as e:
+            logger.error("[SCATTER-SHOT] leg %s liquidation failed: %s", sym, e)
+            remaining_legs.append(leg)
+            continue
         gain = (price - entry) * qty
         notional = round(qty * price, 6)
         total_gain += gain
@@ -515,11 +539,30 @@ def _close_scattershot_basket(db: Session, owner: User, bot: Bot, reason: str) -
         closed_symbols.append(sym)
         db.add(Trade(owner_id=owner.id, bot_id=bot.id, bot_uuid=bot.uuid, ticker=sym,
                      side="sell", qty=qty, notional=notional, price=price,
-                     broker=bot.broker, mode=owner.trading_mode,
+                     broker=bot.broker, mode=(bot.mode or owner.trading_mode),
                      broker_order_id=order["order_id"], status=order["status"]))
         _log(db, owner.id,
              f"[SCATTER-SHOT] SELL {qty:.6f} {sym} @ {price:.4f} ({reason}). Leg P&L: {gain:+.2f}.",
              "WARNING" if gain < 0 else "INFO")
+
+    if remaining_legs:
+        if closed_symbols:
+            bot.realized_pnl = (bot.realized_pnl or 0) + total_gain
+            bot.trade_count = (bot.trade_count or 0) + len(closed_symbols)
+        state["legs"] = remaining_legs
+        _save_strategy_state(bot, state)
+        bot.in_position = True
+        bot.shares_held = round(sum(float(leg.get("qty") or 0) for leg in remaining_legs), 8)
+        bot.ticker = ",".join(leg.get("ticker", "?") for leg in remaining_legs)
+        bot.last_pattern_summary = (
+            f"Scattershot partial close — {len(closed_symbols)} leg(s) sold, "
+            f"{len(remaining_legs)} leg(s) remain open after errors."
+        )
+        db.commit()
+        _emit_portfolio(owner.id)
+        raise BrokerError(
+            f"Scattershot basket partially closed; {len(remaining_legs)} leg(s) still open."
+        )
 
     bot.realized_pnl = (bot.realized_pnl or 0) + total_gain
     bot.trade_count = (bot.trade_count or 0) + len(closed_symbols)
@@ -570,6 +613,7 @@ def _open_scattershot_basket(db: Session, owner: User, bot: Bot) -> dict:
         return {"action": "WAIT", "reason": guard.get("reason"), "guard": guard}
 
     legs: list[dict] = []
+    pending_trades: list[Trade] = []
     total_notional = 0.0
     total_qty = 0.0
     for sym in symbols:
@@ -578,7 +622,9 @@ def _open_scattershot_basket(db: Session, owner: User, bot: Bot) -> dict:
         if not price or price <= 0:
             continue
         notional = SCATTERSHOT_LEG_NOTIONAL
-        order = _execute(owner, bot.broker, "buy", sym, notional=notional)
+        order = _execute(owner, bot.broker, "buy", sym, notional=notional, bot=bot)
+        if order.get("simulated") and has_credentials(owner, bot.broker or "alpaca", _bot_paper(owner, bot)):
+            continue
         qty = round(notional / price, 8)
         legs.append({
             "ticker": sym,
@@ -589,10 +635,10 @@ def _open_scattershot_basket(db: Session, owner: User, bot: Bot) -> dict:
         })
         total_notional += notional
         total_qty += qty
-        db.add(Trade(owner_id=owner.id, bot_id=bot.id, bot_uuid=bot.uuid, ticker=sym,
-                     side="buy", qty=qty, notional=notional, price=price,
-                     broker=bot.broker, mode=owner.trading_mode,
-                     broker_order_id=order["order_id"], status=order["status"]))
+        pending_trades.append(Trade(owner_id=owner.id, bot_id=bot.id, bot_uuid=bot.uuid, ticker=sym,
+                                    side="buy", qty=qty, notional=notional, price=price,
+                                    broker=bot.broker, mode=(bot.mode or owner.trading_mode),
+                                    broker_order_id=order["order_id"], status=order["status"]))
         _log(db, owner.id,
              f"[SCATTER-SHOT] BUY ${notional:.2f} ({qty:.6f}) {sym} @ {price:.4f}.")
 
@@ -602,7 +648,7 @@ def _open_scattershot_basket(db: Session, owner: User, bot: Bot) -> dict:
             if not sym:
                 continue
             try:
-                _liquidate(owner, bot.broker, sym)
+                _liquidate(owner, bot.broker, sym, bot=bot)
             except Exception as e:
                 logger.warning("[SCATTER-SHOT] rollback leg %s failed: %s", sym, e)
         bot.last_pattern_summary = (
@@ -612,6 +658,8 @@ def _open_scattershot_basket(db: Session, owner: User, bot: Bot) -> dict:
         db.commit()
         return {"action": "WAIT", "reason": "Scattershot basket could not be fully deployed."}
 
+    for trade in pending_trades:
+        db.add(trade)
     state = {
         "type": "scattershot",
         "session_date": session_date_et(),
@@ -651,10 +699,6 @@ def _run_scattershot_cycle(db: Session, bot: Bot) -> dict:
 
     bot.last_analysis_at = datetime.utcnow()
 
-    if not bot.running:
-        db.commit()
-        return {"action": "SKIPPED", "reason": "Bot is paused."}
-
     state = _load_strategy_state(bot)
     legs = state.get("legs") or []
     session_day = state.get("session_date")
@@ -680,6 +724,10 @@ def _run_scattershot_cycle(db: Session, bot: Bot) -> dict:
         db.commit()
         return {"action": "HOLD", "reason": bot.last_pattern_summary, "legs": legs}
 
+    if not bot.running:
+        db.commit()
+        return {"action": "SKIPPED", "reason": "Bot is paused."}
+
     if _cooldown_active(bot):
         bot.last_pattern_summary = "Scattershot cooldown active — waiting for the next session open."
         db.commit()
@@ -700,11 +748,12 @@ def _run_scattershot_cycle(db: Session, bot: Bot) -> dict:
 # Order helper — real order if keys present, otherwise a logged paper sim
 # ────────────────────────────────────────────────────────────────────
 def _execute(owner: User, broker: str, side: str, symbol: str,
-             qty: float = None, notional: float = None) -> dict:
+             qty: float = None, notional: float = None, bot: Bot | None = None) -> dict:
     try:
+        paper = _bot_paper(owner, bot) if bot is not None else _paper(owner)
         order = place_order(
             broker=broker, side=side, symbol=symbol, qty=qty, notional=notional,
-            paper=_paper(owner), **_creds(owner, broker),
+            paper=paper, **_creds(owner, broker, bot),
         )
         order["simulated"] = False
         return order
@@ -716,7 +765,7 @@ def _execute(owner: User, broker: str, side: str, symbol: str,
                 "status": "simulated", "symbol": symbol, "side": side, "simulated": True}
 
 
-def _liquidate(owner: User, broker: str, symbol: str) -> dict:
+def _liquidate(owner: User, broker: str, symbol: str, bot: Bot | None = None) -> dict:
     """
     Robustly exit a position via the broker: cancel the symbol's open orders,
     wait for them to clear, then liquidate the full real quantity. Used for ALL
@@ -724,10 +773,11 @@ def _liquidate(owner: User, broker: str, symbol: str) -> dict:
     delete) so reserved shares can never trigger an "insufficient qty" error.
     Falls back to a simulated fill when keys are missing.
     """
-    has_keys = has_credentials(owner, (broker or "alpaca"), _paper(owner))
+    paper = _bot_paper(owner, bot) if bot is not None else _paper(owner)
+    has_keys = has_credentials(owner, (broker or "alpaca"), paper)
     try:
         order = liquidate_position(broker=broker, symbol=symbol,
-                                   paper=_paper(owner), **_creds(owner, broker))
+                                   paper=paper, **_creds(owner, broker, bot))
         order["simulated"] = False
         return order
     except BrokerError as e:
@@ -773,10 +823,11 @@ def _arm_risk(bot: Bot, entry_price: float, atr: float | None,
 
 def _ratchet_risk(bot: Bot, price: float, atr: float | None, bullish: bool):
     """Manage exits for ATR mode or fixed-percentage mode."""
+    prev_peak = bot.peak_price
     if bot.peak_price is None or price > bot.peak_price:
         bot.peak_price = price
 
-    if EXIT_MODE == "atr" and (bot.peak_price is None or price > bot.peak_price):
+    if EXIT_MODE == "atr" and (prev_peak is None or price > prev_peak):
         atr = atr or (price * TRAIL_PCT_FLOOR)
         trail_dist = max(atr * TRAIL_ATR_MULT, price * TRAIL_PCT_FLOOR)
         new_stop = round(price - trail_dist, 6)
@@ -800,7 +851,9 @@ def _attempt_capital_rotation(db: Session, owner: User, candidate_bot: Bot,
     open_bots = [
         b for b in db.query(Bot).filter(
             Bot.owner_id == owner.id, Bot.in_position == True  # noqa: E712
-        ).all() if b.id != candidate_bot.id and b.avg_entry_price
+        ).all()
+        if b.id != candidate_bot.id and b.running and b.avg_entry_price
+        and not _scattershot_active(b) and "," not in (b.ticker or "")
     ]
     if not open_bots:
         _log(db, owner.id, "[ROTATION] No open positions available to rotate capital from.")
@@ -845,7 +898,7 @@ def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: st
     ticker = bot.ticker
     # Cancel-then-close: never a naive fixed-qty sell, so open orders reserving
     # shares can't cause an "insufficient quantity" rejection.
-    order = _liquidate(owner, bot.broker, ticker)
+    order = _liquidate(owner, bot.broker, ticker, bot=bot)
     gain = (price - (bot.avg_entry_price or price)) * qty
     notional = round(qty * price, 6)
     bot.realized_pnl = (bot.realized_pnl or 0) + gain
@@ -855,7 +908,7 @@ def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: st
     # quantity, price, timestamp and an immutable link to THIS bot.
     db.add(Trade(owner_id=owner.id, bot_id=bot.id, bot_uuid=bot.uuid, ticker=ticker,
                  side="sell", qty=qty, notional=notional, price=price,
-                 broker=bot.broker, mode=owner.trading_mode,
+                 broker=bot.broker, mode=(bot.mode or owner.trading_mode),
                  broker_order_id=order["order_id"], status=order["status"]))
     _log(db, owner.id,
          f"[EXECUTE] SELL {qty:.6f} {ticker} @ {price:.4f} ({reason}). "
@@ -870,7 +923,7 @@ def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: st
     bot.position_opened_at = None
     _save_strategy_state(bot, None)
     if (bot.low_balance_strategy or "standard").lower() == "one_shot_daily":
-        bot.strategy_cooldown_until = datetime.utcnow() + timedelta(hours=24)
+        _set_next_session_cooldown(bot)
     # Fully autonomous bots release the ticker so the next cycle re-scans the
     # whole market for the freshest dip rather than re-buying the same asset.
     if bot.auto_select:
@@ -898,7 +951,7 @@ def _safe_analysis(bot: Bot, owner: User, symbol: str = None) -> Analysis | None
     try:
         return get_market_analysis(
             broker=broker, symbol=sym, timeframe=bot.timeframe or "1h", limit=CANDLE_LIMIT,
-            paper=_paper(owner), **_creds(owner, broker),
+            paper=_bot_paper(owner, bot), **_creds(owner, broker, bot),
         )
     except BrokerError as e:
         logger.warning("Analysis fetch failed for bot %s (%s): %s", bot.id, sym, e)
@@ -1117,15 +1170,10 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
          f"strength={sig.strength:.2f} bias={sig.bias} | "
          f"patterns={[p['name'] for p in analysis.patterns]}")
 
-    if not bot.running:
-        db.commit()
-        return {"action": "SKIPPED", "reason": "Bot is paused.",
-                "analysis": _analysis_brief(analysis)}
-
     result = {"action": "HOLD", "price": price, "reason": "",
               "analysis": _analysis_brief(analysis), "order": None}
 
-    # ── MANAGE OPEN POSITION ──────────────────────────────────────
+    # ── MANAGE OPEN POSITION (always — even when paused) ──────────
     # Critical: branch on in_position ALONE. The old guard also required a
     # truthy avg_entry_price, so a corrupt position (entry price None/0) silently
     # skipped ALL risk management AND fell through to the entry logic below —
@@ -1213,7 +1261,12 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         )
         return result
 
-    # ── LOOK FOR AN ENTRY ─────────────────────────────────────────
+    # ── LOOK FOR AN ENTRY (paused bots stay flat) ─────────────────
+    if not bot.running:
+        db.commit()
+        return {"action": "SKIPPED", "reason": "Bot is paused (flat — no new entries).",
+                "analysis": _analysis_brief(analysis)}
+
     if sig.action != "BUY" or sig.strength < ENTRY_MIN_STRENGTH:
         db.commit()
         result["reason"] = f"No confirmed dip/reversal (signal {sig.action} {sig.strength:.2f})."
@@ -1270,7 +1323,11 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         result.update({"action": "WAIT", "reason": reason})
         return result
 
-    notional = round((bot.funds_allocated or 0) * DEPLOY_FRACTION, 2)
+    strategy_name = _strategy_name(bot)
+    if strategy_name == "one_shot_daily":
+        notional = round(float(bot.funds_allocated or 0), 2)
+    else:
+        notional = round((bot.funds_allocated or 0) * DEPLOY_FRACTION, 2)
     notional = _volatility_adjusted_notional(bot, price, notional, atr)
     if notional <= 0:
         db.commit()
@@ -1295,7 +1352,7 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
     # Capital availability + (optional) rotation. By default a bot will NEVER
     # liquidate another bot's position — it simply waits. Cross-bot rotation is
     # opt-in via BOT_CAPITAL_ROTATION to prevent identity-confusing behaviour.
-    buying_power = _get_buying_power(owner, bot.broker or "alpaca")
+    buying_power = _get_buying_power(owner, bot.broker or "alpaca", bot)
     if buying_power is not None and buying_power < notional:
         if not CAPITAL_ROTATION_ENABLED:
             db.commit()
@@ -1312,7 +1369,7 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
             result.update({"action": "WAIT",
                            "reason": "Setup confirmed but capital fully deployed; no weaker position to rotate."})
             return result
-        buying_power = _get_buying_power(owner, bot.broker or "alpaca")
+        buying_power = _get_buying_power(owner, bot.broker or "alpaca", bot)
         if buying_power is not None:
             notional = min(notional, round(buying_power * DEPLOY_FRACTION, 2))
 
@@ -1336,7 +1393,7 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         notional = min(notional, float(guard["notional"]))
 
     # Execute the entry.
-    order = _execute(owner, bot.broker, "buy", bot.ticker, notional=notional)
+    order = _execute(owner, bot.broker, "buy", bot.ticker, notional=notional, bot=bot)
     # Always derive and persist the exact share quantity — never leave a buy
     # with a null qty (the bug that rendered '0' in the History ledger).
     qty = round(notional / price, 8) if price else 0.0
@@ -1349,7 +1406,7 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
     _arm_risk(bot, price, atr, nearest_resistance)
     db.add(Trade(owner_id=owner.id, bot_id=bot.id, bot_uuid=bot.uuid, ticker=bot.ticker,
                  side="buy", qty=qty, notional=notional, price=price,
-                 broker=bot.broker, mode=owner.trading_mode,
+                 broker=bot.broker, mode=(bot.mode or owner.trading_mode),
                  broker_order_id=order["order_id"], status=order["status"]))
     _log(db, owner.id,
          f"[EXECUTE] BUY ${notional:.2f} ({qty:.6f}) of {bot.ticker} @ {price:.4f} "
@@ -1433,9 +1490,18 @@ def liquidate_bot(bot_id: int, reason: str = "manual sell") -> dict:
         if _strategy_name(bot) == "scattershot" and _scattershot_active(bot):
             closed = _close_scattershot_basket(db, owner, bot, reason=reason)
             return {"action": "SELL", "reason": reason, **closed}
-        if not bot.in_position or (bot.shares_held or 0) <= 0:
+        if not bot.in_position:
             return {"action": "FLAT", "reason": "Bot holds no open position to sell."}
         price = _resolve_exit_price(db, bot, owner)
+        if (bot.shares_held or 0) <= 0 and bot.ticker and "," not in (bot.ticker or ""):
+            # Corrupt state: flagged in-position but zero qty — still attempt broker exit.
+            pass
+        elif (bot.shares_held or 0) <= 0:
+            bot.in_position = False
+            bot.ticker = None if bot.auto_select else bot.ticker
+            _save_strategy_state(bot, None)
+            db.commit()
+            return {"action": "FLAT", "reason": "Bot position state was cleared (zero shares held)."}
         closed = _close_position(db, owner, bot, price, reason=reason)
         return {"action": "SELL", "reason": reason, "price": price, **closed}
     finally:
@@ -1455,11 +1521,25 @@ def run_cycle(bot_id: int) -> dict:
 
         owner = bot.owner
 
-        # ── Market-hours halt ─────────────────────────────────────────────
-        # Equities (Alpaca) only trade 09:30–16:00 ET, Mon–Fri. Outside that,
-        # suspend the trading loop so no buy/sell orders are placed. Crypto
-        # (OKX) is 24/7 and never halts. Paused bots are handled below as usual.
         broker = (bot.broker or owner.active_broker or "alpaca").lower()
+        strategy = _strategy_name(bot)
+
+        # Scattershot with open legs must exit/manage even when the session is closed.
+        if strategy == "scattershot" and _scattershot_active(bot):
+            return _run_scattershot_cycle(db, bot)
+
+        # Micro-trader same-day / overnight exits must run even when the equity session is closed.
+        if strategy == "micro_trader" and bot.in_position and _requires_same_day_exit(bot):
+            analysis = _safe_analysis(bot, owner)
+            if analysis is None:
+                bot.last_pattern_summary = (
+                    "Micro-trader must exit same-day but market data is unavailable — retrying."
+                )
+                db.commit()
+                return {"action": "WAIT", "reason": "Same-day exit pending — market data unavailable."}
+            return run_bot_cycle(db, bot, analysis)
+
+        # ── Market-hours halt ─────────────────────────────────────────────
         if bot.running and not market_open_for_broker(broker):
             bot.last_analysis_at = datetime.utcnow()
             bot.last_pattern_summary = "SYSTEM HALT: Market offline. Core trading loops suspended."
@@ -1467,7 +1547,6 @@ def run_cycle(bot_id: int) -> dict:
             return {"action": "HALTED", "market_closed": True,
                     "reason": "US stock market is closed — trading suspended until the next session."}
 
-        strategy = _strategy_name(bot)
         if strategy == "scattershot":
             return _run_scattershot_cycle(db, bot)
 
