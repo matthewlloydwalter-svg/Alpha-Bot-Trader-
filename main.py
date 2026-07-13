@@ -959,6 +959,26 @@ def register_endpoint(body: AuthModel, response: Response, request: Request, db:
 
 @app.post("/auth/login")
 def login_endpoint(body: AuthModel, response: Response, request: Request, db: Session = Depends(get_db)):
+    # TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
+    # Password auth disabled during AdSense review — return dummy guest only.
+    if ADSENSE_AUTH_BYPASS:
+        guest = get_or_create_adsense_guest_user(db)
+        return {
+            "id": guest.id,
+            "email": guest.email,
+            "name": guest.name,
+            "is_admin": False,
+            "email_verified": True,
+            "trading_mode": guest.trading_mode or "paper",
+            "active_broker": guest.active_broker or "alpaca",
+            "total_deposited": float(ADSENSE_GUEST_BALANCE),
+            "total_withdrawn": 0.0,
+            "bot_count": db.query(Bot).filter(Bot.owner_id == guest.id).count(),
+            "bot_limit": _user_bot_limit(guest),
+            "adsense_guest": True,
+            "balance": float(ADSENSE_GUEST_BALANCE),
+            **_user_plan_payload(guest),
+        }
     limit_auth(request)
     normalized_email = body.email.strip().lower()
     user = db.query(User).filter(User.email == normalized_email).first()
