@@ -248,9 +248,19 @@ def _get_buying_power(owner: User, broker: str, bot: Bot | None = None) -> float
 
 def _classify_alpaca_account(info: dict) -> str:
     """
-    Alpaca accounts are all margin-enabled, but multiplier=1 (<$2k equity) behaves
-    like a cash/limited-margin account for GFV-safe strategy enforcement.
+    Classify Alpaca accounts for GFV / PDT-safe strategy enforcement.
+
+    Accounts with under $2,000 equity (or multiplier=1) are treated as cash-like
+    and must use One-Shot / Micro / Swing / Scattershot — not Standard.
     """
+    equity = info.get("equity")
+    try:
+        equity_value = float(equity) if equity is not None else None
+    except (TypeError, ValueError):
+        equity_value = None
+    if equity_value is not None and equity_value < 2000:
+        return "cash"
+
     multiplier = info.get("multiplier")
     try:
         mult = int(float(multiplier)) if multiplier is not None else None
@@ -260,13 +270,6 @@ def _classify_alpaca_account(info: dict) -> str:
         return "cash"
     if mult is not None and mult >= 2:
         return "margin"
-    equity = info.get("equity")
-    try:
-        equity_value = float(equity) if equity is not None else None
-    except (TypeError, ValueError):
-        equity_value = None
-    if equity_value is not None:
-        return "margin" if equity_value >= 2000 else "cash"
     return "cash"
 
 
@@ -310,12 +313,8 @@ def _get_alpaca_account_context(owner: User, broker: str, bot: Bot | None = None
             mult_value = float(multiplier) if multiplier is not None else None
         except (TypeError, ValueError):
             mult_value = None
-        if mult_value is not None:
-            account_type = "cash" if mult_value <= 1 else "margin"
-        else:
-            # Fallback only when multiplier is unavailable — do not treat equity
-            # size as a proxy for margin eligibility.
-            account_type = "cash"
+        # Keep create-time, UI, and trade-time classification in sync.
+        account_type = _classify_alpaca_account(info if isinstance(info, dict) else {})
         return {
             "account_type": account_type,
             "equity": equity_value,
@@ -345,7 +344,7 @@ def _strategy_label(strategy: str | None) -> str:
 
 def _strategy_tooltip(strategy: str | None) -> str:
     mapping = {
-        "standard": "Uses the standard allocation logic without low-balance adjustments.",
+        "standard": "Standard (margin / $2,000+ only): normal allocation with the 10% position-size guard.",
         "one_shot_daily": "Uses 100% of your allocated funds for a single high-confidence trade today. Halts trading after selling until funds settle tomorrow.",
         "micro_trader": "Executes multiple small day trades ($1.00 each) on a single stock to capture small movements without spending unsettled cash.",
         "swing_trader": "Buys a stock and holds it for several days or weeks to ride larger trends. Safely avoids daily cash settlement rules.",
@@ -428,6 +427,13 @@ def _enforce_low_balance_strategy(db: Session, owner: User, bot: Bot, price: flo
     account_type = account_context.get("account_type", "cash")
     non_marginable = account_context.get("non_marginable_buying_power")
     strategy = (bot.low_balance_strategy or "standard").lower()
+
+    # Cash Alpaca accounts may not use Standard — Pattern Day Trader / GFV risk.
+    if account_type == "cash" and strategy == "standard" and (bot.broker or "alpaca").lower() == "alpaca":
+        return False, {
+            "account_type": account_type,
+            "reason": "cash accounts must use One-Shot Daily, Micro-Trader, Swing Trader, or Scattershot (not Standard)",
+        }
 
     if strategy == "standard" or not _strategy_allows_cash_guard(bot):
         return True, {"account_type": account_type, "reason": "standard"}
@@ -1248,8 +1254,18 @@ def _passes_quality_setup_filter(analysis: Analysis) -> bool:
 
 
 def _volatility_adjusted_notional(bot: Bot, price: float, base_notional: float, atr: float | None) -> float:
-    """Reduce position size when volatility is high so the bot doesn't overexpose itself."""
+    """Reduce position size when volatility is high so the bot doesn't overexpose itself.
+
+    The 10% max-position cap applies to Standard strategy only. Cash-account
+    strategies (micro / scattershot / one-shot / swing) already enforce their
+    own sizing rules and must not be shrunk below Alpaca's $1 notional floor.
+    """
+    strategy = _strategy_name(bot)
     if not VOLATILITY_SIZING or not price or price <= 0:
+        return base_notional
+
+    # Fixed-size cash strategies skip volatility shrinking entirely.
+    if strategy in {"micro_trader", "scattershot"}:
         return base_notional
 
     atr = atr or 0.0
@@ -1260,9 +1276,12 @@ def _volatility_adjusted_notional(bot: Bot, price: float, base_notional: float, 
     risk_budget = max(price * RISK_PER_TRADE_PCT, 0.01)
     size_factor = min(1.0, max(0.0, risk_budget / risk_distance))
     adjusted = round(base_notional * size_factor, 2)
-    max_notional = round((bot.funds_allocated or 0) * MAX_POSITION_PCT, 2)
-    if max_notional > 0:
-        adjusted = min(adjusted, max_notional)
+
+    # 10% allocation guard — Standard (margin) sizing only.
+    if strategy == "standard":
+        max_notional = round((bot.funds_allocated or 0) * MAX_POSITION_PCT, 2)
+        if max_notional > 0:
+            adjusted = min(adjusted, max_notional)
     return max(0.0, adjusted)
 
 
@@ -1595,12 +1614,31 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         result.update({"action": "WAIT", "reason": f"Entry skipped — {guard.get('reason')}.", "guard": guard})
         return result
 
-    # Apply strategy-specific notional caps (one-shot, micro, scattershot).
+    # Apply strategy-specific notional rules.
+    # Micro/scattershot use a fixed $1 leg size — set exactly, don't min() with a
+    # previously shrunk value (that caused Alpaca 422 "notional must be >= 1.00").
+    strategy = _strategy_name(bot)
     if guard.get("notional") is not None and notional > 0:
         try:
-            notional = min(notional, float(guard["notional"]))
+            guard_notional = float(guard["notional"])
+            if strategy in {"micro_trader", "scattershot"}:
+                notional = guard_notional
+            else:
+                notional = min(notional, guard_notional)
         except (TypeError, ValueError):
             pass
+
+    # Alpaca rejects notional buys under $1.00 — wait instead of failing live.
+    if (bot.broker or "alpaca").lower() == "alpaca" and 0 < notional < 1.0:
+        bot.last_pattern_summary = (
+            f"Entry deferred — order size ${notional:.2f} is below Alpaca's $1.00 minimum."
+        )
+        db.commit()
+        result.update({
+            "action": "WAIT",
+            "reason": f"Notional ${notional:.2f} below Alpaca $1.00 minimum.",
+        })
+        return result
 
     # Execute the entry.
     try:

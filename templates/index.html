@@ -734,18 +734,18 @@
       <div id="auto-explainer" class="info-banner">Fully autonomous: just allocate funds and launch. The bot scans every active market on your selected exchange, finds the best confirmed dip via pattern analysis, runs a news sanity check, and deploys capital automatically — no ticker needed.</div>
       <label class="field">Bot name<input type="text" id="b-name" placeholder="e.g. My Dip Hunter"></label>
       <label class="field hidden" id="ticker-field">Ticker symbol<input type="text" id="b-ticker" placeholder="e.g. AAPL or BTC" style="text-transform:uppercase"></label>
-      <label class="field">Funds to allocate ($)<input type="number" id="b-funds" placeholder="e.g. 500" min="10" step="1"></label>
+      <label class="field">Funds to allocate ($)<input type="number" id="b-funds" placeholder="e.g. 500" min="1" step="1"></label>
       <div class="field">
-        <label for="b-low-balance-strategy">Low-balance strategy</label>
+        <label for="b-low-balance-strategy">Trading strategy</label>
         <select id="b-low-balance-strategy" onchange="updateLowBalanceStrategyHint()">
-          <option value="standard" title="Uses the standard allocation logic without low-balance adjustments.">Standard</option>
+          <option value="standard" id="standard-strategy-option" title="Standard (margin / $2,000+ only): normal allocation with the 10% position-size guard.">Standard (Margin / $2,000+)</option>
           <option value="one_shot_daily" title="Uses 100% of your allocated funds for a single high-confidence trade today. Halts trading after selling until funds settle tomorrow.">One-Shot Daily</option>
           <option value="micro_trader" title="Executes multiple small day trades ($1.00 each) on a single stock to capture small movements without spending unsettled cash.">Micro-Trader</option>
           <option value="swing_trader" title="Buys a stock and holds it for several days or weeks to ride larger trends. Safely avoids daily cash settlement rules.">Swing Trader</option>
           <option value="scattershot" title="Diversifies your risk by buying $1.00 of 5 different stocks simultaneously at the market open, selling them before the close.">Scattershot</option>
         </select>
-        <div id="low-balance-strategy-hint" class="info-banner" style="margin-bottom:0;margin-top:6px">Cash accounts enforce the selected mode; margin accounts can opt in without T+1 restrictions.</div>
-        <div id="low-balance-strategy-tooltip" class="info-banner hidden" style="margin-bottom:0;margin-top:6px;font-size:11px"></div>
+        <div id="low-balance-strategy-hint" class="info-banner" style="margin-bottom:0;margin-top:6px"></div>
+        <div id="cash-account-strategy-notice" class="info-banner" style="margin-bottom:0;margin-top:6px;color:#fbbf24;border-color:rgba(251,191,36,0.35);background:rgba(251,191,36,0.08)"></div>
       </div>
       <div id="manual-limits" class="hidden">
         <hr class="divider">

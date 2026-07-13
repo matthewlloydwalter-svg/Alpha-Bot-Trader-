@@ -1257,11 +1257,22 @@ def get_broker_account(u: User = Depends(get_current_user_from_cookie)):
         if broker == "alpaca":
             if not creds.get("alpaca_key"):
                 raise HTTPException(status_code=400, detail=f"No Alpaca {mode_label} API keys configured. Add them in Account → Alpaca API Keys.")
-            return get_account_info(broker="alpaca", paper=paper, **creds)
+            info = get_account_info(broker="alpaca", paper=paper, **creds)
+            # Classify cash vs margin so the bot-create UI can enforce GFV-safe strategies.
+            try:
+                acct_type = bot_engine._classify_alpaca_account(info if isinstance(info, dict) else {})
+            except Exception:
+                acct_type = "unknown"
+            if isinstance(info, dict):
+                info = {**info, "account_type": acct_type, "broker": "alpaca"}
+            return info
         elif broker == "okx":
             if not creds.get("okx_key"):
                 raise HTTPException(status_code=400, detail=f"No OKX {mode_label} API keys configured. Add them in Account → OKX API Keys.")
-            return get_account_info(broker="okx", paper=paper, **creds)
+            info = get_account_info(broker="okx", paper=paper, **creds)
+            if isinstance(info, dict):
+                info = {**info, "account_type": "margin", "broker": "okx"}
+            return info
     except HTTPException:
         raise
     except Exception as e:
@@ -2045,13 +2056,22 @@ def _validate_cash_account_strategy_allocation(
     account_type = acct_ctx.get("account_type")
     # Keys present but account type unknown — fail closed for cash-sensitive strategies.
     if account_type == "unknown":
-        if strategy in ("one_shot_daily", "micro_trader", "scattershot"):
+        if strategy in ("standard", "one_shot_daily", "micro_trader", "scattershot"):
             if has_credentials(user, broker, paper=paper):
                 raise HTTPException(
                     status_code=400,
                     detail="Unable to verify Alpaca account type for this strategy. Try again in a moment.",
                 )
         return
+    if account_type == "cash" and strategy == "standard":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Cash Alpaca accounts cannot use Standard execution. Choose One-Shot Daily, "
+                "Micro-Trader, Swing Trader, or Scattershot to stay GFV-safe. Standard unlocks "
+                "when your account equity reaches $2,000+ (margin / Pattern Day Trader threshold)."
+            ),
+        )
     if account_type != "cash":
         return
     non_marginable = acct_ctx.get("non_marginable_buying_power")

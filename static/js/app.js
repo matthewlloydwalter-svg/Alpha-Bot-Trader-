@@ -14,14 +14,22 @@ let MARKET_STATUS = null;    // { open, next_open_epoch, ... } from /api/market-
 // sees PT, China sees CST, etc.
 const USER_TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (_) { return "local"; } })();
 
-// Descriptions used by the Low-balance strategy selector and hover tooltip.
+// Descriptions used by the trading-strategy selector (one banner only — no duplicate tooltip).
 const LOW_BALANCE_DESCRIPTIONS = {
-  standard: "Standard execution uses your normal allocation logic.",
-  one_shot_daily: "Uses 100% of your allocated funds for a single high-confidence trade today. Halts trading after selling until funds settle tomorrow.",
-  micro_trader: "Executes multiple small day trades ($1.00 each) on a single stock to capture small movements without spending unsettled cash.",
-  swing_trader: "Buys a stock and holds it for several days or weeks to ride larger trends. Safely avoids daily cash settlement rules.",
-  scattershot: "Diversifies your risk by buying $1.00 of 5 different stocks simultaneously at the market open, selling them before the close."
+  standard: "Standard execution uses normal allocation with the 10% position-size guard. Available only on margin accounts (or equity of $2,000+).",
+  one_shot_daily: "Uses 100% of your allocated funds for a single high-confidence trade today. Halts trading after selling until funds settle tomorrow. Built for cash accounts under $2,000.",
+  micro_trader: "Executes multiple small day trades ($1.00 each) — no 10% size guard. Built for cash accounts under $2,000.",
+  swing_trader: "Buys a stock and holds for several days or weeks to ride larger trends. Safely avoids daily cash settlement rules. Built for cash accounts under $2,000.",
+  scattershot: "Buys $1.00 of 5 different stocks at the open and sells before the close — no 10% size guard. Built for cash accounts under $2,000.",
 };
+
+const CASH_ACCOUNT_STRATEGY_NOTICE =
+  "Cash brokerage accounts must use One-Shot Daily, Micro-Trader, Swing Trader, or Scattershot. " +
+  "Standard / unlimited day trading is reserved for margin accounts. By U.S. broker rules (Pattern Day Trader & good-faith violation limits), " +
+  "you generally need $2,000+ equity to be treated as a margin account. We enforce this so your broker does not restrict or ban the account.";
+
+let cachedBrokerAccountType = null; // "cash" | "margin" | "unknown" | null
+let cachedBrokerEquity = null;
 
 // Render a UTC epoch (seconds) as a local day+time with the local tz label,
 // e.g. "Fri 9:30 AM EDT" / "Fri 6:30 AM PDT" / "Fri 9:30 PM CST".
@@ -1549,35 +1557,56 @@ function setBotMode(m) {
 function updateLowBalanceStrategyHint() {
   const el = document.getElementById("b-low-balance-strategy");
   const hint = document.getElementById("low-balance-strategy-hint");
-  const tooltip = document.getElementById("low-balance-strategy-tooltip");
+  const notice = document.getElementById("cash-account-strategy-notice");
   if (!el || !hint) return;
-  const desc = LOW_BALANCE_DESCRIPTIONS[el.value] || LOW_BALANCE_DESCRIPTIONS.standard;
-  hint.textContent = desc;
-  if (tooltip) {
-    tooltip.textContent = desc;
-    tooltip.classList.toggle("hidden", !desc);
+  hint.textContent = LOW_BALANCE_DESCRIPTIONS[el.value] || LOW_BALANCE_DESCRIPTIONS.standard;
+  if (notice) notice.textContent = CASH_ACCOUNT_STRATEGY_NOTICE;
+}
+
+function isCashLikeBrokerAccount() {
+  if (cachedBrokerAccountType === "cash") return true;
+  if (cachedBrokerAccountType === "margin") return false;
+  if (cachedBrokerEquity != null && cachedBrokerEquity < 2000) return true;
+  return false;
+}
+
+function applyCashAccountStrategyRestrictions() {
+  const select = document.getElementById("b-low-balance-strategy");
+  const standardOpt = document.getElementById("standard-strategy-option");
+  if (!select || !standardOpt) return;
+
+  const mustUseCashStrategies = isCashLikeBrokerAccount();
+  if (mustUseCashStrategies) {
+    standardOpt.disabled = true;
+    standardOpt.hidden = true;
+    if (select.value === "standard") {
+      select.value = "micro_trader";
+    }
+  } else {
+    standardOpt.disabled = false;
+    standardOpt.hidden = false;
   }
+  updateLowBalanceStrategyHint();
 }
 
-// Show the low-balance description on hover/focus for better discoverability.
-function _attachLowBalanceHover() {
-  const el = document.getElementById("b-low-balance-strategy");
-  const hint = document.getElementById("low-balance-strategy-hint");
-  if (!el || !hint) return;
-  el.addEventListener("mouseenter", () => {
-    hint.textContent = LOW_BALANCE_DESCRIPTIONS[el.value] || LOW_BALANCE_DESCRIPTIONS.standard;
-  });
-  el.addEventListener("focus", () => {
-    hint.textContent = LOW_BALANCE_DESCRIPTIONS[el.value] || LOW_BALANCE_DESCRIPTIONS.standard;
-  });
-  el.addEventListener("mouseleave", () => updateLowBalanceStrategyHint());
-  el.addEventListener("blur", () => updateLowBalanceStrategyHint());
+async function refreshBrokerAccountTypeForBotForm() {
+  cachedBrokerAccountType = null;
+  cachedBrokerEquity = null;
+  try {
+    const data = await api("/broker/account");
+    if (data && !data.error) {
+      cachedBrokerAccountType = String(data.account_type || "").toLowerCase() || null;
+      const eq = Number(data.equity);
+      cachedBrokerEquity = Number.isFinite(eq) ? eq : null;
+    }
+  } catch (_) {
+    cachedBrokerAccountType = null;
+    cachedBrokerEquity = null;
+  }
+  applyCashAccountStrategyRestrictions();
 }
 
-// Attach hover listeners immediately (script is loaded at end of body).
-try { _attachLowBalanceHover(); } catch (e) { /* non-fatal */ }
-
-function showCreateBotModal() {
+async function showCreateBotModal() {
   if (botsAtLimit()) {
     const limit = USER.bot_limit;
     const count = Number(USER.bot_count || 0);
@@ -1586,8 +1615,9 @@ function showCreateBotModal() {
   }
   resetCreateBotForm();
   syncScattershotOption();
-  updateLowBalanceStrategyHint();
   document.getElementById("modal-bot").classList.remove("hidden");
+  await refreshBrokerAccountTypeForBotForm();
+  applyCashAccountStrategyRestrictions();
 }
 function hideCreateBotModal() { document.getElementById("modal-bot").classList.add("hidden"); }
 
@@ -1604,7 +1634,8 @@ function resetCreateBotForm() {
   if (ticker) ticker.value = "";
   if (buy) buy.value = "";
   if (sell) sell.value = "";
-  if (strategy) strategy.value = "standard";
+  // Default to Micro-Trader; cash accounts cannot use Standard, and margin users can still switch.
+  if (strategy) strategy.value = "micro_trader";
   updateLowBalanceStrategyHint();
 }
 
@@ -1617,7 +1648,7 @@ function syncScattershotOption() {
   opt.disabled = okx;
   opt.hidden = okx;
   if (okx && el.value === "scattershot") {
-    el.value = "standard";
+    el.value = isCashLikeBrokerAccount() ? "micro_trader" : "standard";
     updateLowBalanceStrategyHint();
   }
 }
@@ -1635,6 +1666,18 @@ async function createBot() {
 
   if (!funds_allocated || funds_allocated <= 0) return toast("Enter a funds amount to allocate", "error");
   if (BOT_MODE === "manual" && !ticker) return toast("Manual bots need a ticker symbol", "error");
+  if (low_balance_strategy === "standard" && isCashLikeBrokerAccount()) {
+    return toast(
+      "Cash accounts under $2,000 cannot use Standard. Choose One-Shot Daily, Micro-Trader, Swing Trader, or Scattershot.",
+      "error"
+    );
+  }
+  if (low_balance_strategy === "micro_trader" && funds_allocated < 1) {
+    return toast("Micro-Trader needs at least $1 allocated", "error");
+  }
+  if (low_balance_strategy === "scattershot" && funds_allocated < 5) {
+    return toast("Scattershot needs at least $5 allocated ($1 × 5 stocks)", "error");
+  }
 
   try {
     await api("/bots", {
