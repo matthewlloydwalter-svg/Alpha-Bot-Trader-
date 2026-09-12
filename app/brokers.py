@@ -176,6 +176,12 @@ def alpaca_liquidate_position(client: TradingClient, symbol: str,
 
 # ── OKX (via ccxt) ───────────────────────────────────────────────
 def get_okx_client(api_key: str, secret_key: str, passphrase: str, paper: bool) -> ccxt.okx:
+    # Strip invisible/whitespace characters that survive a copy-paste (same
+    # hardening applied to Alpaca keys); an OKX secret with a stray zero-width
+    # space silently breaks the request signature.
+    api_key = _clean_key(api_key)
+    secret_key = _clean_key(secret_key)
+    passphrase = _clean_key(passphrase)
     if not api_key or not secret_key or not passphrase:
         return None
     exchange = ccxt.okx({
@@ -199,7 +205,11 @@ def okx_account_info(exchange: ccxt.okx) -> dict:
         total = balance.get("total", {})
         return {"balances": {k: v for k, v in total.items() if v}}
     except Exception as e:
-        raise BrokerError(f"OKX error: {e}")
+        # ccxt sets this header only in sandbox/demo mode, so we can tell whether
+        # the failing request was aimed at OKX's demo environment without threading
+        # the paper flag all the way down.
+        paper = str((exchange.headers or {}).get("x-simulated-trading")) == "1"
+        raise BrokerError(_humanize_okx_error(e, paper))
 
 
 def okx_place_order(exchange: ccxt.okx, symbol: str, side: str, qty: float = None,
@@ -540,23 +550,78 @@ def _humanize_alpaca_error(e, key_hint: str = "????") -> str:
     return f"Alpaca data error: {msg[:300]}"
 
 
+def _humanize_okx_error(e, paper: bool) -> str:
+    """
+    Turn a raw ccxt/OKX exception into a short, actionable message. The most
+    common (and most confusing) failure is an environment mismatch: OKX demo
+    (paper) trading uses a SEPARATE set of API keys from the live account, so
+    live keys sent to the demo endpoint — or vice versa — are rejected with
+    code 50101.
+    """
+    msg = str(e)
+    low = msg.lower()
+    if "50101" in msg or "does not match current environment" in low:
+        if paper:
+            return (
+                "OKX rejected these keys in Paper mode. OKX paper trading uses a SEPARATE set of "
+                "Demo Trading API keys — your live keys do not work here. Either create Demo Trading "
+                "keys on OKX (Trade → Demo Trading → Personal Center → Demo Trading API) and save them "
+                "under OKX Paper, or switch the app to Live mode and use your live keys."
+            )
+        return (
+            "OKX rejected these keys in Live mode — they look like Demo Trading keys. Save your "
+            "live-account API keys for Live mode, or switch the app to Paper mode to use demo keys."
+        )
+    if "50111" in msg or "invalid ok-access-key" in low:
+        return (
+            "OKX rejected the API key (Invalid OK-ACCESS-KEY). Double-check the API Key is copied "
+            "exactly with no extra spaces, and that it hasn't been deleted or expired on OKX."
+        )
+    if "50113" in msg or "invalid signature" in low:
+        return (
+            "OKX rejected the request signature — the Secret Key is likely wrong or doesn't match "
+            "the API Key. Re-copy the Secret Key exactly."
+        )
+    if "50105" in msg or "passphrase" in low:
+        return (
+            "OKX rejected the passphrase. Enter the API passphrase you created with the key "
+            "(not your OKX account login password)."
+        )
+    if "50110" in msg or "ip" in low and "whitelist" in low:
+        return (
+            "OKX rejected the request because of an IP restriction on the key. Either remove the IP "
+            "whitelist on the OKX API key, or add this server's public IP to the key's allowed list."
+        )
+    if "timeout" in low or "connection" in low or "network" in low:
+        return "Could not reach OKX (connection/timeout). Check the server's network and try again."
+    return f"OKX error: {msg[:300]}"
+
+
 def get_okx_candles(symbol: str, timeframe: str, limit: int,
                     api_key: str = None, secret_key: str = None,
                     passphrase: str = None, paper: bool = True,
                     start: datetime | None = None) -> list[dict]:
     """
-    Fetch OHLCV candles from OKX. Public market data does NOT require keys,
-    so the dashboard works even before a user connects their account.
+    Fetch OHLCV candles from OKX.
+
+    OHLCV is a PUBLIC endpoint, so this deliberately builds a **keyless** client
+    and ignores any API credentials passed in. Two reasons:
+
+      1. When ccxt.okx has credentials, ``fetch_ohlcv`` → ``load_markets`` →
+         ``fetch_currencies`` hits a PRIVATE endpoint (/api/v5/asset/currencies).
+         If the keys are wrong or point at the other environment, that private
+         call fails (401 / 50101) and takes the whole candle fetch down with it —
+         i.e. charts break the instant a user saves keys. Keyless == always works.
+      2. OKX's demo endpoint returns *simulated* prices, so authenticating in
+         paper mode also silently corrupted chart / bot-analysis data.
+
+    Market data therefore always reflects the real live market, regardless of the
+    user's paper/live mode or key state.
     """
     tf = timeframe if timeframe in _OKX_TIMEFRAMES else "1H".lower()
     market_symbol = symbol if "/" in symbol else f"{symbol.upper()}/USDT"
     try:
-        cfg = {"enableRateLimit": True}
-        if api_key and secret_key and passphrase:
-            cfg.update({"apiKey": api_key, "secret": secret_key, "password": passphrase})
-        exchange = ccxt.okx(cfg)
-        if paper and api_key:
-            exchange.set_sandbox_mode(True)
+        exchange = ccxt.okx({"enableRateLimit": True})
 
         # ccxt's limit is also "from since forward". When a start window is set,
         # page forward until we reach now so the chart includes the newest bars.
