@@ -34,10 +34,14 @@ ADSENSE_AUTH_BYPASS = bool(
 )
 
 
-# Resend transactional email (replaces Google SMTP).
+# Resend transactional email (replaces Google SMTP). The `from` value must be a
+# Resend-valid "Name <email>" (a bare display name causes a 422). Prefer
+# EMAIL_FROM_ADDRESS; the sandbox sender works without domain verification.
 RESEND_API_KEY = (os.getenv("RESEND_API_KEY") or "").strip()
 EMAIL_FROM = (
-    os.getenv("EMAIL_FROM") or "AlphaBotix Trading <updates@alphabotixtrading.com>"
+    os.getenv("EMAIL_FROM_ADDRESS")
+    or os.getenv("EMAIL_FROM")
+    or "AlphaBotix Trading <onboarding@resend.dev>"
 ).strip()
 
 SESSION_COOKIE_SECURE = _env_flag("SESSION_COOKIE_SECURE", "0")
