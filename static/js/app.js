@@ -1894,7 +1894,7 @@ function renderBots() {
         <span class="funds-ctl-label">Risk TP / SL %</span>
         <input type="number" id="tp-${b.id}" class="funds-input" value="${b.take_profit_pct != null ? b.take_profit_pct : ''}" placeholder="${b.recommended_take_profit_pct != null ? b.recommended_take_profit_pct : ''}" min="0.1" max="100" step="0.1" title="Take-profit % (blank = recommended default)">
         <input type="number" id="sl-${b.id}" class="funds-input" value="${b.stop_loss_pct != null ? b.stop_loss_pct : ''}" placeholder="${b.recommended_stop_loss_pct != null ? b.recommended_stop_loss_pct : ''}" min="0.1" max="100" step="0.1" title="Stop-loss % (blank = recommended default)">
-        <button class="btn btn-sm btn-primary" onclick="updateBotRisk(${b.id})">Update</button>
+        <button class="btn btn-sm btn-primary" onclick="updateBotRisk(${b.id})">Save Risk</button>
       </div>
       <div style="font-size:10px;color:var(--t3);margin:2px 0 6px">${
         (b.take_profit_pct == null && b.stop_loss_pct == null)
