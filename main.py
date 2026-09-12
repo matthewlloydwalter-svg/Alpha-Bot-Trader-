@@ -1461,7 +1461,7 @@ def _recommended_risk_defaults() -> tuple[float, float]:
     try:
         stop_frac, take_frac = bot_engine._get_exit_percentages()
     except Exception:
-        stop_frac, take_frac = 0.005, 0.03
+        stop_frac, take_frac = 0.0035, 0.015
     return round(float(stop_frac) * 100, 4), round(float(take_frac) * 100, 4)
 
 
@@ -1479,6 +1479,30 @@ def _parse_risk_pct(value, field: str) -> Optional[float]:
     if pct <= 0 or pct > 100:
         raise HTTPException(status_code=400, detail=f"{field} must be between 0 and 100 percent.")
     return pct
+
+
+def _parse_funds_per_trade(value, funds_allocated: float) -> Optional[float]:
+    """
+    Validate the Micro-Trader per-trade size (dollars). ``None``/'' => use the
+    platform default. Must be > $0 and never exceed the bot's total allocation.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Funds per trade must be a number.")
+    if not math.isfinite(amount):
+        raise HTTPException(status_code=400, detail="Funds per trade must be a finite number.")
+    amount = round(amount, 2)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Funds per trade must be greater than $0.")
+    if funds_allocated and amount > float(funds_allocated) + 1e-6:
+        raise HTTPException(
+            status_code=400,
+            detail="Funds per trade cannot exceed the total funds allocated to this bot.",
+        )
+    return amount
 
 
 @app.get("/api/risk-defaults")
@@ -1580,6 +1604,7 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "mode": b.mode or "paper",
             "timeframe": b.timeframe,
             "funds_allocated": b.funds_allocated,
+            "funds_per_trade": b.funds_per_trade,
             "is_auto": b.is_auto,
             "running": b.running,
             # Task 4: True when auto-paused for an exhausted balance. Drives the
@@ -2291,6 +2316,11 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
         min_profit_pct=_num("min_profit_pct"),
         take_profit_pct=_parse_risk_pct(data.get("take_profit_pct"), "Take-profit"),
         stop_loss_pct=_parse_risk_pct(data.get("stop_loss_pct"), "Stop-loss"),
+        # Per-trade size only applies to Micro-Trader; ignored otherwise.
+        funds_per_trade=(
+            _parse_funds_per_trade(data.get("funds_per_trade"), funds)
+            if strategy == "micro_trader" else None
+        ),
         first_buy_price=_num("first_buy_price"),
         running=True,   # start scanning immediately — user can pause any time
         trade_count=0
@@ -2525,6 +2555,35 @@ async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_
     return {"status": "funds updated", "bot_id": bot_id,
             "funds_allocated": bot.funds_allocated, "previous": round(previous, 2),
             "resumed": resumed_from_low_funds}
+
+
+@app.post("/bots/{bot_id}/trade-size")
+async def update_bot_trade_size(bot_id: int, request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    """
+    Adjust a Micro-Trader bot's per-trade size (dollars) while it is active. The
+    engine reads ``funds_per_trade`` live every cycle, so it takes effect on the
+    next entry. Must be > $0 and not exceed the bot's total allocation. Send null
+    / empty string to fall back to the platform default. Scoped to the user's bot.
+    """
+    bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
+    if (bot.low_balance_strategy or "").lower() != "micro_trader":
+        raise HTTPException(status_code=400, detail="Funds per trade only applies to Micro-Trader bots.")
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request body.")
+    bot.funds_per_trade = _parse_funds_per_trade(data.get("funds_per_trade"), float(bot.funds_allocated or 0))
+    db.commit()
+    logger.info("[TRADE-SIZE] Bot %s funds_per_trade=%s (user %s)", bot_id, bot.funds_per_trade, u.id)
+    try:
+        bus.publish("portfolio_update", {"user_id": u.id}, user_id=u.id)
+    except Exception:
+        pass
+    return {"status": "trade size updated", "bot_id": bot_id,
+            "funds_per_trade": bot.funds_per_trade,
+            "effective_funds_per_trade": bot_engine._micro_trade_notional(bot)}
 
 
 @app.post("/bots/{bot_id}/risk")

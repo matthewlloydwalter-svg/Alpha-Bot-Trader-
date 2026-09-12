@@ -18,7 +18,7 @@ const USER_TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().ti
 const LOW_BALANCE_DESCRIPTIONS = {
   standard: "Standard execution uses normal allocation with the 10% position-size guard. Available only on margin accounts (or equity of $2,000+).",
   one_shot_daily: "Uses 100% of your allocated funds for a single high-confidence trade today. Halts trading after selling until funds settle tomorrow. Built for cash accounts under $2,000.",
-  micro_trader: "Executes multiple small day trades ($1.00 each) — no 10% size guard. Built for cash accounts under $2,000.",
+  micro_trader: "Executes multiple small day trades (customizable size, default $1.00 each) — no 10% size guard. Built for cash accounts under $2,000.",
   swing_trader: "Buys a stock and holds for several days or weeks to ride larger trends. Safely avoids daily cash settlement rules. Built for cash accounts under $2,000.",
   scattershot: "Buys $1.00 of 5 different stocks at the open and sells before the close — no 10% size guard. Built for cash accounts under $2,000.",
 };
@@ -1564,6 +1564,9 @@ function updateLowBalanceStrategyHint() {
   if (!el || !hint) return;
   hint.textContent = LOW_BALANCE_DESCRIPTIONS[el.value] || LOW_BALANCE_DESCRIPTIONS.standard;
   if (notice) notice.textContent = CASH_ACCOUNT_STRATEGY_NOTICE;
+  // The per-trade size field only applies to Micro-Trader.
+  const perTrade = document.getElementById("funds-per-trade-field");
+  if (perTrade) perTrade.classList.toggle("hidden", el.value !== "micro_trader");
 }
 
 function isCashLikeBrokerAccount() {
@@ -1656,6 +1659,8 @@ function resetCreateBotForm() {
   const sl = document.getElementById("b-sl");
   if (tp) tp.value = "";
   if (sl) sl.value = "";
+  const perTrade = document.getElementById("b-funds-per-trade");
+  if (perTrade) perTrade.value = "1.00";
   // Default to Micro-Trader; cash accounts cannot use Standard, and margin users can still switch.
   if (strategy) strategy.value = "micro_trader";
   updateLowBalanceStrategyHint();
@@ -1705,6 +1710,15 @@ async function createBot() {
   if (low_balance_strategy === "micro_trader" && funds_allocated < 1) {
     return toast("Micro-Trader needs at least $1 allocated", "error");
   }
+  // Micro-Trader per-trade size: > $0 and no more than the total allocation.
+  let funds_per_trade = null;
+  if (low_balance_strategy === "micro_trader") {
+    const ptEl = document.getElementById("b-funds-per-trade");
+    funds_per_trade = ptEl && ptEl.value !== "" ? +ptEl.value : 1.0;
+    if (!(funds_per_trade > 0)) return toast("Funds per trade must be greater than $0", "error");
+    if (funds_per_trade > funds_allocated)
+      return toast("Funds per trade cannot exceed the total funds allocated to this bot", "error");
+  }
   if (low_balance_strategy === "scattershot" && funds_allocated < 5) {
     return toast("Scattershot needs at least $5 allocated ($1 × 5 stocks)", "error");
   }
@@ -1718,7 +1732,7 @@ async function createBot() {
         broker: USER ? (USER.active_broker || "alpaca") : "alpaca",
         timeframe: "1h",
         is_auto: BOT_MODE === "auto", buy_limit, sell_limit,
-        take_profit_pct, stop_loss_pct
+        take_profit_pct, stop_loss_pct, funds_per_trade
       })
     });
     const launchedAuto = BOT_MODE === "auto";
@@ -1906,6 +1920,17 @@ function renderBots() {
           ? `Using recommended defaults (TP ${b.recommended_take_profit_pct}% / SL ${b.recommended_stop_loss_pct}%)`
           : `Custom risk — TP ${b.take_profit_pct != null ? b.take_profit_pct + '%' : 'default'} / SL ${b.stop_loss_pct != null ? b.stop_loss_pct + '%' : 'default'}`
       }</div>
+      ${(b.low_balance_strategy === "micro_trader") ? `
+      <div class="funds-ctl" style="margin-top:6px">
+        <span class="funds-ctl-label">Funds per trade ($)</span>
+        <input type="number" id="pt-${b.id}" class="funds-input" value="${b.funds_per_trade != null ? b.funds_per_trade : ''}" placeholder="1.00" min="0.01" step="0.01" title="Dollars deployed on each Micro-Trader entry (blank = $1.00 default)">
+        <button class="btn btn-sm btn-primary" onclick="updateBotTradeSize(${b.id})">Save Size</button>
+      </div>
+      <div style="font-size:10px;color:var(--t3);margin:2px 0 6px">${
+        b.funds_per_trade != null
+          ? `Each trade deploys $${Number(b.funds_per_trade).toFixed(2)} (capped at allocation).`
+          : `Using default $1.00 per trade.`
+      }</div>` : ""}
       <div style="background:var(--bg2);padding:10px;border-radius:6px;border:1px solid var(--border)">
         <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Last scan ${b.last_analysis_at ? `· ${new Date(/Z|[+-]\d{2}:?\d{2}$/.test(b.last_analysis_at) ? b.last_analysis_at : b.last_analysis_at + "Z").toLocaleTimeString()}` : "· not yet scanned"}</div>
         <div style="font-size:11px;color:var(--t2)">${esc(b.last_pattern_summary || (b.running ? "Engine is warming up — first scan runs within 60 seconds." : "Bot is paused. Toggle it on to start autonomous scanning."))}</div>
@@ -1958,6 +1983,28 @@ async function updateBotRisk(id) {
       body: JSON.stringify({ take_profit_pct, stop_loss_pct }),
     });
     toast("Risk settings updated — effective on the bot's next cycle", "success");
+    await loadBots();
+  } catch (e) {
+    toast(e, "error");
+  }
+}
+
+async function updateBotTradeSize(id) {
+  const ptEl = document.getElementById(`pt-${id}`);
+  if (!ptEl) return;
+  // Empty string clears the override (falls back to the $1.00 default).
+  const funds_per_trade = ptEl.value === "" ? null : parseFloat(ptEl.value);
+  if (funds_per_trade !== null && (isNaN(funds_per_trade) || funds_per_trade <= 0))
+    return toast("Funds per trade must be greater than $0", "error");
+  const bot = (BOTS || []).find((b) => b.id === id);
+  if (funds_per_trade !== null && bot && funds_per_trade > Number(bot.funds_allocated || 0))
+    return toast("Funds per trade cannot exceed the total funds allocated to this bot", "error");
+  try {
+    await api(`/bots/${id}/trade-size`, {
+      method: "POST",
+      body: JSON.stringify({ funds_per_trade }),
+    });
+    toast("Per-trade size updated — effective on the bot's next entry", "success");
     await loadBots();
   } catch (e) {
     toast(e, "error");

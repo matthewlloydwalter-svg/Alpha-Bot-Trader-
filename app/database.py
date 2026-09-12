@@ -130,6 +130,10 @@ class Bot(Base):
     buy_limit = Column(Float, nullable=True)
     sell_limit = Column(Float, nullable=True)
     min_profit_pct = Column(Float, nullable=True)   # min % gain before a discretionary sell
+    # ── Micro-Trader per-trade size ──
+    # Dollar amount deployed on each Micro-Trader entry. NULL = fall back to the
+    # platform default ($1.00). Ignored by other strategies.
+    funds_per_trade = Column(Float, nullable=True)
     # ── Per-bot risk overrides (Task 2) ──
     # User-customizable take-profit / stop-loss, stored as PERCENT (e.g. 3.0 = 3%).
     # NULL = fall back to the platform's recommended defaults. Applied by the
@@ -243,6 +247,7 @@ _MIGRATIONS = {
         "min_profit_pct": "FLOAT",
         "buy_limit": "FLOAT",
         "sell_limit": "FLOAT",
+        "funds_per_trade": "FLOAT",
         "take_profit_pct": "FLOAT",
         "stop_loss_pct": "FLOAT",
         # Position-state columns

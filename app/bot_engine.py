@@ -72,13 +72,13 @@ def _get_exit_percentages() -> tuple[float, float]:
         os.getenv("STOP_LOSS_PERCENT")
         or os.getenv("BOT_STOP_LOSS_PCT")
         or os.getenv("STOP_LOSS_PCT")
-        or "0.005"
+        or "0.0035"
     )
     take_raw = (
         os.getenv("TAKE_PROFIT_PERCENT")
         or os.getenv("BOT_TAKE_PROFIT_PCT")
         or os.getenv("TAKE_PROFIT_PCT")
-        or "0.03"
+        or "0.015"
     )
     return float(stop_raw), float(take_raw)
 
@@ -160,6 +160,8 @@ SCATTERSHOT_LEG_NOTIONAL = float(os.getenv("BOT_SCATTERSHOT_LEG_NOTIONAL", "1.0"
 SCATTERSHOT_OPEN_WINDOW_MIN = int(os.getenv("BOT_SCATTERSHOT_OPEN_WINDOW_MIN", "45"))
 SCATTERSHOT_EOD_WINDOW_MIN = int(os.getenv("BOT_SCATTERSHOT_EOD_WINDOW_MIN", "20"))
 MICRO_EOD_WINDOW_MIN = int(os.getenv("BOT_MICRO_EOD_WINDOW_MIN", "20"))
+# Default per-trade size for Micro-Trader when a bot has no custom funds_per_trade.
+MICRO_DEFAULT_NOTIONAL = float(os.getenv("BOT_MICRO_LEG_NOTIONAL", "1.0"))
 MIN_SWING_HOLD_DAYS = int(os.getenv("BOT_MIN_SWING_HOLD_DAYS", "3"))
 
 
@@ -346,7 +348,7 @@ def _strategy_tooltip(strategy: str | None) -> str:
     mapping = {
         "standard": "Standard (margin / $2,000+ only): normal allocation with the 10% position-size guard.",
         "one_shot_daily": "Uses 100% of your allocated funds for a single high-confidence trade today. Halts trading after selling until funds settle tomorrow.",
-        "micro_trader": "Executes multiple small day trades ($1.00 each) on a single stock to capture small movements without spending unsettled cash.",
+        "micro_trader": "Executes multiple small day trades (customizable size, default $1.00 each) on a single stock to capture small movements without spending unsettled cash.",
         "swing_trader": "Buys a stock and holds it for several days or weeks to ride larger trends. Safely avoids daily cash settlement rules.",
         "scattershot": "Diversifies your risk by buying $1.00 of 5 different stocks simultaneously at the market open, selling them before the close.",
     }
@@ -421,6 +423,19 @@ def _set_next_session_cooldown(bot: Bot) -> None:
     bot.strategy_cooldown_until = datetime.utcfromtimestamp(nxt.timestamp())
 
 
+def _micro_trade_notional(bot: Bot) -> float:
+    """
+    Dollar size for a single Micro-Trader entry: the bot's custom
+    ``funds_per_trade`` (default $1.00), never more than the bot's total
+    allocation. Other sizing/broker guards still apply downstream.
+    """
+    per_trade = float(bot.funds_per_trade or 0) or MICRO_DEFAULT_NOTIONAL
+    allocated = float(bot.funds_allocated or 0)
+    if allocated > 0:
+        per_trade = min(per_trade, allocated)
+    return round(max(per_trade, 0.0), 2)
+
+
 def _enforce_low_balance_strategy(db: Session, owner: User, bot: Bot, price: float, analysis: Analysis | None) -> tuple[bool, dict]:
     """Apply GFV-safe Low-balance strategy rules for cash accounts and allow margin accounts to opt in voluntarily."""
     account_context = _get_alpaca_account_context(owner, bot.broker or "alpaca", bot=bot)
@@ -470,7 +485,12 @@ def _enforce_low_balance_strategy(db: Session, owner: User, bot: Bot, price: flo
         if is_cash:
             if non_marginable is None or non_marginable <= 0:
                 return False, {"account_type": account_type, "reason": "no non-marginable buying power"}
-        return True, {"account_type": account_type, "reason": "micro trader", "notional": 1.0}
+        per_trade = _micro_trade_notional(bot)
+        # Cash accounts can never deploy more than their settled buying power.
+        if is_cash and non_marginable is not None:
+            per_trade = min(per_trade, float(non_marginable))
+        return True, {"account_type": account_type, "reason": "micro trader",
+                      "notional": round(per_trade, 2)}
 
     if strategy == "swing_trader":
         return True, {"account_type": account_type, "reason": "swing holds overnight"}
