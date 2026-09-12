@@ -1456,13 +1456,28 @@ def get_system_logs(u: User = Depends(get_current_user), db: Session = Depends(g
         } for r in rows
     ]
 
+# Platform-recommended TP/SL shown as the bot-creation form defaults, in PERCENT.
+# Deliberately INDEPENDENT of the engine's internal STOP_LOSS_PERCENT /
+# TAKE_PROFIT_PERCENT tuning so a legacy env override on those can't drag the
+# UI recommendation back to old values. Override with RECOMMENDED_* if needed.
+_RECOMMENDED_STOP_LOSS_PCT_DEFAULT = 0.35
+_RECOMMENDED_TAKE_PROFIT_PCT_DEFAULT = 1.5
+
+
 def _recommended_risk_defaults() -> tuple[float, float]:
     """Platform-recommended (stop_loss_pct, take_profit_pct) in PERCENT units."""
-    try:
-        stop_frac, take_frac = bot_engine._get_exit_percentages()
-    except Exception:
-        stop_frac, take_frac = 0.0035, 0.015
-    return round(float(stop_frac) * 100, 4), round(float(take_frac) * 100, 4)
+    def _pct(env_name: str, default: float) -> float:
+        raw = os.getenv(env_name)
+        if raw in (None, ""):
+            return default
+        try:
+            val = round(float(raw), 4)
+            return val if val > 0 else default
+        except (TypeError, ValueError):
+            return default
+    rec_sl = _pct("RECOMMENDED_STOP_LOSS_PCT", _RECOMMENDED_STOP_LOSS_PCT_DEFAULT)
+    rec_tp = _pct("RECOMMENDED_TAKE_PROFIT_PCT", _RECOMMENDED_TAKE_PROFIT_PCT_DEFAULT)
+    return rec_sl, rec_tp
 
 
 def _parse_risk_pct(value, field: str) -> Optional[float]:
