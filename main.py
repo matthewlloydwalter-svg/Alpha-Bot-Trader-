@@ -472,6 +472,22 @@ def get_ads_txt():
     return FileResponse(ads_path, media_type="text/plain")
 
 
+@app.get("/sw.js", include_in_schema=False)
+def get_service_worker():
+    """Monetag service worker — must be reachable at the site ROOT (/sw.js) so its
+    scope covers the whole origin. Served alongside (not replacing) Google AdSense.
+    `Service-Worker-Allowed: /` widens the allowed scope; `no-cache` lets the
+    browser pick up an updated worker on the next visit."""
+    sw_path = os.path.join(BASE_DIR, "sw.js")
+    headers = {
+        "Service-Worker-Allowed": "/",
+        "Cache-Control": "no-cache, must-revalidate",
+    }
+    if not os.path.isfile(sw_path):
+        raise HTTPException(status_code=404, detail="Service worker not found.")
+    return FileResponse(sw_path, media_type="application/javascript", headers=headers)
+
+
 @app.get("/", response_class=HTMLResponse)
 def landing_pane(request: Request):
     """Public marketing / business identity page (Stripe-accessible, no login wall)."""
@@ -1533,7 +1549,13 @@ def _parse_funds_per_trade(value, funds_allocated: float, broker: Optional[str] 
 def get_risk_defaults(u: User = Depends(get_current_user_from_cookie)):
     """Recommended TP/SL defaults for the bot-creation form (percent units)."""
     rec_sl, rec_tp = _recommended_risk_defaults()
-    return {"recommended_stop_loss_pct": rec_sl, "recommended_take_profit_pct": rec_tp}
+    # no-store so a browser / CDN / reverse-proxy can never serve a stale
+    # recommendation (this was the root cause of the form still showing old
+    # 3% / 0.5% values after the defaults were updated server-side).
+    return JSONResponse(
+        {"recommended_stop_loss_pct": rec_sl, "recommended_take_profit_pct": rec_tp},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
 
 
 @app.get("/bots")
