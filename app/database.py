@@ -103,6 +103,10 @@ class User(Base):
     # End of the current paid period (from Stripe current_period_end).
     subscription_current_period_end = Column(DateTime, nullable=True)
 
+    # Last monthly-statement email send time; used to make the cron idempotent
+    # so a process restart on the 1st can't email the same statement twice.
+    last_statement_sent = Column(DateTime, nullable=True)
+
     bots = relationship("Bot", back_populates="owner")
     trades = relationship("Trade", back_populates="owner")
     logs = relationship("ActivityLog", back_populates="owner") # Added relationship
@@ -290,6 +294,7 @@ _MIGRATIONS = {
         "stripe_customer_id": "VARCHAR",
         "stripe_subscription_id": "VARCHAR",
         "subscription_current_period_end": "TIMESTAMP",
+        "last_statement_sent": "TIMESTAMP",
     },
 }
 
