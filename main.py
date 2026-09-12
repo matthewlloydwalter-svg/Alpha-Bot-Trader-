@@ -472,6 +472,22 @@ def get_ads_txt():
     return FileResponse(ads_path, media_type="text/plain")
 
 
+@app.get("/sw.js", include_in_schema=False)
+def get_service_worker():
+    """Monetag service worker — must be reachable at the site ROOT (/sw.js) so its
+    scope covers the whole origin. Served alongside (not replacing) Google AdSense.
+    `Service-Worker-Allowed: /` widens the allowed scope; `no-cache` lets the
+    browser pick up an updated worker on the next visit."""
+    sw_path = os.path.join(BASE_DIR, "sw.js")
+    headers = {
+        "Service-Worker-Allowed": "/",
+        "Cache-Control": "no-cache, must-revalidate",
+    }
+    if not os.path.isfile(sw_path):
+        raise HTTPException(status_code=404, detail="Service worker not found.")
+    return FileResponse(sw_path, media_type="application/javascript", headers=headers)
+
+
 @app.get("/", response_class=HTMLResponse)
 def landing_pane(request: Request):
     """Public marketing / business identity page (Stripe-accessible, no login wall)."""
