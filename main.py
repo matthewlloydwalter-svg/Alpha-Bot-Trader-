@@ -1549,7 +1549,13 @@ def _parse_funds_per_trade(value, funds_allocated: float, broker: Optional[str] 
 def get_risk_defaults(u: User = Depends(get_current_user_from_cookie)):
     """Recommended TP/SL defaults for the bot-creation form (percent units)."""
     rec_sl, rec_tp = _recommended_risk_defaults()
-    return {"recommended_stop_loss_pct": rec_sl, "recommended_take_profit_pct": rec_tp}
+    # no-store so a browser / CDN / reverse-proxy can never serve a stale
+    # recommendation (this was the root cause of the form still showing old
+    # 3% / 0.5% values after the defaults were updated server-side).
+    return JSONResponse(
+        {"recommended_stop_loss_pct": rec_sl, "recommended_take_profit_pct": rec_tp},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
 
 
 @app.get("/bots")
