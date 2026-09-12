@@ -1427,6 +1427,31 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
         _ratchet_risk(bot, price, atr, bullish=(sig.bias == "bullish"))
         profit_pct = (price - bot.avg_entry_price) / bot.avg_entry_price * 100
 
+        # 0) User-defined hard caps (Task 2): fixed % from the entry price. These
+        # are layered ON TOP of the adaptive trailing/target logic below — the
+        # first threshold reached (custom OR adaptive) closes the position.
+        custom_sl = bot.stop_loss_pct
+        if custom_sl and custom_sl > 0:
+            sl_price = bot.avg_entry_price * (1 - float(custom_sl) / 100.0)
+            if price <= sl_price:
+                _log(db, owner.id,
+                     f"[STOP] {bot.ticker} hit custom stop-loss -{float(custom_sl):.2f}% "
+                     f"({sl_price:.4f}, {profit_pct:+.2f}%).", "WARNING")
+                closed = _close_position(db, owner, bot, price, reason=f"custom stop-loss -{float(custom_sl):.2f}%")
+                result.update({"action": "SELL", "reason": "Custom stop-loss hit", **closed})
+                return result
+
+        custom_tp = bot.take_profit_pct
+        if custom_tp and custom_tp > 0:
+            tp_price = bot.avg_entry_price * (1 + float(custom_tp) / 100.0)
+            if price >= tp_price:
+                _log(db, owner.id,
+                     f"[TAKE-PROFIT] {bot.ticker} hit custom take-profit +{float(custom_tp):.2f}% "
+                     f"({tp_price:.4f}, {profit_pct:+.2f}%).")
+                closed = _close_position(db, owner, bot, price, reason=f"custom take-profit +{float(custom_tp):.2f}%")
+                result.update({"action": "SELL", "reason": "Custom take-profit hit", **closed})
+                return result
+
         # 1) Trailing stop — hard capital protection, always fires.
         if bot.stop_price is not None and price <= bot.stop_price:
             _log(db, owner.id,

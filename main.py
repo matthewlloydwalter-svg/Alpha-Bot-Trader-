@@ -1,3 +1,4 @@
+import math
 import os
 import json
 import asyncio
@@ -1455,9 +1456,43 @@ def get_system_logs(u: User = Depends(get_current_user), db: Session = Depends(g
         } for r in rows
     ]
 
+def _recommended_risk_defaults() -> tuple[float, float]:
+    """Platform-recommended (stop_loss_pct, take_profit_pct) in PERCENT units."""
+    try:
+        stop_frac, take_frac = bot_engine._get_exit_percentages()
+    except Exception:
+        stop_frac, take_frac = 0.005, 0.03
+    return round(float(stop_frac) * 100, 4), round(float(take_frac) * 100, 4)
+
+
+def _parse_risk_pct(value, field: str) -> Optional[float]:
+    """Validate an optional TP/SL percent (0 < pct <= 100). None/'' => default."""
+    if value in (None, ""):
+        return None
+    try:
+        pct = float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{field} must be a number (percent).")
+    if not math.isfinite(pct):
+        raise HTTPException(status_code=400, detail=f"{field} must be a finite number (percent).")
+    pct = round(pct, 4)
+    if pct <= 0 or pct > 100:
+        raise HTTPException(status_code=400, detail=f"{field} must be between 0 and 100 percent.")
+    return pct
+
+
+@app.get("/api/risk-defaults")
+def get_risk_defaults(u: User = Depends(get_current_user_from_cookie)):
+    """Recommended TP/SL defaults for the bot-creation form (percent units)."""
+    rec_sl, rec_tp = _recommended_risk_defaults()
+    return {"recommended_stop_loss_pct": rec_sl, "recommended_take_profit_pct": rec_tp}
+
+
 @app.get("/bots")
 def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     bots = db.query(Bot).filter(Bot.owner_id == u.id).all()
+    # Platform-recommended TP/SL defaults (shown on the form; percent units).
+    _rec_sl, _rec_tp = _recommended_risk_defaults()
     rows = []
     for b in bots:
         broker = (b.broker or u.active_broker or "alpaca").lower()
@@ -1558,6 +1593,11 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "take_profit_price": display_take_profit_price,
             "display_stop_price": display_stop_price,
             "display_take_profit_price": display_take_profit_price,
+            # Per-bot risk overrides (Task 2). NULL => using recommended defaults.
+            "take_profit_pct": b.take_profit_pct,
+            "stop_loss_pct": b.stop_loss_pct,
+            "recommended_take_profit_pct": _rec_tp,
+            "recommended_stop_loss_pct": _rec_sl,
             "realized_pnl": b.realized_pnl,
             "last_signal": b.last_signal,
             "last_pattern_summary": b.last_pattern_summary,
@@ -2246,6 +2286,8 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
         buy_limit=_num("buy_limit"),
         sell_limit=_num("sell_limit"),
         min_profit_pct=_num("min_profit_pct"),
+        take_profit_pct=_parse_risk_pct(data.get("take_profit_pct"), "Take-profit"),
+        stop_loss_pct=_parse_risk_pct(data.get("stop_loss_pct"), "Stop-loss"),
         first_buy_price=_num("first_buy_price"),
         running=True,   # start scanning immediately — user can pause any time
         trade_count=0
@@ -2457,6 +2499,45 @@ async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_
         )
     return {"status": "funds updated", "bot_id": bot_id,
             "funds_allocated": bot.funds_allocated, "previous": round(previous, 2)}
+
+
+@app.post("/bots/{bot_id}/risk")
+async def update_bot_risk(bot_id: int, request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    """
+    Dynamically adjust a bot's per-bot take-profit / stop-loss percentages while
+    it is active. ``take_profit_pct`` / ``stop_loss_pct`` are percent units
+    (e.g. 3 = 3%). Send null / empty string to clear an override and fall back to
+    the platform's recommended default. The engine reads these live every cycle,
+    so changes take effect on the bot's next decision. Scoped to the user's bot.
+    """
+    bot = db.query(Bot).filter(Bot.id == bot_id, Bot.owner_id == u.id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found or unauthorized.")
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request body.")
+
+    # Only update fields that were explicitly provided so a partial update
+    # (e.g. only stop-loss) never wipes the other override.
+    if "take_profit_pct" in data:
+        bot.take_profit_pct = _parse_risk_pct(data.get("take_profit_pct"), "Take-profit")
+    if "stop_loss_pct" in data:
+        bot.stop_loss_pct = _parse_risk_pct(data.get("stop_loss_pct"), "Stop-loss")
+    db.commit()
+    logger.info("[RISK] Bot %s tp=%s sl=%s (user %s)",
+                bot_id, bot.take_profit_pct, bot.stop_loss_pct, u.id)
+    try:
+        bus.publish("portfolio_update", {"user_id": u.id}, user_id=u.id)
+    except Exception:
+        pass
+    rec_sl, rec_tp = _recommended_risk_defaults()
+    return {
+        "status": "risk updated", "bot_id": bot_id,
+        "take_profit_pct": bot.take_profit_pct, "stop_loss_pct": bot.stop_loss_pct,
+        "recommended_take_profit_pct": rec_tp, "recommended_stop_loss_pct": rec_sl,
+    }
+
 
 @app.post("/bots/{bot_id}/run-cycle")
 async def run_bot_cycle_endpoint(bot_id: int, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):

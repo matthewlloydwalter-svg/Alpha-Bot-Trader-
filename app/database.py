@@ -130,6 +130,12 @@ class Bot(Base):
     buy_limit = Column(Float, nullable=True)
     sell_limit = Column(Float, nullable=True)
     min_profit_pct = Column(Float, nullable=True)   # min % gain before a discretionary sell
+    # ── Per-bot risk overrides (Task 2) ──
+    # User-customizable take-profit / stop-loss, stored as PERCENT (e.g. 3.0 = 3%).
+    # NULL = fall back to the platform's recommended defaults. Applied by the
+    # engine as hard caps from the entry price, layered on the adaptive logic.
+    take_profit_pct = Column(Float, nullable=True)
+    stop_loss_pct = Column(Float, nullable=True)
     is_auto = Column(Boolean, default=True) # Added is_auto column to handle layout modes
     auto_select = Column(Boolean, default=False)  # True = engine picks the asset (no fixed ticker)
     in_position = Column(Boolean, default=False)
@@ -231,6 +237,8 @@ _MIGRATIONS = {
         "min_profit_pct": "FLOAT",
         "buy_limit": "FLOAT",
         "sell_limit": "FLOAT",
+        "take_profit_pct": "FLOAT",
+        "stop_loss_pct": "FLOAT",
         # Position-state columns
         "shares_held": "FLOAT DEFAULT 0",
         "avg_entry_price": "FLOAT",
