@@ -46,6 +46,7 @@ from app.markets_universe import MARKET_UNIVERSE
 from app.credentials import resolve_credentials, has_credentials, keys_payload, seal_secret
 from app.rate_limit import limit_auth, limit_verification
 from app import bot_engine  # Imported bot engine to wire up the run-cycle logic
+from app import email_service
 from app import market_store, ai_assistant
 from app.realtime import bus
 from app import scheduler as engine_scheduler
@@ -2263,6 +2264,16 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
     logger.info("[BOT CREATED] id=%s ticker=%s auto_select=%s broker=%s tf=%s funds=%s",
                 new_bot.id, new_bot.ticker, new_bot.auto_select, new_bot.broker,
                 new_bot.timeframe, new_bot.funds_allocated)
+    # Fire-and-forget transactional receipt (never blocks bot creation).
+    email_service.send_bot_created_receipt(
+        u.email,
+        bot_name=new_bot.name,
+        ticker=new_bot.ticker,
+        funds=new_bot.funds_allocated or 0.0,
+        broker=new_bot.broker or "alpaca",
+        mode=new_bot.mode or "paper",
+        platform_name=PLATFORM_NAME,
+    )
     return {"status": "bot created", "bot_id": new_bot.id}
 
 @app.post("/bots/{bot_id}/toggle")
@@ -2433,6 +2444,15 @@ async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_
         bus.publish("portfolio_update", {"user_id": u.id}, user_id=u.id)
     except Exception:
         pass
+    # Fire-and-forget receipt for the allocation change (never blocks the update).
+    if abs(new_funds - previous) > 1e-9:
+        email_service.send_funds_change_receipt(
+            u.email,
+            bot_name=bot.name,
+            previous=previous,
+            new=new_funds,
+            platform_name=PLATFORM_NAME,
+        )
     return {"status": "funds updated", "bot_id": bot_id,
             "funds_allocated": bot.funds_allocated, "previous": round(previous, 2)}
 

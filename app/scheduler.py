@@ -152,6 +152,15 @@ def evaluate_bots() -> None:
         logger.error("[ENGINE] Bot evaluation cycle failed: %s", e)
 
 
+def send_monthly_statements() -> None:
+    """Daily cron: emails monthly statements on the 1st (idempotent per user)."""
+    try:
+        from app import statements
+        statements.send_due_statements()
+    except Exception as e:  # pragma: no cover
+        logger.error("[STATEMENTS] Monthly statement job failed: %s", e)
+
+
 def start_scheduler() -> BackgroundScheduler | None:
     global _scheduler
     if os.getenv("ENGINE_ENABLED", "1") not in ("1", "true", "True", "yes"):
@@ -172,6 +181,10 @@ def start_scheduler() -> BackgroundScheduler | None:
                   id="market_poll", max_instances=1, coalesce=True, next_run_time=now)
     sched.add_job(evaluate_bots, "interval", seconds=BOT_SCAN_INTERVAL,
                   id="bot_eval", max_instances=1, coalesce=True, next_run_time=now)
+    # Monthly statements: run daily at 13:00 UTC; the job itself only sends on
+    # the 1st and is idempotent per user, so restarts can't double-send.
+    sched.add_job(send_monthly_statements, "cron", hour=13, minute=0,
+                  id="monthly_statements", max_instances=1, coalesce=True)
     sched.start()
     _scheduler = sched
     logger.info(
