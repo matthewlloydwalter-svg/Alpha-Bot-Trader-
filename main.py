@@ -1496,10 +1496,12 @@ def _parse_risk_pct(value, field: str) -> Optional[float]:
     return pct
 
 
-def _parse_funds_per_trade(value, funds_allocated: float) -> Optional[float]:
+def _parse_funds_per_trade(value, funds_allocated: float, broker: Optional[str] = None) -> Optional[float]:
     """
     Validate the Micro-Trader per-trade size (dollars). ``None``/'' => use the
     platform default. Must be > $0 and never exceed the bot's total allocation.
+    Alpaca rejects notional orders under $1.00, so sub-$1 sizes are blocked for
+    Alpaca bots (they would otherwise silently never execute).
     """
     if value in (None, ""):
         return None
@@ -1512,6 +1514,11 @@ def _parse_funds_per_trade(value, funds_allocated: float) -> Optional[float]:
     amount = round(amount, 2)
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Funds per trade must be greater than $0.")
+    if (broker or "").lower() == "alpaca" and amount < 1.0:
+        raise HTTPException(
+            status_code=400,
+            detail="Alpaca requires at least $1.00 per trade. Increase the funds-per-trade amount.",
+        )
     if funds_allocated and amount > float(funds_allocated) + 1e-6:
         raise HTTPException(
             status_code=400,
@@ -2333,7 +2340,7 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
         stop_loss_pct=_parse_risk_pct(data.get("stop_loss_pct"), "Stop-loss"),
         # Per-trade size only applies to Micro-Trader; ignored otherwise.
         funds_per_trade=(
-            _parse_funds_per_trade(data.get("funds_per_trade"), funds)
+            _parse_funds_per_trade(data.get("funds_per_trade"), funds, broker_selected)
             if strategy == "micro_trader" else None
         ),
         first_buy_price=_num("first_buy_price"),
@@ -2589,7 +2596,8 @@ async def update_bot_trade_size(bot_id: int, request: Request, u: User = Depends
         data = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid request body.")
-    bot.funds_per_trade = _parse_funds_per_trade(data.get("funds_per_trade"), float(bot.funds_allocated or 0))
+    bot.funds_per_trade = _parse_funds_per_trade(
+        data.get("funds_per_trade"), float(bot.funds_allocated or 0), bot.broker)
     db.commit()
     logger.info("[TRADE-SIZE] Bot %s funds_per_trade=%s (user %s)", bot_id, bot.funds_per_trade, u.id)
     try:
