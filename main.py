@@ -1514,7 +1514,9 @@ def _parse_funds_per_trade(value, funds_allocated: float, broker: Optional[str] 
     amount = round(amount, 2)
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Funds per trade must be greater than $0.")
-    if (broker or "").lower() == "alpaca" and amount < 1.0:
+    # A null/empty broker is treated as Alpaca everywhere else (e.g. the engine's
+    # notional guard and over-allocation checks), so resolve it the same way here.
+    if (broker or "alpaca").lower() == "alpaca" and amount < 1.0:
         raise HTTPException(
             status_code=400,
             detail="Alpaca requires at least $1.00 per trade. Increase the funds-per-trade amount.",
