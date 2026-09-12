@@ -1380,6 +1380,12 @@ def get_broker_account(u: User = Depends(get_current_user_from_cookie)):
             return info
     except HTTPException:
         raise
+    except BrokerError as e:
+        # BrokerError messages are already humanized and secret-free, so surface
+        # them verbatim (even in prod) — otherwise a user hits a generic "check
+        # your keys" wall and can't tell it's e.g. an OKX paper/live key mismatch.
+        logger.warning("broker account lookup failed for user %s: %s", u.id, e)
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.warning("broker account lookup failed for user %s: %s", u.id, e)
         detail = "Could not reach the broker account. Check your API keys and try again."
