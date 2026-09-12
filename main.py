@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -2180,7 +2180,7 @@ def _validate_cash_account_strategy_allocation(
 
 
 @app.post("/bots")
-async def create_bot(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+async def create_bot(request: Request, background_tasks: BackgroundTasks, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     _enforce_bot_create_limit(u, db)
     data = await request.json()
 
@@ -2265,7 +2265,8 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
                 new_bot.id, new_bot.ticker, new_bot.auto_select, new_bot.broker,
                 new_bot.timeframe, new_bot.funds_allocated)
     # Fire-and-forget transactional receipt (never blocks bot creation).
-    email_service.send_bot_created_receipt(
+    background_tasks.add_task(
+        email_service.send_bot_created_receipt,
         u.email,
         bot_name=new_bot.name,
         ticker=new_bot.ticker,
