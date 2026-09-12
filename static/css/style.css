@@ -606,6 +606,11 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   color:#ffd36b; background:rgba(255,179,71,0.09); border:1px solid rgba(255,179,71,0.45);
   box-shadow:inset 0 0 16px rgba(255,179,71,0.06); line-height:1.5; }
 
+/* Task 4: bot auto-paused for an exhausted allocated balance */
+.bot-lowfunds{ margin:2px 0 10px; padding:9px 12px; border-radius:8px; font-size:12px; font-weight:600;
+  color:#ff9db0; background:rgba(255,77,106,0.10); border:1px solid rgba(255,77,106,0.50);
+  box-shadow:inset 0 0 16px rgba(255,77,106,0.07); line-height:1.5; }
+
 /* Winner / Loser */
 .perf-wl-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:18px; }
 .perf-wl{ border-radius:12px; padding:14px 16px; background:rgba(10,24,45,0.20);

@@ -1582,6 +1582,9 @@ def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depe
             "funds_allocated": b.funds_allocated,
             "is_auto": b.is_auto,
             "running": b.running,
+            # Task 4: True when auto-paused for an exhausted balance. Drives the
+            # dashboard's "insufficient funds" banner on the bot card.
+            "paused_low_funds": bool(getattr(b, "paused_low_funds", False)),
             "trade_count": b.trade_count,
             "in_position": b.in_position,
             "shares_held": b.shares_held,
@@ -2329,6 +2332,14 @@ async def toggle_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
     # Starting a bot must respect plan running limits (create limit alone is not enough
     # after a downgrade when older bots still exist).
     if not bot.running:
+        # Task 4: a bot with no live balance can't fund trades. Block the start
+        # and tell the user to allocate funds first.
+        if float(bot.funds_allocated or 0) <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="This bot has insufficient funds to execute trades. "
+                       "Please allocate more funds to continue trading.",
+            )
         # Serialize concurrent start toggles for this account.
         db.query(User).filter(User.id == u.id).with_for_update().first()
         limit = _user_bot_limit(u)
@@ -2352,6 +2363,10 @@ async def toggle_bot(bot_id: int, u: User = Depends(get_current_user_from_cookie
     # Manual pause/start always clears the mode-switch marker so returning to
     # this mode later won't override the user's explicit choice.
     bot.paused_by_mode_switch = False
+    # A manual start also clears the insufficient-funds auto-pause flag (funds
+    # are guaranteed > 0 by the guard above).
+    if bot.running:
+        bot.paused_low_funds = False
     db.commit()
     return {"status": f"bot {bot_id} toggled", "running": bot.running}
 
@@ -2481,8 +2496,18 @@ async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_
 
     previous = float(bot.funds_allocated or 0.0)
     bot.funds_allocated = new_funds
+    # Task 4: allocating fresh funds clears the auto-pause and resumes trading.
+    # Only auto-resume bots that were paused *for insufficient funds* — never
+    # un-pause a bot the user stopped on purpose.
+    resumed_from_low_funds = False
+    if new_funds > 0 and getattr(bot, "paused_low_funds", False):
+        bot.paused_low_funds = False
+        bot.running = True
+        resumed_from_low_funds = True
     db.commit()
     logger.info("[FUNDS] Bot %s funds_allocated %.2f -> %.2f (user %s)", bot_id, previous, new_funds, u.id)
+    if resumed_from_low_funds:
+        logger.info("[FUNDS] Bot %s resumed from insufficient-funds pause (user %s)", bot_id, u.id)
     # Nudge any open dashboards to refresh the portfolio view for this user only.
     try:
         bus.publish("portfolio_update", {"user_id": u.id}, user_id=u.id)
@@ -2498,7 +2523,8 @@ async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_
             platform_name=PLATFORM_NAME,
         )
     return {"status": "funds updated", "bot_id": bot_id,
-            "funds_allocated": bot.funds_allocated, "previous": round(previous, 2)}
+            "funds_allocated": bot.funds_allocated, "previous": round(previous, 2),
+            "resumed": resumed_from_low_funds}
 
 
 @app.post("/bots/{bot_id}/risk")
