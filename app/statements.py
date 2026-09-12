@@ -3,9 +3,9 @@ statements.py — monthly account statements.
 
 Builds a per-user trading summary (total realized P&L, per-bot performance,
 active allocations) and emails it via Resend. The scheduler runs
-``send_due_statements`` daily; it only sends on/after the 1st of a month and is
-idempotent per user (``User.last_statement_sent``) so a process restart cannot
-email the same statement twice.
+``send_due_statements`` daily; it is idempotent per user via
+``User.last_statement_sent`` so delivery can be retried after a first-day
+failure without duplicating emails.
 """
 
 from __future__ import annotations
@@ -65,12 +65,11 @@ def send_due_statements(*, force: bool = False, now: datetime | None = None) -> 
     """
     Send monthly statements to every eligible user.
 
-    Sends only on/after the 1st of the month unless ``force=True``. Idempotent:
-    a user already sent a statement this calendar month is skipped.
+    Runs any day of the month; idempotent via ``User.last_statement_sent`` so a
+    user already sent a statement this calendar month is skipped. Use
+    ``force=True`` to bypass the idempotency check (re-sends to everyone).
     """
     now = now or datetime.utcnow()
-    if not force and now.day != 1:
-        return {"skipped": "not the 1st", "sent": 0}
 
     period = _prev_month_label(now)
     sent = 0
