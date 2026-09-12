@@ -1471,9 +1471,10 @@ def _parse_risk_pct(value, field: str) -> Optional[float]:
         pct = float(value)
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail=f"{field} must be a number (percent).")
+    pct = round(pct, 4)
     if pct <= 0 or pct > 100:
         raise HTTPException(status_code=400, detail=f"{field} must be between 0 and 100 percent.")
-    return round(pct, 4)
+    return pct
 
 
 @app.get("/api/risk-defaults")
