@@ -1619,8 +1619,23 @@ async function showCreateBotModal() {
   resetCreateBotForm();
   syncScattershotOption();
   document.getElementById("modal-bot").classList.remove("hidden");
+  loadRiskDefaultsHint();
   await refreshBrokerAccountTypeForBotForm();
   applyCashAccountStrategyRestrictions();
+}
+
+async function loadRiskDefaultsHint() {
+  // Show the platform-recommended TP/SL as placeholders + helper text.
+  try {
+    const d = await api("/api/risk-defaults");
+    const tp = d.recommended_take_profit_pct, sl = d.recommended_stop_loss_pct;
+    const tpEl = document.getElementById("b-tp");
+    const slEl = document.getElementById("b-sl");
+    if (tpEl) tpEl.placeholder = `Recommended ${tp}%`;
+    if (slEl) slEl.placeholder = `Recommended ${sl}%`;
+    const hint = document.getElementById("risk-defaults-hint");
+    if (hint) hint.textContent = `Leave blank to use recommended defaults (Take-profit ${tp}% · Stop-loss ${sl}%).`;
+  } catch (_) { /* non-fatal — placeholders just stay generic */ }
 }
 function hideCreateBotModal() { document.getElementById("modal-bot").classList.add("hidden"); }
 
@@ -1637,6 +1652,10 @@ function resetCreateBotForm() {
   if (ticker) ticker.value = "";
   if (buy) buy.value = "";
   if (sell) sell.value = "";
+  const tp = document.getElementById("b-tp");
+  const sl = document.getElementById("b-sl");
+  if (tp) tp.value = "";
+  if (sl) sl.value = "";
   // Default to Micro-Trader; cash accounts cannot use Standard, and margin users can still switch.
   if (strategy) strategy.value = "micro_trader";
   updateLowBalanceStrategyHint();
@@ -1666,6 +1685,14 @@ async function createBot() {
   const buy_limit = document.getElementById("b-buy").value ? +document.getElementById("b-buy").value : null;
   const sell_limit = document.getElementById("b-sell").value ? +document.getElementById("b-sell").value : null;
   const low_balance_strategy = document.getElementById("b-low-balance-strategy").value;
+  const tpEl = document.getElementById("b-tp");
+  const slEl = document.getElementById("b-sl");
+  const take_profit_pct = tpEl && tpEl.value !== "" ? +tpEl.value : null;
+  const stop_loss_pct = slEl && slEl.value !== "" ? +slEl.value : null;
+  if (take_profit_pct !== null && (take_profit_pct <= 0 || take_profit_pct > 100))
+    return toast("Take-profit must be between 0 and 100 percent", "error");
+  if (stop_loss_pct !== null && (stop_loss_pct <= 0 || stop_loss_pct > 100))
+    return toast("Stop-loss must be between 0 and 100 percent", "error");
 
   if (!funds_allocated || funds_allocated <= 0) return toast("Enter a funds amount to allocate", "error");
   if (BOT_MODE === "manual" && !ticker) return toast("Manual bots need a ticker symbol", "error");
@@ -1690,7 +1717,8 @@ async function createBot() {
         low_balance_strategy,
         broker: USER ? (USER.active_broker || "alpaca") : "alpaca",
         timeframe: "1h",
-        is_auto: BOT_MODE === "auto", buy_limit, sell_limit
+        is_auto: BOT_MODE === "auto", buy_limit, sell_limit,
+        take_profit_pct, stop_loss_pct
       })
     });
     const launchedAuto = BOT_MODE === "auto";
@@ -1862,6 +1890,17 @@ function renderBots() {
         <button class="btn btn-sm" title="Give more funds" onclick="adjustBotFunds(${b.id}, 50)">＋</button>
         <button class="btn btn-sm btn-primary" onclick="updateBotFunds(${b.id})">Update</button>
       </div>
+      <div class="funds-ctl" style="margin-top:6px">
+        <span class="funds-ctl-label">Risk TP / SL %</span>
+        <input type="number" id="tp-${b.id}" class="funds-input" value="${b.take_profit_pct != null ? b.take_profit_pct : ''}" placeholder="${b.recommended_take_profit_pct != null ? b.recommended_take_profit_pct : ''}" min="0.1" max="100" step="0.1" title="Take-profit % (blank = recommended default)">
+        <input type="number" id="sl-${b.id}" class="funds-input" value="${b.stop_loss_pct != null ? b.stop_loss_pct : ''}" placeholder="${b.recommended_stop_loss_pct != null ? b.recommended_stop_loss_pct : ''}" min="0.1" max="100" step="0.1" title="Stop-loss % (blank = recommended default)">
+        <button class="btn btn-sm btn-primary" onclick="updateBotRisk(${b.id})">Update</button>
+      </div>
+      <div style="font-size:10px;color:var(--t3);margin:2px 0 6px">${
+        (b.take_profit_pct == null && b.stop_loss_pct == null)
+          ? `Using recommended defaults (TP ${b.recommended_take_profit_pct}% / SL ${b.recommended_stop_loss_pct}%)`
+          : `Custom risk — TP ${b.take_profit_pct != null ? b.take_profit_pct + '%' : 'default'} / SL ${b.stop_loss_pct != null ? b.stop_loss_pct + '%' : 'default'}`
+      }</div>
       <div style="background:var(--bg2);padding:10px;border-radius:6px;border:1px solid var(--border)">
         <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Last scan ${b.last_analysis_at ? `· ${new Date(/Z|[+-]\d{2}:?\d{2}$/.test(b.last_analysis_at) ? b.last_analysis_at : b.last_analysis_at + "Z").toLocaleTimeString()}` : "· not yet scanned"}</div>
         <div style="font-size:11px;color:var(--t2)">${esc(b.last_pattern_summary || (b.running ? "Engine is warming up — first scan runs within 60 seconds." : "Bot is paused. Toggle it on to start autonomous scanning."))}</div>
@@ -1893,6 +1932,29 @@ async function updateBotFunds(id) {
     if (pv && !pv.classList.contains("hidden")) loadPortfolioPerformance();
   } catch (e) {
     if (showInsufficientFundsModal(e)) return;
+    toast(e, "error");
+  }
+}
+
+async function updateBotRisk(id) {
+  const tpEl = document.getElementById(`tp-${id}`);
+  const slEl = document.getElementById(`sl-${id}`);
+  if (!tpEl || !slEl) return;
+  // Empty string clears the override (falls back to recommended default).
+  const take_profit_pct = tpEl.value === "" ? null : parseFloat(tpEl.value);
+  const stop_loss_pct = slEl.value === "" ? null : parseFloat(slEl.value);
+  if (take_profit_pct !== null && (isNaN(take_profit_pct) || take_profit_pct <= 0 || take_profit_pct > 100))
+    return toast("Take-profit must be between 0 and 100 percent", "error");
+  if (stop_loss_pct !== null && (isNaN(stop_loss_pct) || stop_loss_pct <= 0 || stop_loss_pct > 100))
+    return toast("Stop-loss must be between 0 and 100 percent", "error");
+  try {
+    await api(`/bots/${id}/risk`, {
+      method: "POST",
+      body: JSON.stringify({ take_profit_pct, stop_loss_pct }),
+    });
+    toast("Risk settings updated — effective on the bot's next cycle", "success");
+    await loadBots();
+  } catch (e) {
     toast(e, "error");
   }
 }
