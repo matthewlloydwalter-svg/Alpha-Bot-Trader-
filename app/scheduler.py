@@ -34,10 +34,26 @@ from app import bot_engine
 
 logger = logging.getLogger("alphabot.scheduler")
 
-MARKET_POLL_INTERVAL = int(os.getenv("MARKET_POLL_INTERVAL", "15"))   # seconds
-BOT_SCAN_INTERVAL = int(os.getenv("BOT_SCAN_INTERVAL", "15"))         # seconds
+# ── High-frequency sync cadence (Task 3) ─────────────────────────────
+# The fast loop pulls fresh broker data for *bot-owned* symbols every
+# MARKET_POLL_INTERVAL seconds, then pushes trade instructions BOT_EVAL_DELAY
+# seconds after each successful pull (so bots always act on the freshest data).
+# Default 5s pull + 1s eval delay = a 6s decision loop.
+MARKET_POLL_INTERVAL = int(os.getenv("MARKET_POLL_INTERVAL", "5"))    # bot-symbol pull, seconds
+BOT_EVAL_DELAY = int(os.getenv("BOT_EVAL_DELAY", "1"))               # eval fires this long after a pull
+# Legacy safety-net eval interval (autonomous bots still get scanned if the fast
+# loop ever stalls). Kept slower so it never competes with the chained eval.
+BOT_SCAN_INTERVAL = int(os.getenv("BOT_SCAN_INTERVAL", "60"))         # seconds
+# Display-only watchlist symbols (no bot on them) are polled on a slower cadence
+# so the Markets tab stays fresh without burning broker rate limits at 5s.
+WATCHLIST_POLL_INTERVAL = int(os.getenv("WATCHLIST_POLL_INTERVAL", "30"))  # seconds
 WATCHLIST_LIMIT = int(os.getenv("MARKET_WATCHLIST_LIMIT", "40"))  # symbols/broker; 0 = entire universe
 POLL_TIMEFRAME = os.getenv("MARKET_POLL_TIMEFRAME", "1h")
+
+# Per-broker rate-limit backoff: after a 429/"too many requests", skip that
+# broker's remaining symbols and stand down for RATE_LIMIT_BACKOFF seconds.
+RATE_LIMIT_BACKOFF = int(os.getenv("RATE_LIMIT_BACKOFF", "30"))       # seconds
+_broker_cooldown_until: dict[str, float] = {}
 
 # Optional server-side data credentials so the watchlist (assets nobody has a
 # bot on yet) can still be polled for Alpaca, which requires keys for data.
@@ -47,13 +63,8 @@ _ENV_ALPACA_SECRET = os.getenv("ALPACA_DATA_SECRET") or os.getenv("ALPACA_SECRET
 _scheduler: BackgroundScheduler | None = None
 
 
-def _collect_targets() -> dict[tuple[str, str], dict]:
-    """
-    Build the set of (broker, symbol) to poll plus the credentials to use.
-
-    Bot-owned symbols use their owner's stored keys; the remaining watchlist
-    falls back to server env keys (Alpaca) / public access (OKX).
-    """
+def _collect_bot_targets() -> dict[tuple[str, str], dict]:
+    """(broker, symbol) → creds for every symbol a running bot depends on."""
     targets: dict[tuple[str, str], dict] = {}
     db = SessionLocal()
     try:
@@ -84,34 +95,63 @@ def _collect_targets() -> dict[tuple[str, str], dict]:
                     pass
             for sym in dict.fromkeys(symbols):  # preserve order, dedupe
                 targets[(broker, sym)] = {"creds": creds, "paper": paper}
-
-        # Watchlist fallback for assets without a bot.
-        for broker, cfg in MARKET_UNIVERSE.items():
-            base_creds = {}
-            if broker == "alpaca":
-                if not (_ENV_ALPACA_KEY and _ENV_ALPACA_SECRET):
-                    continue  # cannot fetch Alpaca data without keys
-                base_creds = {"alpaca_key": _ENV_ALPACA_KEY, "alpaca_secret": _ENV_ALPACA_SECRET}
-            items = cfg.get("items", [])
-            # 0 / negative = entire universe (Markets tab shows 100+ symbols).
-            watch = items if WATCHLIST_LIMIT <= 0 else items[:WATCHLIST_LIMIT]
-            for item in watch:
-                key = (broker, item["symbol"].upper())
-                targets.setdefault(key, {"creds": base_creds, "paper": True})
     finally:
         db.close()
     return targets
 
 
-def poll_market_data() -> None:
-    targets = _collect_targets()
+def _collect_watchlist_targets(exclude: set[tuple[str, str]] | None = None) -> dict[tuple[str, str], dict]:
+    """
+    (broker, symbol) → creds for display-only watchlist assets (Markets tab)
+    that no bot is actively trading. ``exclude`` skips symbols already covered by
+    the fast bot-symbol loop so we never double-fetch them.
+    """
+    exclude = exclude or set()
+    targets: dict[tuple[str, str], dict] = {}
+    for broker, cfg in MARKET_UNIVERSE.items():
+        base_creds = {}
+        if broker == "alpaca":
+            if not (_ENV_ALPACA_KEY and _ENV_ALPACA_SECRET):
+                continue  # cannot fetch Alpaca data without keys
+            base_creds = {"alpaca_key": _ENV_ALPACA_KEY, "alpaca_secret": _ENV_ALPACA_SECRET}
+        items = cfg.get("items", [])
+        # 0 / negative = entire universe (Markets tab shows 100+ symbols).
+        watch = items if WATCHLIST_LIMIT <= 0 else items[:WATCHLIST_LIMIT]
+        for item in watch:
+            key = (broker, item["symbol"].upper())
+            if key in exclude:
+                continue
+            targets.setdefault(key, {"creds": base_creds, "paper": True})
+    return targets
+
+
+def _is_rate_limited(err: Exception) -> bool:
+    """Best-effort detection of a broker rate-limit / throttling response."""
+    s = str(err).lower()
+    return any(t in s for t in ("429", "too many requests", "rate limit", "ratelimit", "rate-limit"))
+
+
+def _poll_targets(targets: dict[tuple[str, str], dict], *, label: str) -> int:
+    """
+    Fetch + persist + stream quotes for a set of (broker, symbol) targets.
+
+    Resilient by design: every symbol is wrapped in try/except so one bad symbol
+    never stops the cycle, and a per-broker rate-limit cooldown skips a broker's
+    remaining symbols after a 429 instead of hammering it further.
+    """
     if not targets:
-        logger.debug("[POLL] No symbols to poll this cycle.")
-        return
+        return 0
+
+    import time
+    now = time.time()
     updated = 0
     db = SessionLocal()
     try:
         for (broker, symbol), meta in targets.items():
+            # Respect an active per-broker rate-limit cooldown.
+            cooldown = _broker_cooldown_until.get(broker, 0.0)
+            if cooldown and time.time() < cooldown:
+                continue
             try:
                 analysis = get_market_analysis(
                     broker=broker, symbol=symbol, timeframe=POLL_TIMEFRAME,
@@ -119,26 +159,101 @@ def poll_market_data() -> None:
                     **(meta.get("creds") or {}),
                 )
             except BrokerError as e:
-                logger.debug("[POLL] %s:%s skipped — %s", broker, symbol, e)
+                if _is_rate_limited(e):
+                    _broker_cooldown_until[broker] = time.time() + RATE_LIMIT_BACKOFF
+                    logger.warning("[POLL:%s] %s rate-limited — backing off %ss.",
+                                   label, broker, RATE_LIMIT_BACKOFF)
+                    continue
+                logger.debug("[POLL:%s] %s:%s skipped — %s", label, broker, symbol, e)
                 continue
-            except Exception as e:  # pragma: no cover
-                logger.debug("[POLL] %s:%s error — %s", broker, symbol, e)
+            except Exception as e:  # pragma: no cover — never let one symbol kill the loop
+                if _is_rate_limited(e):
+                    _broker_cooldown_until[broker] = time.time() + RATE_LIMIT_BACKOFF
+                    logger.warning("[POLL:%s] %s rate-limited — backing off %ss.",
+                                   label, broker, RATE_LIMIT_BACKOFF)
+                    continue
+                logger.debug("[POLL:%s] %s:%s error — %s", label, broker, symbol, e)
                 continue
 
+            # A good fetch clears any lingering cooldown for this broker.
+            if _broker_cooldown_until.get(broker):
+                _broker_cooldown_until.pop(broker, None)
+
             candle_ts = analysis.candles[-1]["time"] if analysis.candles else None
-            upsert_quote(db, broker, symbol, analysis.last_price,
-                         signal_action=analysis.signal.action,
-                         signal_strength=analysis.signal.strength,
-                         candle_ts=candle_ts)
-            bus.publish("market_quote", {
-                "broker": broker, "symbol": symbol, "price": analysis.last_price,
-                "signal_action": analysis.signal.action,
-                "signal_strength": analysis.signal.strength,
-            })
-            updated += 1
+            try:
+                upsert_quote(db, broker, symbol, analysis.last_price,
+                             signal_action=analysis.signal.action,
+                             signal_strength=analysis.signal.strength,
+                             candle_ts=candle_ts)
+                bus.publish("market_quote", {
+                    "broker": broker, "symbol": symbol, "price": analysis.last_price,
+                    "signal_action": analysis.signal.action,
+                    "signal_strength": analysis.signal.strength,
+                })
+                updated += 1
+            except Exception as e:  # pragma: no cover
+                logger.debug("[POLL:%s] persist failed %s:%s — %s", label, broker, symbol, e)
     finally:
         db.close()
-    logger.info("[POLL] Refreshed %d/%d market quotes.", updated, len(targets))
+    return updated
+
+
+def _schedule_followup_eval() -> None:
+    """
+    Push trade instructions BOT_EVAL_DELAY seconds after a successful pull so
+    bots always decide on the freshest data. A single reusable one-shot job id
+    (replace_existing) means rapid polls collapse into one pending eval instead
+    of stacking up.
+    """
+    if _scheduler is None:
+        return
+    from datetime import datetime as _dt, timedelta as _td
+    try:
+        _scheduler.add_job(
+            evaluate_bots, "date",
+            run_date=_dt.utcnow() + _td(seconds=BOT_EVAL_DELAY),
+            id="bot_eval_followup",
+            max_instances=1, coalesce=True, replace_existing=True,
+            misfire_grace_time=BOT_EVAL_DELAY + 5,
+        )
+    except Exception as e:  # pragma: no cover
+        logger.debug("[ENGINE] follow-up eval scheduling skipped: %s", e)
+
+
+def poll_market_data() -> None:
+    """
+    Fast loop: pull fresh broker data for every bot-owned symbol, then chain a
+    bot-evaluation pass 1s later. Runs on MARKET_POLL_INTERVAL (default 5s).
+    """
+    try:
+        targets = _collect_bot_targets()
+        if targets:
+            updated = _poll_targets(targets, label="bots")
+            logger.info("[POLL] Refreshed %d/%d bot-symbol quotes.", updated, len(targets))
+        else:
+            logger.debug("[POLL] No bot-owned symbols to poll this cycle.")
+    except Exception as e:  # pragma: no cover — the loop must never die
+        logger.error("[POLL] Fast market poll failed: %s", e)
+    finally:
+        # Always push instructions afterward: autonomous bots (no fixed ticker)
+        # aren't in `targets` but still need to be evaluated every cycle.
+        _schedule_followup_eval()
+
+
+def poll_watchlist() -> None:
+    """
+    Slow loop: refresh display-only Markets-tab symbols that no bot trades, on a
+    relaxed cadence so we keep the UI fresh without burning broker rate limits.
+    """
+    try:
+        bot_keys = set(_collect_bot_targets().keys())
+        targets = _collect_watchlist_targets(exclude=bot_keys)
+        if not targets:
+            return
+        updated = _poll_targets(targets, label="watchlist")
+        logger.info("[POLL] Refreshed %d/%d watchlist quotes.", updated, len(targets))
+    except Exception as e:  # pragma: no cover
+        logger.error("[POLL] Watchlist poll failed: %s", e)
 
 
 def evaluate_bots() -> None:
@@ -178,8 +293,14 @@ def start_scheduler() -> BackgroundScheduler | None:
     # and it will NEVER fire automatically. Pass next_run_time=now so the first
     # interval fire is immediate (no separate boot job that can overlap).
     now = _dt.utcnow()
+    # Fast loop: pull bot-owned symbols every MARKET_POLL_INTERVAL s; it chains a
+    # bot-eval BOT_EVAL_DELAY s after each pull (see poll_market_data).
     sched.add_job(poll_market_data, "interval", seconds=MARKET_POLL_INTERVAL,
                   id="market_poll", max_instances=1, coalesce=True, next_run_time=now)
+    # Slow loop: refresh display-only watchlist symbols on a relaxed cadence.
+    sched.add_job(poll_watchlist, "interval", seconds=WATCHLIST_POLL_INTERVAL,
+                  id="watchlist_poll", max_instances=1, coalesce=True, next_run_time=now)
+    # Safety-net eval so autonomous bots still run if the fast loop ever stalls.
     sched.add_job(evaluate_bots, "interval", seconds=BOT_SCAN_INTERVAL,
                   id="bot_eval", max_instances=1, coalesce=True, next_run_time=now)
     # Monthly statements: run daily at 13:00 UTC; the job itself only sends on
@@ -189,8 +310,9 @@ def start_scheduler() -> BackgroundScheduler | None:
     sched.start()
     _scheduler = sched
     logger.info(
-        "[ENGINE] Background engine started — market poll every %ss, bot eval every %ss.",
-        MARKET_POLL_INTERVAL, BOT_SCAN_INTERVAL,
+        "[ENGINE] Background engine started — bot-symbol pull every %ss, eval +%ss after each pull, "
+        "watchlist every %ss, safety-net eval every %ss.",
+        MARKET_POLL_INTERVAL, BOT_EVAL_DELAY, WATCHLIST_POLL_INTERVAL, BOT_SCAN_INTERVAL,
     )
 
     return sched
