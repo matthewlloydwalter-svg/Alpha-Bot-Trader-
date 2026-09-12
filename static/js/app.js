@@ -2526,10 +2526,6 @@ function renderNews() {
 }
 
 (async function boot() {
-  // TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
-  // AdSense review: always enter the dashboard with guest/dummy account data.
-  // Never render the login/signup forms — /auth/me returns mock guest_trader
-  // when there is no real session cookie.
   try {
     try {
       const next = new URLSearchParams(location.search).get("next");
@@ -2554,36 +2550,7 @@ function renderNews() {
     if (await redirectAfterAuthIfNeeded()) return;
     await enterApp();
   } catch (_) {
-    // TODO: REVERT THIS AFTER 60 DAYS TO RE-ENABLE LOGIN WALL
-    // Even if /auth/me fails unexpectedly, keep the dashboard shell visible and
-    // paint safe placeholder guest UI instead of flipping to the login wall.
-    USER = {
-      id: 0,
-      email: "guest_trader@adsense-review.invalid",
-      name: "guest_trader",
-      is_admin: false,
-      email_verified: true,
-      trading_mode: "paper",
-      active_broker: "alpaca",
-      total_deposited: 10000,
-      total_withdrawn: 0,
-      balance: 10000,
-      bot_count: 0,
-      bot_limit: 5,
-      subscription_plan: "growth",
-      subscription_plan_name: "Growth",
-      plan_level: "Growth",
-      can_upgrade: true,
-      adsense_guest: true,
-    };
-    if (!isDashboardPath(location.pathname)) {
-      history.replaceState({ tab: "portfolio" }, "", "/dashboard/portfolio");
-    }
-    try {
-      await enterApp();
-    } catch (err) {
-      console.error("AdSense guest dashboard boot failed:", err);
-    }
+    USER = null;
   }
 })();
 

@@ -9,8 +9,7 @@
   --gdim:rgba(0,214,143,0.13);--rdim:rgba(255,77,106,0.13);--bdim:rgba(77,159,255,0.1);
   --topbar-h:64px;
   --nav-h:52px;
-  /* TODO: REVERT THIS AFTER 60 DAYS — AdSense maintenance banner height */
-  --adsense-maint-h:44px;
+  --adsense-maint-h:0px;
 }
   
 body{  
