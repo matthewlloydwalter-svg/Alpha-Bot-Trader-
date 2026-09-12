@@ -191,7 +191,16 @@ Before flipping any real user to live mode:
 
 OKX's "paper" equivalent is their **demo trading** feature, which
 requires generating a *separate* set of demo API keys from OKX's demo
-trading section (not your regular keys with a flag). `brokers.py`
-calls `exchange.set_sandbox_mode(True)` when your stored
-`trading_mode` is `paper` — make sure the keys you save are the demo
-ones if you want OKX paper trading to actually use fake funds.
+trading section (not your regular keys with a flag). For **account /
+trading** calls, `brokers.py` calls `exchange.set_sandbox_mode(True)`
+when your stored `trading_mode` is `paper` — so the keys you save under
+OKX Paper must be the **demo** ones, and live keys must be saved under
+OKX Live. Saving the wrong type for the mode makes OKX reject them with
+code `50101` ("APIKey does not match current environment"); the app now
+surfaces that as a clear message telling you which key type to use.
+
+**Market data** (candles/charts and bot analysis) always uses the real
+live public OKX endpoint regardless of paper/live — it never enables
+sandbox mode, because OKX's demo endpoint returns *simulated* prices and
+public OHLCV is identical across environments. (Previously, saving keys
+while in paper mode silently switched charts to demo prices.)
