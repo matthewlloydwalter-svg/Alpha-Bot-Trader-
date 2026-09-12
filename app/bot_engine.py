@@ -621,11 +621,15 @@ def _close_scattershot_basket(db: Session, owner: User, bot: Bot, reason: str) -
         bot.last_pattern_summary = (
             f"Scattershot partial exit ({reason}) — failed: {', '.join(failed_symbols)}"
         )
+        paused_low_funds = False
         if closed_symbols:
             bot.realized_pnl = (bot.realized_pnl or 0) + total_gain
+            paused_low_funds = _apply_realized_pnl_to_funds(bot, total_gain)
             bot.trade_count = (bot.trade_count or 0) + len(closed_symbols)
         db.commit()
         _emit_portfolio(owner.id)
+        if paused_low_funds:
+            _notify_bot_paused_low_funds(db, owner, bot)
         return {
             "action": "WAIT",
             "reason": "Partial scattershot exit — some legs still open.",
@@ -634,6 +638,7 @@ def _close_scattershot_basket(db: Session, owner: User, bot: Bot, reason: str) -
         }
 
     bot.realized_pnl = (bot.realized_pnl or 0) + total_gain
+    paused_low_funds = _apply_realized_pnl_to_funds(bot, total_gain)
     bot.trade_count = (bot.trade_count or 0) + len(closed_symbols)
     bot.in_position = False
     bot.shares_held = 0
@@ -660,6 +665,8 @@ def _close_scattershot_basket(db: Session, owner: User, bot: Bot, reason: str) -
         "realized_pnl": round(total_gain, 4), "reason": reason,
     }, user_id=owner.id)
     _emit_portfolio(owner.id)
+    if paused_low_funds:
+        _notify_bot_paused_low_funds(db, owner, bot)
     return {
         "order": {"status": "closed_basket", "symbols": closed_symbols},
         "realized_gain": round(total_gain, 4),
@@ -1057,6 +1064,49 @@ def _attempt_capital_rotation(db: Session, owner: User, candidate_bot: Bot,
 
 
 # ────────────────────────────────────────────────────────────────────
+# Fund-allocation engine (Task 4)
+# ────────────────────────────────────────────────────────────────────
+def _apply_realized_pnl_to_funds(bot: Bot, gain: float) -> bool:
+    """
+    The allocated balance IS the live trading balance. Realized P&L mutates
+    ``funds_allocated`` directly — losses shrink it (smaller position sizing and
+    less guardrail room), gains grow it. When the balance is exhausted (<= $0)
+    the bot is auto-paused so it can no longer fund trades.
+
+    Mutates bot state only; the caller is responsible for committing and, when
+    this returns True, sending the paused notification. Returns True ONLY on the
+    transition into the paused-low-funds state (so the alert fires exactly once).
+    """
+    bot.funds_allocated = round((bot.funds_allocated or 0) + float(gain or 0), 2)
+    if bot.funds_allocated > 0:
+        return False
+    # Clamp: a bot can't hold negative cash. realized_pnl still tracks the true
+    # cumulative loss; funds_allocated is the spendable live balance.
+    bot.funds_allocated = 0.0
+    already_paused = bool(bot.paused_low_funds) and not bot.running
+    bot.running = False
+    bot.paused_low_funds = True
+    return not already_paused
+
+
+def _notify_bot_paused_low_funds(db: Session, owner: User, bot: Bot) -> None:
+    """Log + email the owner that a bot was auto-paused for insufficient funds."""
+    _log(db, owner.id,
+         f"[FUNDS] '{bot.name}' auto-paused — allocated balance exhausted ($0.00). "
+         f"Allocate more funds to resume trading.", "WARNING")
+    try:
+        from app import email_service
+        if getattr(owner, "email", None):
+            email_service.send_bot_paused_receipt(
+                owner.email,
+                bot_name=bot.name,
+                platform_name=os.getenv("PLATFORM_NAME", "AlphaBotix Trading"),
+            )
+    except Exception as e:  # email must never break the trading loop
+        logger.warning("Paused-low-funds email failed for bot %s: %s", bot.id, e)
+
+
+# ────────────────────────────────────────────────────────────────────
 # Position close
 # ────────────────────────────────────────────────────────────────────
 def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: str) -> dict:
@@ -1075,6 +1125,8 @@ def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: st
     gain = (price - (bot.avg_entry_price or price)) * qty
     notional = round(qty * price, 6)
     bot.realized_pnl = (bot.realized_pnl or 0) + gain
+    # Task 4: the live allocated balance moves with realized P&L; may auto-pause.
+    paused_low_funds = _apply_realized_pnl_to_funds(bot, gain)
     bot.trade_count = (bot.trade_count or 0) + 1
     # ACID: the ledger row, attribution and bot state mutate inside one
     # transaction committed atomically below — every sell records the exact
@@ -1126,6 +1178,8 @@ def _close_position(db: Session, owner: User, bot: Bot, price: float, reason: st
         "reason": reason,
     }, user_id=owner.id)
     _emit_portfolio(owner.id)
+    if paused_low_funds:
+        _notify_bot_paused_low_funds(db, owner, bot)
     return {"order": order, "realized_gain": round(gain, 4)}
 
 

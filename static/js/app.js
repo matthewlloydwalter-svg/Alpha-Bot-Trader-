@@ -1823,6 +1823,10 @@ function renderBots() {
     const haltRow = (isStock && b.running && isMarketClosed())
       ? `<div class="bot-halt">⏸ Market closed — no new stock entries until ${esc(fmtLocalOpenTime())}. Scattershot/micro exits still run when due.</div>`
       : "";
+    // Task 4: auto-paused because its live balance was exhausted by losses.
+    const lowFundsBanner = b.paused_low_funds
+      ? `<div class="bot-lowfunds">⚠ This bot has insufficient funds to execute trades. Please allocate more funds to continue trading.</div>`
+      : "";
     const sigColor = b.last_signal === "BUY" ? "badge-green" : b.last_signal === "SELL" ? "badge-red" : "badge-amber";
     const entryPrice = (b.entry_price ?? b.avg_entry_price);
     const currentPrice = (b.current_price ?? entryPrice);
@@ -1871,6 +1875,7 @@ function renderBots() {
         </div>
       </div>
       ${haltRow}
+      ${lowFundsBanner}
       <div style="color:var(--t2);font-size:12px;margin-bottom:8px">
         ${assetLabel} · ${esc((b.broker||"alpaca").toUpperCase())} · ${esc(b.timeframe||"1h")} |
         Strategy: ${esc(strategyLabel)} ${cooldownNote} ${scattershotNote} ${swingNote} |

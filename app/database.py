@@ -149,6 +149,12 @@ class Bot(Base):
     # (Paper↔Live). Cleared on manual pause/start. Lets us resume on return
     # without un-pausing bots the user stopped on purpose.
     paused_by_mode_switch = Column(Boolean, default=False)
+    # True when this bot was auto-paused because its live allocated balance
+    # (funds_allocated, which shrinks/grows with realized P&L) reached $0 or
+    # below and it can no longer fund trades. Cleared when the user allocates
+    # more funds or manually toggles the bot. Drives the dashboard's
+    # "insufficient funds" banner.
+    paused_low_funds = Column(Boolean, default=False)
     low_balance_strategy = Column(String, nullable=True, default="standard")
     strategy_cooldown_until = Column(DateTime, nullable=True)
     strategy_state = Column(String, nullable=True)   # JSON blob for multi-leg / session state
@@ -246,6 +252,7 @@ _MIGRATIONS = {
         "realized_pnl": "FLOAT DEFAULT 0",
         "running": "BOOLEAN DEFAULT FALSE",
         "paused_by_mode_switch": "BOOLEAN DEFAULT FALSE",
+        "paused_low_funds": "BOOLEAN DEFAULT FALSE",
         "low_balance_strategy": "VARCHAR DEFAULT 'standard'",
         "strategy_cooldown_until": "TIMESTAMP",
         "strategy_state": "TEXT",
