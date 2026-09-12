@@ -162,6 +162,7 @@ def send_monthly_statements() -> None:
 
 
 def start_scheduler() -> BackgroundScheduler | None:
+    """Start and return the background trading scheduler when enabled."""
     global _scheduler
     if os.getenv("ENGINE_ENABLED", "1") not in ("1", "true", "True", "yes"):
         logger.info("[ENGINE] Background engine disabled (ENGINE_ENABLED=0).")

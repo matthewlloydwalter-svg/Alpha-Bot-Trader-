@@ -2181,10 +2181,12 @@ def _validate_cash_account_strategy_allocation(
 
 @app.post("/bots")
 async def create_bot(request: Request, u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    """Create a trading bot for the authenticated user."""
     _enforce_bot_create_limit(u, db)
     data = await request.json()
 
     def _num(key):
+        """Parse an optional numeric request field, returning ``None`` if invalid."""
         v = data.get(key)
         try:
             return float(v) if v not in (None, "") else None

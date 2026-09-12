@@ -135,6 +135,7 @@ def send_password_reset_email(to_email: str, code: str, platform_name: str = "Al
 # anything else) and returns True/False so callers can fire-and-forget.
 
 def _fmt_money(value) -> str:
+    """Format a value as US-dollar currency, defaulting invalid values to zero."""
     try:
         return f"${float(value or 0):,.2f}"
     except (TypeError, ValueError):
