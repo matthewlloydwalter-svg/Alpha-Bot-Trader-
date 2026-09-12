@@ -13,10 +13,46 @@ from typing import Optional, Sequence, Union
 
 logger = logging.getLogger("alphabot.email")
 
-# Prefer brand-matched display name; domain must be verified in Resend.
-DEFAULT_FROM = "AlphaBotix Trading <updates@alphabotixtrading.com>"
+# Resend rejects a bare display name in the `from` field with HTTP 422
+# ("Invalid 'from' field") — it requires a real email address, optionally with a
+# display name: "Name <email@domain>". Resend's shared sandbox sender
+# (onboarding@resend.dev) works without domain verification, so it is the safe
+# default for testing. Swap EMAIL_FROM_ADDRESS to your verified domain sender
+# (e.g. "AlphaBotix Trading <noreply@alphabotix.com>") once it's verified.
+DEFAULT_SENDER_EMAIL = "onboarding@resend.dev"
+DEFAULT_SENDER_NAME = "AlphaBotix Trading"
+DEFAULT_FROM = f"{DEFAULT_SENDER_NAME} <{DEFAULT_SENDER_EMAIL}>"
 RESEND_API_KEY = (os.getenv("RESEND_API_KEY") or "").strip()
-EMAIL_FROM = (os.getenv("EMAIL_FROM") or DEFAULT_FROM).strip()
+
+
+def resolve_from_address() -> str:
+    """
+    Resolve a Resend-valid `from` value ("Name <email>" or "email").
+
+    Order of preference: EMAIL_FROM_ADDRESS, then legacy EMAIL_FROM, then the
+    default sandbox sender. If the configured value is only a display name with
+    no email (the cause of the 422), we attach the default sender address so the
+    payload is always accepted.
+    """
+    raw = (
+        os.getenv("EMAIL_FROM_ADDRESS")
+        or os.getenv("EMAIL_FROM")
+        or DEFAULT_FROM
+    ).strip()
+    if not raw:
+        return DEFAULT_FROM
+    # Valid: "Name <email@domain>" or a bare "email@domain".
+    if "<" in raw and ">" in raw and "@" in raw.split("<", 1)[1]:
+        return raw
+    if "@" in raw and "<" not in raw and ">" not in raw:
+        return raw
+    # Only a display name (e.g. "AlphaBotix Trading") — attach a real address.
+    name = raw.replace("<", "").replace(">", "").strip() or DEFAULT_SENDER_NAME
+    return f"{name} <{DEFAULT_SENDER_EMAIL}>"
+
+
+# Backwards-compatible module attribute (some code imports EMAIL_FROM directly).
+EMAIL_FROM = resolve_from_address()
 
 
 class EmailError(Exception):
@@ -52,8 +88,10 @@ def send_email(
     """
     Send an email via Resend.
 
-    ``from_addr`` defaults to AlphaBotix Trading <updates@alphabotixtrading.com>.
-    Provide at least one of ``html`` or ``text``.
+    ``from_addr`` defaults to ``resolve_from_address()`` (EMAIL_FROM_ADDRESS /
+    EMAIL_FROM / the sandbox sender), always coerced to a Resend-valid value so
+    a bare display name can't trigger a 422. Provide at least one of ``html`` or
+    ``text``.
     """
     resend = _ensure_client()
 
@@ -66,8 +104,16 @@ def send_email(
     if not (html or text):
         raise EmailError("Email body is empty — provide html and/or text.")
 
+    # Resolve at call time so runtime env changes / an explicit but malformed
+    # from_addr can't produce an invalid payload.
+    from_value = (from_addr or "").strip() or resolve_from_address()
+    if "@" not in from_value:
+        # Explicit display-name-only override — attach a real sender address.
+        name = from_value.replace("<", "").replace(">", "").strip() or DEFAULT_SENDER_NAME
+        from_value = f"{name} <{DEFAULT_SENDER_EMAIL}>"
+
     params: dict = {
-        "from": (from_addr or EMAIL_FROM).strip(),
+        "from": from_value,
         "to": recipients,
         "subject": subject,
     }
