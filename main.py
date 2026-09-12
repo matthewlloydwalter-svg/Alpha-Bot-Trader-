@@ -1,3 +1,4 @@
+import math
 import os
 import json
 import asyncio
@@ -1471,6 +1472,8 @@ def _parse_risk_pct(value, field: str) -> Optional[float]:
         pct = float(value)
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail=f"{field} must be a number (percent).")
+    if not math.isfinite(pct):
+        raise HTTPException(status_code=400, detail=f"{field} must be a finite number (percent).")
     pct = round(pct, 4)
     if pct <= 0 or pct > 100:
         raise HTTPException(status_code=400, detail=f"{field} must be between 0 and 100 percent.")
