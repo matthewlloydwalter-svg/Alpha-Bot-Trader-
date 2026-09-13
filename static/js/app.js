@@ -421,6 +421,8 @@ async function handleRegister(e) {
     toast("Account setup successful!", "success");
     if (await redirectAfterAuthIfNeeded()) return;
     await enterApp();
+    // Brand-new account → guarantee the welcome walkthrough fires on signup.
+    maybeStartOnboardingTour();
   } catch (err) { toast(err, "error"); }
 }
 
