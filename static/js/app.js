@@ -559,6 +559,7 @@ async function enterApp() {
 
   await activateTab(tab, { push: false });
   connectLiveStream();         // subscribe to the always-on backend feed
+  maybeStartOnboardingTour();  // first-run walkthrough for brand-new accounts
 
   if (!window._focusSyncBound) {
     window._focusSyncBound = true;
@@ -2637,6 +2638,410 @@ function renderNews() {
       <div style="font-size:11px;color:var(--t3)">${esc(n.pubDate || "")}</div>
     </div>`;
   }).join("");
+}
+
+/* ============================================================
+ *  First-run onboarding walkthrough ("AlphaBot shows you around")
+ * ============================================================ */
+const TUTORIAL_IMAGE = "/static/images/tutorial-image.png";
+// Inline SVG fallback so the tour still works before tutorial-image.png ships.
+const TUTORIAL_IMAGE_FALLBACK =
+  "data:image/svg+xml;utf8," + encodeURIComponent(
+    "<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'>" +
+    "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>" +
+    "<stop offset='0' stop-color='#4d9fff'/><stop offset='1' stop-color='#9b59ff'/></linearGradient></defs>" +
+    "<rect width='200' height='200' rx='24' fill='#141a28'/>" +
+    "<circle cx='100' cy='84' r='46' fill='url(#g)'/>" +
+    "<circle cx='84' cy='78' r='8' fill='#0d0f14'/><circle cx='116' cy='78' r='8' fill='#0d0f14'/>" +
+    "<rect x='80' y='100' width='40' height='8' rx='4' fill='#0d0f14'/>" +
+    "<rect x='60' y='150' width='80' height='30' rx='8' fill='url(#g)'/>" +
+    "<text x='100' y='171' font-family='sans-serif' font-size='16' font-weight='700' fill='#0d0f14' text-anchor='middle'>AlphaBot</text>" +
+    "</svg>");
+
+let TOUR_STEPS = [];
+let TOUR_INDEX = -1;
+let TOUR_ACTIVE = false;
+let _tourClickTarget = null;
+let _tourClickHandler = null;
+
+function tabDisplayName(tab) {
+  return ({
+    portfolio: "Portfolio", assets: "Assets", stocks: "Markets",
+    bots: "Bots", news: "News", history: "History", account: "Account",
+  })[tab] || tab;
+}
+
+function maybeStartOnboardingTour() {
+  if (!USER || USER.adsense_guest) return;
+  if (USER.tutorial_completed) return;
+  // Let the dashboard paint before the welcome modal appears.
+  setTimeout(showWelcomeTutorialModal, 700);
+}
+
+async function markTutorialComplete() {
+  if (USER) USER.tutorial_completed = true;
+  try { await api("/auth/tutorial-complete", { method: "POST", body: "{}" }); }
+  catch (_) { /* best-effort; local flag still prevents re-showing this session */ }
+}
+
+function tourImageEl(cls) {
+  const img = document.createElement("img");
+  img.className = cls;
+  img.alt = "AlphaBot";
+  img.src = TUTORIAL_IMAGE;
+  img.onerror = function () { this.onerror = null; this.src = TUTORIAL_IMAGE_FALLBACK; };
+  return img;
+}
+
+function showWelcomeTutorialModal() {
+  if (document.getElementById("tour-welcome-bg")) return;
+  const bg = document.createElement("div");
+  bg.id = "tour-welcome-bg";
+  const card = document.createElement("div");
+  card.className = "tour-welcome";
+  card.innerHTML =
+    '<div class="tour-welcome-body">' +
+      '<div class="tour-welcome-text">' +
+        "<h2>Hi I'm AlphaBot! Welcome to AlphaBotix Trading!</h2>" +
+        "<p>Would you like me to show you around?</p>" +
+        '<div class="tour-welcome-actions">' +
+          '<button type="button" class="btn btn-primary" id="tour-start-btn">Yes, show me around</button>' +
+          '<button type="button" class="btn btn-ghost" id="tour-skip-btn">Skip for now</button>' +
+        "</div>" +
+      "</div>" +
+      '<div class="tour-welcome-img" id="tour-welcome-img"></div>' +
+    "</div>";
+  bg.appendChild(card);
+  document.body.appendChild(bg);
+  document.getElementById("tour-welcome-img").appendChild(tourImageEl("tour-welcome-image"));
+
+  document.getElementById("tour-start-btn").onclick = () => { bg.remove(); startOnboardingTour(); };
+  document.getElementById("tour-skip-btn").onclick = () => { bg.remove(); markTutorialComplete(); };
+}
+
+/* --- Step definitions --- */
+function buildTourSteps() {
+  const steps = [];
+  // Portfolio ---------------------------------------------------------------
+  steps.push(
+    { tab: "portfolio", target: '.nav-tab[data-tab="portfolio"]', box: "small", advance: "click",
+      text: "Click here to view your Portfolio tab." },
+    { tab: "portfolio", box: "big", advance: "next", title: "Your Portfolio",
+      text: "This is your Portfolio — your command center. See your total valuation, profit and loss, and how every bot is performing at a glance." },
+    { tab: "portfolio", target: "#pf-total-value", box: "small", advance: "next",
+      text: "This is where you can view all the assets you currently have allocated to your bots." },
+    { tab: "portfolio", target: "#pf-total-pnl", box: "small", advance: "next",
+      text: "And this shows your total profit or loss across all of your active bots." },
+    { tab: "portfolio", target: "#pf-mode-badge", box: "small", advance: "next",
+      text: "Click here to switch between paper and live trading." },
+    { tab: "portfolio", target: "#pf-broker-badge", box: "small", advance: "next",
+      text: "And here you can switch between the Alpaca (stocks) and OKX (crypto) brokers." },
+    { tab: "portfolio", target: "#pf-details-toggle", box: "small", advance: "next",
+      text: "Click here to show or hide the detailed breakdown of your portfolio." },
+    { tab: "portfolio", target: "#pf-main-chart", box: "small", advance: "next", expand: "portfolio",
+      text: "This chart plots your portfolio's performance over time." },
+    { tab: "portfolio", target: "#pf-timeframe", box: "small", advance: "next", expand: "portfolio",
+      text: "Use this to change the chart's timeframe — from a single day up to five years." },
+    { tab: "portfolio", target: "#pf-winner", box: "small", advance: "next", expand: "portfolio",
+      text: "Your best-performing asset over the last 24 hours shows up here." },
+    { tab: "portfolio", target: "#active-bots-toggle", box: "small", advance: "next", expand: "portfolio",
+      text: "And this lists every bot that's currently active, along with its live status." },
+  );
+  // Assets ------------------------------------------------------------------
+  steps.push(
+    { tab: "assets", target: '.nav-tab[data-tab="assets"]', box: "small", advance: "click",
+      text: "Click here to view your Assets tab." },
+    { tab: "assets", box: "big", advance: "next", title: "Your Assets",
+      text: "The Assets tab shows the real funds available in your connected broker account — the single source of truth for what your bots can trade with." },
+    { tab: "assets", target: "#assets-header-cash", box: "small", advance: "next",
+      text: "This is your live broker balance available to allocate to bots." },
+    { tab: "assets", target: "#assets-mode-badge", box: "small", advance: "next",
+      text: "Switch between your paper and live funds here." },
+    { tab: "assets", target: "#assets-details-toggle", box: "small", advance: "next",
+      text: "This button shows or hides more detail about your broker account." },
+    { tab: "assets", target: "#broker-account-info", box: "small", advance: "next", expand: "assets",
+      text: "Your live broker account details load here — hit Refresh anytime to update them." },
+  );
+  // Markets -----------------------------------------------------------------
+  steps.push(
+    { tab: "stocks", target: '.nav-tab[data-tab="stocks"]', box: "small", advance: "click",
+      text: "Click here to view your Markets tab." },
+    { tab: "stocks", box: "big", advance: "next", title: "Markets",
+      text: "The Markets tab lists every asset your bots can track and trade, updated in real time." },
+    { tab: "stocks", target: "#markets-header-count", box: "small", advance: "next",
+      text: "This counts how many assets are currently being tracked." },
+    { tab: "stocks", target: "#markets-search", box: "small", advance: "next",
+      text: "Filter the list here to quickly find a specific symbol." },
+    { tab: "stocks", target: "#stocks-details-toggle", box: "small", advance: "next",
+      text: "This button shows or hides the full asset table." },
+    { tab: "stocks", target: "#stocks-table-body", box: "small", advance: "next", expand: "stocks",
+      text: "Click any asset here to open its live chart and technical dashboard." },
+  );
+  // Bots --------------------------------------------------------------------
+  steps.push(
+    { tab: "bots", target: '.nav-tab[data-tab="bots"]', box: "small", advance: "click",
+      text: "Click here to view your Bots tab." },
+    { tab: "bots", box: "big", advance: "next", title: "Trading Bots",
+      text: "The Bots tab is where you create and manage your automated trading bots — the engines that trade for you." },
+    { tab: "bots", target: "#new-bot-btn", box: "small", advance: "next",
+      text: "Click here to create a brand-new trading bot." },
+    { tab: "bots", target: "#bots-header-count", box: "small", advance: "next",
+      text: "This shows how many bots are currently active." },
+    { tab: "bots", target: "#bots-details-toggle", box: "small", advance: "next",
+      text: "This button shows or hides the panel where you manage all of your bots." },
+    { tab: "bots", target: "#bots-list-container", box: "small", advance: "next", expand: "bots",
+      text: "Each of your bots appears here, where you can start, pause, or edit it." },
+  );
+  // News --------------------------------------------------------------------
+  steps.push(
+    { tab: "news", target: '.nav-tab[data-tab="news"]', box: "small", advance: "click",
+      text: "Click here to view your News tab." },
+    { tab: "news", box: "big", advance: "next", title: "Market News",
+      text: "The News tab pulls in the latest market headlines with built-in sentiment analysis." },
+    { tab: "news", target: "#news-refresh-btn", box: "small", advance: "next",
+      text: "Click Refresh here to pull the latest headlines." },
+    { tab: "news", target: "#news-header-count", box: "small", advance: "next",
+      text: "This counts how many headlines are currently loaded." },
+    { tab: "news", target: "#news-details-toggle", box: "small", advance: "next",
+      text: "This button shows or hides the list of headlines." },
+    { tab: "news", target: "#news-filter-all", box: "small", advance: "next", expand: "news",
+      text: "Filter headlines by bullish, bearish, or neutral sentiment using these buttons." },
+  );
+  // History -----------------------------------------------------------------
+  steps.push(
+    { tab: "history", target: '.nav-tab[data-tab="history"]', box: "small", advance: "click",
+      text: "Click here to view your History tab." },
+    { tab: "history", box: "big", advance: "next", title: "Trade History",
+      text: "The History tab is a complete ledger of every trade your bots have executed." },
+    { tab: "history", target: "#history-header-count", box: "small", advance: "next",
+      text: "This counts how many trades have been logged so far." },
+    { tab: "history", target: "#history-details-toggle", box: "small", advance: "next",
+      text: "This button shows or hides the full trade ledger." },
+    { tab: "history", target: "#history-table-body", box: "small", advance: "next", expand: "history",
+      text: "Every executed trade appears here with its price, quantity, environment, and status." },
+  );
+  // Account -----------------------------------------------------------------
+  steps.push(
+    { tab: "account", target: '.nav-tab[data-tab="account"]', box: "small", advance: "click",
+      text: "Click here to view your Account tab." },
+    { tab: "account", box: "big", advance: "next", title: "Your Account",
+      text: "Finally, the Account tab is where you manage your profile, plan, and broker API keys." },
+    { tab: "account", target: "#account-header-email", box: "small", advance: "next",
+      text: "Your account details and current plan show up here." },
+    { tab: "account", target: "#account-mode-badge", box: "small", advance: "next",
+      text: "You can switch between paper and live trading from here too." },
+    { tab: "account", target: "#account-details-toggle", box: "small", advance: "next",
+      text: "This button shows or hides everything you can manage below." },
+    { tab: "account", target: "#mode-paper", box: "small", advance: "next", expand: "account",
+      text: "Choose between paper (simulated) and live (real-money) trading." },
+    { tab: "account", target: "#broker-alpaca", box: "small", advance: "next", expand: "account",
+      text: "Pick which broker you'd like to trade with." },
+    { tab: "account", target: "#onboarding-card", box: "small", advance: "next", expand: "account",
+      text: "And connect your broker by entering your API keys here to start trading." },
+    { tab: "account", box: "big", advance: "finish", title: "You're all set!",
+      text: "That's the whole tour — you're ready to go! You can always revisit any tab from the navigation bar. Happy trading!" },
+  );
+  return steps;
+}
+
+function startOnboardingTour() {
+  TOUR_STEPS = buildTourSteps();
+  TOUR_INDEX = 0;
+  TOUR_ACTIVE = true;
+  ensureTourNodes();
+  runTourStep();
+}
+
+function ensureTourNodes() {
+  if (!document.getElementById("tour-spotlight")) {
+    const s = document.createElement("div");
+    s.id = "tour-spotlight";
+    s.style.display = "none";
+    document.body.appendChild(s);
+  }
+  if (!document.getElementById("tour-bubble")) {
+    const b = document.createElement("div");
+    b.id = "tour-bubble";
+    b.style.display = "none";
+    document.body.appendChild(b);
+  }
+}
+
+function endOnboardingTour(complete) {
+  TOUR_ACTIVE = false;
+  detachTourClick();
+  const s = document.getElementById("tour-spotlight");
+  const b = document.getElementById("tour-bubble");
+  if (s) s.remove();
+  if (b) b.remove();
+  window.removeEventListener("resize", repositionTour);
+  window.removeEventListener("scroll", repositionTour, true);
+  if (complete) markTutorialComplete();
+}
+
+function detachTourClick() {
+  if (_tourClickTarget && _tourClickHandler) {
+    _tourClickTarget.removeEventListener("click", _tourClickHandler, true);
+  }
+  _tourClickTarget = null;
+  _tourClickHandler = null;
+}
+
+function tourEnsureExpanded(tab) {
+  const detailsId = tab === "portfolio" ? "pf-details" : `${tab}-details`;
+  const toggleId = tab === "portfolio" ? "pf-details-toggle" : `${tab}-details-toggle`;
+  const details = document.getElementById(detailsId);
+  if (details && !details.classList.contains("is-open")) {
+    const toggle = document.getElementById(toggleId);
+    if (toggle) toggle.click();
+  }
+}
+
+async function runTourStep() {
+  if (!TOUR_ACTIVE) return;
+  detachTourClick();
+  if (TOUR_INDEX >= TOUR_STEPS.length) { endOnboardingTour(true); return; }
+  const step = TOUR_STEPS[TOUR_INDEX];
+
+  // Make sure the correct tab is showing (click-steps do the switch themselves).
+  if (step.tab && step.advance !== "click") {
+    const active = document.querySelector(".nav-tab.active")?.getAttribute("data-tab");
+    if (active !== step.tab) {
+      await activateTab(step.tab, { push: false });
+    }
+  }
+  if (step.expand) tourEnsureExpanded(step.expand);
+
+  // Give the layout a moment to settle (tab switch / accordion open / render).
+  await new Promise(r => setTimeout(r, step.expand ? 420 : 140));
+  if (!TOUR_ACTIVE || TOUR_STEPS[TOUR_INDEX] !== step) return;
+
+  renderTourStep(step);
+}
+
+function renderTourStep(step) {
+  const bubble = document.getElementById("tour-bubble");
+  const spotlight = document.getElementById("tour-spotlight");
+  if (!bubble || !spotlight) return;
+
+  const isBig = step.box === "big";
+  bubble.className = isBig ? "tour-big" : "tour-small";
+
+  const total = TOUR_STEPS.length;
+  const num = TOUR_INDEX + 1;
+  const actionsHtml = step.advance === "click"
+    ? '<span class="tour-hint">👆 Click the highlighted item</span>'
+    : `<button type="button" class="btn btn-primary btn-sm" id="tour-next-btn">${step.advance === "finish" ? "Finish" : "Next"}</button>`;
+
+  bubble.innerHTML =
+    '<div class="tour-arrow" id="tour-arrow"></div>' +
+    '<div class="tour-bubble-inner">' +
+      '<div class="tour-bubble-content">' +
+        (step.title ? `<h3>${step.title}</h3>` : "") +
+        `<p>${step.text}</p>` +
+      "</div>" +
+    "</div>" +
+    '<div class="tour-bubble-footer">' +
+      `<span class="tour-progress">${num} / ${total}</span>` +
+      '<div class="tour-actions">' +
+        '<button type="button" class="tour-skip" id="tour-skip-link">Skip tour</button>' +
+        actionsHtml +
+      "</div>" +
+    "</div>";
+
+  bubble.querySelector(".tour-bubble-inner")
+    .insertAdjacentElement("afterbegin", tourImageEl("tour-bubble-img"));
+
+  bubble.style.display = "block";
+
+  const skipLink = document.getElementById("tour-skip-link");
+  if (skipLink) skipLink.onclick = () => endOnboardingTour(true);
+  const nextBtn = document.getElementById("tour-next-btn");
+  if (nextBtn) nextBtn.onclick = () => { TOUR_INDEX += 1; runTourStep(); };
+
+  positionTourFor(step);
+
+  if (step.advance === "click" && step.target) {
+    const targetEl = document.querySelector(step.target);
+    if (targetEl) {
+      _tourClickTarget = targetEl;
+      _tourClickHandler = () => { detachTourClick(); TOUR_INDEX += 1; setTimeout(runTourStep, 120); };
+      targetEl.addEventListener("click", _tourClickHandler, true);
+    }
+  }
+
+  window.removeEventListener("resize", repositionTour);
+  window.removeEventListener("scroll", repositionTour, true);
+  window.addEventListener("resize", repositionTour);
+  window.addEventListener("scroll", repositionTour, true);
+}
+
+function repositionTour() {
+  if (!TOUR_ACTIVE || TOUR_INDEX < 0 || TOUR_INDEX >= TOUR_STEPS.length) return;
+  positionTourFor(TOUR_STEPS[TOUR_INDEX]);
+}
+
+function positionTourFor(step) {
+  const bubble = document.getElementById("tour-bubble");
+  const spotlight = document.getElementById("tour-spotlight");
+  const arrow = document.getElementById("tour-arrow");
+  if (!bubble || !spotlight) return;
+
+  const targetEl = step.target ? document.querySelector(step.target) : null;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const margin = 12;
+
+  if (!targetEl) {
+    // Centered card (welcome-size description / finish) — no spotlight.
+    spotlight.style.display = "none";
+    if (arrow) arrow.style.display = "none";
+    const bw = bubble.offsetWidth, bh = bubble.offsetHeight;
+    bubble.style.left = Math.max(margin, (vw - bw) / 2) + "px";
+    bubble.style.top = Math.max(margin, (vh - bh) / 2) + "px";
+    return;
+  }
+
+  const r = targetEl.getBoundingClientRect();
+  // If the target scrolled out of view, bring it into the viewport first.
+  if (r.top < 60 || r.bottom > vh - 60) {
+    try { targetEl.scrollIntoView({ block: "center", behavior: "auto" }); } catch (_) {}
+  }
+  const rect = targetEl.getBoundingClientRect();
+
+  // Spotlight cutout around the target.
+  const pad = 6;
+  spotlight.style.display = "block";
+  spotlight.style.top = (rect.top - pad) + "px";
+  spotlight.style.left = (rect.left - pad) + "px";
+  spotlight.style.width = (rect.width + pad * 2) + "px";
+  spotlight.style.height = (rect.height + pad * 2) + "px";
+
+  const bw = bubble.offsetWidth, bh = bubble.offsetHeight;
+  const targetCenterX = rect.left + rect.width / 2;
+
+  // Prefer placing the bubble below the target; flip above if it won't fit.
+  let placeBelow = (rect.bottom + 14 + bh) <= (vh - margin);
+  if (!placeBelow && (rect.top - 14 - bh) < margin) {
+    // Neither fits cleanly; pick the side with more room.
+    placeBelow = (vh - rect.bottom) >= rect.top;
+  }
+
+  let top = placeBelow ? rect.bottom + 14 : rect.top - 14 - bh;
+  top = Math.max(margin, Math.min(top, vh - bh - margin));
+
+  let left = targetCenterX - bw / 2;
+  left = Math.max(margin, Math.min(left, vw - bw - margin));
+
+  bubble.style.top = top + "px";
+  bubble.style.left = left + "px";
+
+  if (arrow) {
+    arrow.style.display = "block";
+    arrow.className = "tour-arrow " + (placeBelow ? "arrow-top" : "arrow-bottom");
+    let arrowLeft = targetCenterX - left - 7;
+    arrowLeft = Math.max(14, Math.min(arrowLeft, bw - 28));
+    arrow.style.left = arrowLeft + "px";
+  }
 }
 
 (async function boot() {

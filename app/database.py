@@ -70,6 +70,8 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     trading_mode = Column(String, default="paper")
     active_broker = Column(String, default="alpaca")
+    # First-run onboarding walkthrough: True once the user finishes or skips it.
+    tutorial_completed = Column(Boolean, default=False, nullable=False)
     total_deposited = Column(Float, default=0.0)
     total_withdrawn = Column(Float, default=0.0)
     # ── Legacy single-set key columns (kept for backward compatibility) ──
@@ -286,6 +288,7 @@ _MIGRATIONS = {
         "name": "VARCHAR",
         "trading_mode": "VARCHAR DEFAULT 'paper'",
         "active_broker": "VARCHAR DEFAULT 'alpaca'",
+        "tutorial_completed": "BOOLEAN DEFAULT FALSE",
         "total_deposited": "FLOAT DEFAULT 0",
         "total_withdrawn": "FLOAT DEFAULT 0",
         "email_verified": "BOOLEAN DEFAULT FALSE",

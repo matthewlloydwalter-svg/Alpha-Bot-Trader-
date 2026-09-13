@@ -972,6 +972,7 @@ def register_endpoint(body: AuthModel, response: Response, request: Request, db:
         "email": new_user.email,
         "is_admin": new_user.is_admin,
         "email_verified": new_user.email_verified,
+        "tutorial_completed": bool(new_user.tutorial_completed),
         **_user_plan_payload(new_user),
         "bot_count": 0,
         "bot_limit": _user_bot_limit(new_user),
@@ -1046,6 +1047,7 @@ def current_user_endpoint(u: User = Depends(get_current_user_from_cookie), db: S
         "email_verified": u.email_verified,
         "trading_mode": u.trading_mode or "paper",
         "active_broker": u.active_broker or "alpaca",
+        "tutorial_completed": bool(u.tutorial_completed),
         "total_deposited": u.total_deposited or 0.0,
         "total_withdrawn": u.total_withdrawn or 0.0,
         "bot_count": bot_count,
@@ -1057,6 +1059,15 @@ def current_user_endpoint(u: User = Depends(get_current_user_from_cookie), db: S
         payload["adsense_guest"] = True
         payload["balance"] = float(ADSENSE_GUEST_BALANCE)
     return payload
+
+@app.post("/auth/tutorial-complete")
+def complete_tutorial_endpoint(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
+    """Mark the first-run onboarding walkthrough as finished/skipped for this user."""
+    if not is_adsense_guest_user(u) and not u.tutorial_completed:
+        u.tutorial_completed = True
+        db.add(u)
+        db.commit()
+    return {"tutorial_completed": True}
 
 @app.post("/auth/logout")
 def logout_endpoint(response: Response, request: Request, db: Session = Depends(get_db)):

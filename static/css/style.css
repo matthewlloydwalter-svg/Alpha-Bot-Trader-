@@ -768,3 +768,48 @@ label.field,div.field{display:flex;flex-direction:column;gap:5px;font-size:11px;
   -webkit-backdrop-filter:blur(10px) saturate(130%);
   border:1px solid rgba(57,217,255,0.22);
 }
+
+/* ===== First-run onboarding walkthrough ===== */
+/* Dim backdrop behind the welcome modal (blocks interaction). */
+#tour-welcome-bg{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:6000;padding:16px;backdrop-filter:blur(3px)}
+.tour-welcome{background:linear-gradient(160deg,rgba(20,26,40,.98),rgba(11,15,24,.98));border:1px solid rgba(77,159,255,.35);border-radius:16px;width:100%;max-width:640px;box-shadow:0 24px 60px rgba(0,0,0,.6);overflow:hidden}
+.tour-welcome-body{display:flex;align-items:stretch;gap:0}
+.tour-welcome-text{flex:1 1 55%;padding:28px 26px;display:flex;flex-direction:column;justify-content:center}
+.tour-welcome-text h2{margin:0 0 12px;font-size:22px;font-weight:800;letter-spacing:-.3px;color:var(--t1);line-height:1.25}
+.tour-welcome-text p{margin:0 0 20px;font-size:14px;line-height:1.6;color:var(--t2)}
+.tour-welcome-actions{display:flex;gap:10px;flex-wrap:wrap}
+.tour-welcome-img{flex:0 0 42%;background:rgba(77,159,255,.06);display:flex;align-items:center;justify-content:center;padding:18px}
+.tour-welcome-img img{width:100%;height:auto;max-height:260px;object-fit:contain;border-radius:12px}
+@media (max-width:560px){.tour-welcome-body{flex-direction:column-reverse}.tour-welcome-img{flex:none}.tour-welcome-img img{max-height:150px}}
+
+/* Spotlight cutout: the huge box-shadow dims everything except the target. */
+#tour-spotlight{position:fixed;z-index:6050;border-radius:10px;pointer-events:none;transition:all .28s cubic-bezier(.4,0,.2,1);
+  box-shadow:0 0 0 9999px rgba(0,0,0,.66),0 0 0 3px var(--blue),0 0 22px 5px rgba(77,159,255,.55)}
+
+/* Tour bubble (both big description cards and small pointer bubbles). */
+#tour-bubble{position:fixed;z-index:6100;background:linear-gradient(160deg,rgba(20,26,40,.99),rgba(11,15,24,.99));
+  border:1px solid rgba(77,159,255,.4);border-radius:14px;box-shadow:0 18px 44px rgba(0,0,0,.55);
+  padding:16px 18px;transition:top .28s cubic-bezier(.4,0,.2,1),left .28s cubic-bezier(.4,0,.2,1)}
+#tour-bubble.tour-big{width:min(520px,92vw)}
+#tour-bubble.tour-small{width:min(320px,88vw)}
+.tour-bubble-inner{display:flex;gap:14px;align-items:flex-start}
+#tour-bubble.tour-small .tour-bubble-inner{gap:10px}
+.tour-bubble-img{flex:0 0 auto;border-radius:10px;object-fit:contain;background:rgba(77,159,255,.06)}
+#tour-bubble.tour-big .tour-bubble-img{width:120px;height:120px;padding:6px}
+#tour-bubble.tour-small .tour-bubble-img{width:52px;height:52px;padding:4px}
+.tour-bubble-content{flex:1 1 auto;min-width:0}
+.tour-bubble-content h3{margin:0 0 8px;font-size:16px;font-weight:800;color:var(--t1);letter-spacing:-.2px}
+.tour-bubble-content p{margin:0;font-size:13px;line-height:1.55;color:var(--t2)}
+#tour-bubble.tour-small .tour-bubble-content p{font-size:12.5px}
+.tour-bubble-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px}
+.tour-progress{font-size:11px;color:var(--t3);white-space:nowrap}
+.tour-actions{display:flex;gap:8px;align-items:center;margin-left:auto}
+.tour-skip{background:none;border:none;color:var(--t3);font-size:12px;cursor:pointer;padding:4px 6px;font-family:inherit}
+.tour-skip:hover{color:var(--t1);text-decoration:underline}
+.tour-hint{font-size:12px;color:var(--blue);font-weight:700}
+
+/* Arrow: a rotated square notch on the bubble edge pointing at the target. */
+.tour-arrow{position:absolute;width:14px;height:14px;background:linear-gradient(160deg,rgba(20,26,40,.99),rgba(11,15,24,.99));
+  border-left:1px solid rgba(77,159,255,.4);border-top:1px solid rgba(77,159,255,.4);transform:rotate(45deg)}
+.tour-arrow.arrow-top{top:-8px}
+.tour-arrow.arrow-bottom{bottom:-8px;transform:rotate(225deg)}
