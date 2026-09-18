@@ -98,6 +98,9 @@ class User(Base):
     subscription_plan = Column(String, default="starter", nullable=False)
     # Support/CRM label kept in sync: Starter | Growth | Pro | Enterprise
     plan_level = Column(String, default="Starter", nullable=False)
+    # Optional administrator-set exact bot allowance; NULL uses the plan limit.
+    bot_limit_override = Column(Integer, nullable=True)
+    is_banned = Column(Boolean, default=False, nullable=False)
     subscription_interval = Column(String, nullable=True)  # week | month | year
     subscription_status = Column(String, nullable=True)  # active | canceled | …
     stripe_customer_id = Column(String, nullable=True)
@@ -312,6 +315,8 @@ _MIGRATIONS = {
         "okx_pass_live": "VARCHAR",
         "subscription_plan": "VARCHAR DEFAULT 'starter'",
         "plan_level": "VARCHAR DEFAULT 'Starter'",
+        "bot_limit_override": "INTEGER",
+        "is_banned": "BOOLEAN DEFAULT FALSE",
         "subscription_interval": "VARCHAR",
         "subscription_status": "VARCHAR",
         "stripe_customer_id": "VARCHAR",

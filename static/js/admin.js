@@ -28,6 +28,7 @@ async function loadAdminData() {
         }
         if (!usersRes.ok) throw new Error('Failed to retrieve active database rows.');
         const users = await usersRes.json();
+        ADMIN_USERS = users;
 
         const esc = (str) => String(str == null ? "" : str)
             .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
@@ -35,26 +36,28 @@ async function loadAdminData() {
         const listContainer = document.getElementById('users-list');
         if (listContainer) {
             listContainer.innerHTML = `
-                <table style="width: 100%; border-collapse: collapse;">
+            <div class="table-wrap"><table class="data-table">
                     <thead>
-                        <tr style="border-bottom: 1px solid var(--border); text-align: left; color: var(--t2);">
-                            <th style="padding: 8px;">User Identifier</th>
-                            <th style="padding: 8px;">Clearance Level</th>
-                            <th style="padding: 8px;">Verified State</th>
+                <tr>
+                  <th>Email address</th>
+                  <th>Verification</th>
+                  <th>Signed up</th>
+                  <th>Current plan</th>
+                  <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         ${users.map(u => `
-                            <tr style="border-bottom: 1px solid var(--border);">
-                                <td style="padding: 8px; font-weight:600;">${esc(u.email)}</td>
-                                <td style="padding: 8px;">${u.is_admin ? 'Platform Admin' : 'Standard Account'}</td>
-                                <td style="padding: 8px; color: ${u.email_verified ? 'var(--green)' : 'var(--amber)'}">
-                                    ${u.email_verified ? 'Verified' : 'Pending Verification'}
-                                </td>
+                  <tr>
+                    <td style="font-weight:600;white-space:nowrap">${esc(u.email)}${u.is_banned ? ' <span class="badge badge-red">Banned</span>' : ''}</td>
+                    <td><span class="badge ${u.email_verified ? 'badge-green' : 'badge-amber'}">${u.email_verified ? 'Verified' : 'Pending'}</span></td>
+                    <td style="white-space:nowrap;color:var(--t2)">${formatAdminDate(u.created_at)}</td>
+                    <td>${esc(u.plan)}</td>
+                    <td><button class="btn btn-sm" type="button" onclick="openAdminUserModal(${u.id})">Manage</button></td>
                             </tr>
                         `).join('')}
                     </tbody>
-                </table>
+            </table></div>
             `;
         }
     } catch (error) {
@@ -65,6 +68,94 @@ async function loadAdminData() {
         const ul = document.getElementById('users-list');
         if (ul) ul.innerText = msg;
     }
+}
+
+let ADMIN_USERS = [];
+let ADMIN_SELECTED_USER = null;
+
+function formatAdminDate(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function openAdminUserModal(userId) {
+  const user = ADMIN_USERS.find(item => item.id === userId);
+  if (!user) return;
+  ADMIN_SELECTED_USER = user;
+  document.getElementById('admin-user-modal-title').textContent = user.email;
+  document.getElementById('admin-bot-limit').value = user.bot_limit_override == null ? (user.bot_limit == null ? '' : user.bot_limit) : user.bot_limit_override;
+  document.getElementById('admin-user-modal').classList.remove('hidden');
+}
+
+function closeAdminUserModal() {
+  document.getElementById('admin-user-modal').classList.add('hidden');
+  ADMIN_SELECTED_USER = null;
+}
+
+async function saveAdminBotLimit() {
+  if (!ADMIN_SELECTED_USER) return;
+  const raw = document.getElementById('admin-bot-limit').value;
+  const limit = Number(raw);
+  if (!Number.isInteger(limit) || limit < 0) { showAdminToast('Enter a whole number of zero or greater.', true); return; }
+  try {
+    await adminApi(`/admin/users/${ADMIN_SELECTED_USER.id}/bot-limit`, { method: 'PATCH', body: JSON.stringify({ bot_limit: limit }) });
+    showAdminToast('Bot limit updated.');
+    closeAdminUserModal();
+    loadAdminData();
+  } catch (e) { showAdminToast(e.message, true); }
+}
+
+async function clearAdminBotLimit() {
+  if (!ADMIN_SELECTED_USER) return;
+  try {
+    await adminApi(`/admin/users/${ADMIN_SELECTED_USER.id}/bot-limit`, { method: 'PATCH', body: JSON.stringify({ bot_limit: null }) });
+    showAdminToast('Plan default restored.');
+    closeAdminUserModal();
+    loadAdminData();
+  } catch (e) { showAdminToast(e.message, true); }
+}
+
+async function banAdminUser() {
+  if (!ADMIN_SELECTED_USER || !confirm(`Ban ${ADMIN_SELECTED_USER.email}?`)) return;
+  try {
+    await adminApi(`/admin/users/${ADMIN_SELECTED_USER.id}/ban`, { method: 'POST' });
+    showAdminToast('Account banned.');
+    closeAdminUserModal();
+    loadAdminData();
+  } catch (e) { showAdminToast(e.message, true); }
+}
+
+async function deleteAdminUser() {
+  if (!ADMIN_SELECTED_USER || !confirm(`Permanently delete ${ADMIN_SELECTED_USER.email} and all of their data?`)) return;
+  try {
+    await adminApi(`/admin/users/${ADMIN_SELECTED_USER.id}`, { method: 'DELETE' });
+    showAdminToast('Account deleted.');
+    closeAdminUserModal();
+    loadAdminData();
+  } catch (e) { showAdminToast(e.message, true); }
+}
+
+async function adminApi(path, options = {}) {
+  const response = await fetch(path, {
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    ...options,
+  });
+  let data = null;
+  try { data = await response.json(); } catch (_) {}
+  if (response.status === 401) { location.href = '/login?next=/admin'; throw new Error('Session expired.'); }
+  if (!response.ok) throw new Error(data && data.detail ? data.detail : `Request failed (${response.status})`);
+  return data;
+}
+
+function showAdminToast(message, isError = false) {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast ${isError ? 'error' : 'success'}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 3500);
 }
 
 /* ──────────────────────────────────────────────────────────────────

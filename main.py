@@ -275,6 +275,10 @@ class OKXKeysModel(BaseModel):
     passphrase: str
     mode: Optional[str] = "paper"   # "paper" or "live"
 
+
+class AdminBotLimitModel(BaseModel):
+    bot_limit: Optional[int] = None
+
 def _keep_or_seal(new_val: str, old_val: str | None) -> str | None:
     """Keep existing secret if the client sent a blank/masked value; else seal."""
     v = (new_val or "").strip()
@@ -316,6 +320,8 @@ def get_current_user_from_cookie(request: Request, db: Session = Depends(get_db)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=401, detail="Session expired. Please sign in again.")
+    if user.is_banned:
+        raise HTTPException(status_code=403, detail="This account has been banned.")
     try:
         token_sv = int(payload.get("sv", 0))
     except (TypeError, ValueError):
@@ -347,6 +353,9 @@ def _user_bot_limit(user: User) -> Optional[int]:
     """
     if _is_platform_admin(user):
         return None
+    override = getattr(user, "bot_limit_override", None)
+    if override is not None:
+        return max(0, int(override))
     plan = normalize_plan(getattr(user, "subscription_plan", None))
     if plan != "starter":
         return bot_limit_for_plan(plan, is_admin=False)
@@ -1006,6 +1015,8 @@ def login_endpoint(body: AuthModel, response: Response, request: Request, db: Se
     user = db.query(User).filter(User.email == normalized_email).first()
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Invalid credential combination supplied.")
+    if user.is_banned:
+        raise HTTPException(status_code=403, detail="This account has been banned.")
 
     # Evict any prior cookies (stolen session or other devices) on fresh login.
     _bump_session_version(user)
@@ -1465,8 +1476,68 @@ def admin_stats(request: Request, db: Session = Depends(get_db)):
 @app.get("/admin/users")
 def admin_users_list(request: Request, db: Session = Depends(get_db)):
     _require_admin(request, db)
-    users = db.query(User).all()
-    return [{"email": x.email, "is_admin": _is_platform_admin(x), "email_verified": x.email_verified} for x in users]
+    users = db.query(User).order_by(User.created_at.desc(), User.id.desc()).all()
+    return [
+        {
+            "id": x.id,
+            "email": x.email,
+            "is_admin": _is_platform_admin(x),
+            "email_verified": bool(x.email_verified),
+            "created_at": _iso_utc(x.created_at),
+            "plan": plan_display_name(getattr(x, "subscription_plan", None), is_admin=_is_platform_admin(x)),
+            "bot_limit": _user_bot_limit(x),
+            "bot_limit_override": x.bot_limit_override,
+            "is_banned": bool(x.is_banned),
+        }
+        for x in users
+    ]
+
+
+@app.patch("/admin/users/{user_id}/bot-limit")
+def admin_set_bot_limit(user_id: int, body: AdminBotLimitModel, request: Request, db: Session = Depends(get_db)):
+    _require_admin(request, db)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if _is_platform_admin(user):
+        raise HTTPException(status_code=400, detail="Admin accounts already have unlimited access.")
+    if body.bot_limit is not None and body.bot_limit < 0:
+        raise HTTPException(status_code=400, detail="Bot limit must be zero or greater.")
+    user.bot_limit_override = body.bot_limit
+    db.add(user)
+    db.commit()
+    return {"user_id": user.id, "bot_limit": _user_bot_limit(user), "bot_limit_override": user.bot_limit_override}
+
+
+@app.post("/admin/users/{user_id}/ban")
+def admin_ban_user(user_id: int, request: Request, db: Session = Depends(get_db)):
+    admin = _require_admin(request, db)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if user.id == admin.id or _is_platform_admin(user):
+        raise HTTPException(status_code=400, detail="Admin accounts cannot be banned.")
+    user.is_banned = True
+    _bump_session_version(user)
+    db.add(user)
+    db.commit()
+    return {"user_id": user.id, "is_banned": True}
+
+
+@app.delete("/admin/users/{user_id}")
+def admin_delete_user(user_id: int, request: Request, db: Session = Depends(get_db)):
+    admin = _require_admin(request, db)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if user.id == admin.id or _is_platform_admin(user):
+        raise HTTPException(status_code=400, detail="Admin accounts cannot be deleted.")
+    db.query(ActivityLog).filter(ActivityLog.user_id == user.id).delete(synchronize_session=False)
+    db.query(Trade).filter(Trade.owner_id == user.id).delete(synchronize_session=False)
+    db.query(Bot).filter(Bot.owner_id == user.id).delete(synchronize_session=False)
+    db.delete(user)
+    db.commit()
+    return {"deleted": True, "user_id": user_id}
 
 
 @app.get("/system/logs")

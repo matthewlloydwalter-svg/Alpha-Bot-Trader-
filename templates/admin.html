@@ -51,6 +51,33 @@
       </div>
     </div>
 
+    <div id="admin-user-modal" class="modal-bg hidden" role="dialog" aria-modal="true" aria-labelledby="admin-user-modal-title">
+      <div class="modal">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px">
+          <div>
+            <div class="slbl" style="margin-bottom:4px">User Administration</div>
+            <h2 id="admin-user-modal-title" style="font-size:18px"></h2>
+          </div>
+          <button class="btn btn-sm btn-ghost" type="button" onclick="closeAdminUserModal()" aria-label="Close">✕</button>
+        </div>
+        <div class="field">
+          <label for="admin-bot-limit">Active bot limit</label>
+          <input id="admin-bot-limit" type="number" min="0" step="1" inputmode="numeric">
+          <span style="font-size:11px;color:var(--t3)">Set the exact number of bots this account may have. The plan default is shown when no override is set.</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+          <button id="admin-save-limit" class="btn btn-primary btn-sm" type="button" onclick="saveAdminBotLimit()">Save bot limit</button>
+          <button id="admin-clear-limit" class="btn btn-sm" type="button" onclick="clearAdminBotLimit()">Use plan default</button>
+        </div>
+        <hr class="divider">
+        <div class="slbl">Danger zone</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button id="admin-ban-user" class="btn btn-warning btn-sm" type="button" onclick="banAdminUser()">Ban account</button>
+          <button id="admin-delete-user" class="btn btn-danger btn-sm" type="button" onclick="deleteAdminUser()">Delete account</button>
+        </div>
+      </div>
+    </div>
+
     <div class="card" id="ai-assistant-card">
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:6px">
         <div class="slbl" style="margin-bottom:0">🧠 AI Code Assistant</div>

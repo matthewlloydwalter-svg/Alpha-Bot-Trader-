@@ -140,6 +140,8 @@ def _resolve_session_user(request: Request, db: Session, *, missing_detail: str)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=401, detail=missing_detail)
+    if user.is_banned:
+        raise HTTPException(status_code=403, detail="This account has been banned.")
     try:
         token_sv = int(payload.get("sv", 0))
     except (TypeError, ValueError):
