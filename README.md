@@ -1,206 +1,116 @@
-# AlphaBotix Backend — Full Stack
+# AlphaBotix Trading
 
-## Always-on, event-driven architecture (new)
+AlphaBotix Trading is a FastAPI application that serves both the trading API and the browser dashboard. Users can connect Alpaca for equities or OKX for crypto, create automated trading bots, inspect market data and news, and review portfolio and trade history from one account.
 
-The trading engine is fully decoupled from the frontend. Two background worker
-loops (APScheduler, thread-backed) run independently of any HTTP request and are
-started/stopped via the FastAPI lifespan:
+## Architecture
 
-- **Market-data worker** (`app/scheduler.py: poll_market_data`) fetches live data
-  24/7 and continuously upserts it into Postgres (`market_quotes`), then streams
-  each update over SSE. This is the database-of-record for prices, so values
-  never freeze waiting on a page refresh.
-- **Bot-evaluation worker** (`evaluate_bots`) re-evaluates every running bot
-  against the stored market state and executes trades automatically.
+- `main.py` is the application entry point and owns HTTP routes, template rendering, authentication flows, broker endpoints, bot endpoints, billing, admin routes, and the SSE market update stream.
+- `app/` contains the supporting modules: SQLAlchemy database models, authentication and rate limiting, broker adapters, market data and storage, bot evaluation, scheduler, email, plans and Stripe billing, AI admin tooling, and realtime events.
+- `templates/` contains the landing page, authentication/dashboard shell, legal pages, pricing and checkout pages, admin page, and the shared footer partial.
+- `static/` contains the dashboard and admin JavaScript, pricing JavaScript, CSS, and image assets.
+- `alphabot.db` is created automatically for local SQLite development. Production deployments can use PostgreSQL.
 
-**Live streaming:** the browser subscribes once to `GET /stream/updates`
-(Server-Sent Events). Market quotes are broadcast; trade/portfolio events are
-scoped to the authenticated user. No more manual refresh.
+The background engine is started by the FastAPI lifespan. APScheduler polls market data and evaluates running bots independently of browser requests. Dashboard clients subscribe to `GET /stream/updates` for live market, trade, and portfolio events.
 
-**Integrity:** every `Bot` has an immutable `uuid`; every `Trade` records the
-exact `qty`, `notional`, `price`, `created_at`, the linking `bot_id` AND the
-immutable `bot_uuid`. Cross-bot capital rotation is **off by default**
-(`BOT_CAPITAL_ROTATION=1` to enable) so a bot only ever manages its own position.
+## Features
 
-**Admin AI assistant:** `templates/admin.html` exposes a secure, admin-only chat
-box. `POST /admin/ai/audit` lets an LLM (Anthropic/OpenAI) scan & read the repo
-and return a unified-diff preview of proposed edits; nothing is written until an
-admin explicitly hits Approve (`/admin/ai/approve`) — Deny discards.
+- Signup, login, session cookies, email verification, password reset, and first-run tutorial walkthrough.
+- Paper and live trading modes with separate Alpaca and OKX credentials.
+- Alpaca equity trading and OKX crypto trading, including OKX public market data without API keys.
+- Bot creation, risk controls, scheduled evaluation, simulated fills for paper mode, and broker order placement for live mode.
+- Portfolio valuation, broker balances, markets, technical dashboards, news sentiment, trade history, and account management.
+- Starter, Growth, Pro, and Enterprise plans with bot limits, Stripe Checkout, billing portal, and webhook handling.
+- Admin dashboard with user controls, system metrics, logs, email tools, and an approval-based AI code assistant.
 
-### Relevant environment variables
+## Routes
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `ENGINE_ENABLED` | `1` | Master switch for the background engine. |
-| `MARKET_POLL_INTERVAL` | `30` | Seconds between market-data polls. |
-| `BOT_SCAN_INTERVAL` | `60` | Seconds between bot evaluation cycles. |
-| `MARKET_WATCHLIST_LIMIT` | `40` | Symbols/broker polled even without a bot. `0` = entire Markets universe. |
-| `ALPACA_DATA_KEY` / `ALPACA_DATA_SECRET` | — | Server keys to poll the Alpaca watchlist. |
-| `BOT_CAPITAL_ROTATION` | `0` | Allow a bot to liquidate another bot's position. |
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | — | LLM provider for the Admin AI assistant. |
+| Route | Purpose |
+| --- | --- |
+| `/` | Public landing page |
+| `/login`, `/signup` | Authentication entry points |
+| `/dashboard/portfolio` | Portfolio dashboard |
+| `/dashboard/markets` | Market universe and asset dashboards |
+| `/dashboard/bots` | Bot management |
+| `/dashboard/news` | Market news and sentiment |
+| `/dashboard/history` | Trade ledger |
+| `/dashboard/assets` | Broker funds and account details |
+| `/dashboard/account` | Profile, plan, credentials, and trading mode |
+| `/upgrade-plans` | Subscription plans and upgrades |
+| `/terms`, `/privacy` | Legal pages |
+| `/admin` | Admin controls |
+| `/health` | Liveness check |
+| `/docs` | FastAPI API documentation in development |
 
+The legacy `/app` and `/dashboard` paths redirect to the portfolio dashboard.
 
+## Local setup
 
-## Does this match the standard FastAPI-on-Railway structure?
-
-Yes — your pro-tip layout is exactly right, with one addition (a `.env`
-file, which Railway replaces with its own "Variables" tab):
-
-```
-alphabot-backend/
-├── main.py              ← routes: auth, brokers, bots, admin
-├── database.py          ← SQLite models (User, Bot, Trade)
-├── auth.py               ← password hashing, sessions
-├── email_service.py      ← Resend transactional email
-├── brokers.py             ← Alpaca + OKX unified interface
-├── bot_engine.py          ← the bot "brain" (Claude decision + order placement)
-├── templates/
-│   ├── index.html         ← your main dashboard (replace with V9 frontend)
-│   └── admin.html         ← your admin page (replace with V9 admin tab)
-├── static/
-│   ├── css/style.css
-│   └── js/app.js, admin.js
-├── requirements.txt
-├── Procfile
-└── .env.example          ← copy to .env locally; on Railway, paste into "Variables"
-```
-
-I split the single `main.py` you asked for into five small files
-(`main.py`, `database.py`, `auth.py`, `brokers.py`, `bot_engine.py`)
-rather than one giant file. Functionally this is one backend — Railway
-runs `main.py` exactly the same way — but a single file mixing user
-auth, two brokers' APIs, and an AI decision engine would be hundreds
-of lines that are hard to debug later. Each file does one job.
-
-## What's real vs. what needs your input
-
-**Real and working as written:**
-- User signup/login with hashed passwords and session cookies
-- Email verification gate (codes sent via Resend — set `RESEND_API_KEY`)
-- SQLite database that persists users, bots, and trade history
-- Broker switching (Alpaca ↔ OKX) with per-user stored credentials
-- `/bots/{id}/run-cycle` — asks Claude for a decision, places a real
-  order via Alpaca or OKX if the decision clears your bot's limits
-- Admin routes — user list with deposit/withdrawal/profit numbers,
-  platform-wide email sending, gated to emails in `ADMIN_EMAILS`
-
-**Needs your input before going live:**
-- `templates/index.html` and `admin.html` are placeholders. Your real
-  V9 dashboard UI needs to be translated into calls against these
-  routes — see "Connecting your frontend" below.
-- Bot key encryption: keys are currently stored as plain text columns
-  in SQLite for simplicity. Before opening this to *other* people
-  (not just you), encrypt those columns — I noted exactly where in
-  `database.py` and `main.py`.
-- The profit calculation in `/admin/users` is a rough estimate from
-  trade history, not a true mark-to-market P&L (that requires pulling
-  live position values from the broker per user, which is a further
-  build once you have real trade volume to test against).
-
-## 1. Local setup
+Requirements: Python 3.12 and the packages in `requirements.txt`.
 
 ```bash
-cd alphabot-backend
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+git clone <repository-url>
+cd Alpha-Bot-Trader-
+python3.12 -m venv venv
+. venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
 ```
 
-Fill in every value in `.env` — see the comments in that file. At
-minimum you need `JWT_SECRET`, `ADMIN_EMAILS`, and `ANTHROPIC_API_KEY`
-to start the server at all; `RESEND_API_KEY` and broker keys can be added later.
+Create a local `.env` file. The minimum useful development configuration is:
+
+```dotenv
+DATABASE_URL=sqlite:///./alphabot.db
+JWT_SECRET=dev-local-secret-key-change-me
+ADMIN_EMAILS=admin@alphabot.dev
+PLATFORM_NAME=AlphaBotix Trading
+ENGINE_ENABLED=1
+RESEND_API_KEY=
+```
+
+Broker credentials are optional for signup, login, bot CRUD, and public OKX market data. Add Alpaca server data keys for equity watchlist polling. Add `RESEND_API_KEY` to send verification and account emails. Stripe variables are required only for subscription checkout and billing operations.
+
+Start the development server:
 
 ```bash
+. venv/bin/activate
 uvicorn main:app --reload --port 8000
 ```
 
-Visit `http://localhost:8000` — you should see the placeholder page.
-Visit `http://localhost:8000/docs` for the interactive API explorer.
+Open `http://127.0.0.1:8000`. The dashboard and API are served by the same process.
 
-## 2. Connecting your real frontend
+## Configuration
 
-Your V9 frontend currently calls `fetch('https://api.anthropic.com/...')`
-directly from the browser (fine for a prototype, not for production
-since it can't hold secrets). Now it should call **your own backend**
-instead, which holds the real keys server-side. The pattern is:
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | SQLite or PostgreSQL connection URL; required |
+| `JWT_SECRET` | Session signing secret; use a strong value in production |
+| `ADMIN_EMAILS` | Comma-separated emails granted admin access |
+| `PLATFORM_NAME` | Display name used by templates |
+| `ENGINE_ENABLED` | Set to `0` to disable background market and bot workers |
+| `ALPACA_DATA_KEY`, `ALPACA_DATA_SECRET` | Optional Alpaca market-data credentials |
+| `RESEND_API_KEY` | Optional transactional email provider key |
+| `STRIPE_API_KEY` or `STRIPE_SECRET_KEY` | Stripe server key |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook verification secret |
+| `STRIPE_ENVIRONMENT` | `live` or `test` Stripe price mapping |
+| `PUBLIC_BASE_URL` | Public URL used for checkout redirects |
+| `FRONTEND_ORIGIN` | Optional CORS origin for separate clients |
 
-```javascript
-// Login
-await fetch('/auth/login', {
-  method: 'POST',
-  headers: {'Content-Type': 'application/json'},
-  credentials: 'include',   // sends/receives the session cookie
-  body: JSON.stringify({email, password})
-});
+The scheduler uses a 30-second market-data interval and a 60-second bot-evaluation interval by default. Production should use PostgreSQL, a strong `JWT_SECRET`, HTTPS, and persistent storage for any SQLite deployment.
 
-// Create a bot
-await fetch('/bots', {
-  method: 'POST',
-  headers: {'Content-Type': 'application/json'},
-  credentials: 'include',
-  body: JSON.stringify({name: 'My Bot', ticker: 'AAPL', funds_allocated: 500, is_auto: true})
-});
+## Trading safety
 
-// Run one decision cycle for a bot (call this on a timer from the frontend)
-await fetch(`/bots/${botId}/run-cycle`, {
-  method: 'POST',
-  headers: {'Content-Type': 'application/json'},
-  credentials: 'include',
-  body: JSON.stringify({current_price: 183.40, recent_prices: [180, 181, 183.4]})
-});
+Paper mode is the default. Alpaca paper keys and OKX demo keys must be stored in the corresponding paper fields. Live trading requires a verified email and saved live broker credentials; the API rejects a live-mode switch when those requirements are not met. Live broker keys can place real orders, so validate a strategy in paper mode first.
+
+## Validation
+
+This repository currently has no automated test suite or lint configuration. Run the available syntax check before deployment:
+
+```bash
+. venv/bin/activate
+python -m compileall -q main.py app/
 ```
 
-Move your existing HTML/CSS/JS from the V9 artifact into
-`templates/index.html` (the HTML) and `static/js/app.js` (the
-JavaScript), swapping every place it faked data locally for a fetch
-call to one of these routes instead.
+For API exploration in development, use `/docs`. For production, documentation is disabled unless `DOCS_ENABLED=1` is set.
 
-## 3. Deploying to Railway
+## Deployment
 
-1. Push this folder to a GitHub repo.
-2. In Railway: New Project → Deploy from GitHub repo → select it.
-3. Railway auto-detects Python and reads your `Procfile`.
-4. Go to your service's **Variables** tab and add every value from
-   `.env.example` (your real values, not the placeholders).
-5. **Attach a Volume** (Railway → your service → Settings → Volumes)
-   mounted at `/app` or wherever your working directory is, so
-   `alphabot.db` (the SQLite file) survives redeploys. Without this,
-   every deploy wipes your user database.
-6. Deploy. Railway gives you a permanent `https://yourapp.up.railway.app`
-   URL — use this as `FRONTEND_ORIGIN` if your frontend is hosted
-   separately, or serve the frontend from the same app via the
-   `templates/` folder.
-
-## 4. Testing the live trading path safely
-
-Before flipping any real user to live mode:
-
-1. Use Alpaca's **paper** keys first (`/broker/alpaca/keys`, then
-   leave `trading_mode` as `paper`).
-2. Create a bot, manually call `/bots/{id}/run-cycle` a few times with
-   realistic price data, and confirm orders show up in your Alpaca
-   paper dashboard.
-3. Check your alert email actually arrives (send_email failures are
-   logged, not silent, but confirm anyway).
-4. Only then save live keys and call `/broker/trading-mode` with
-   `{"mode": "live"}` — which the backend will refuse unless the
-   email is verified and live keys are saved, exactly as you asked.
-
-## 5. OKX paper trading note
-
-OKX's "paper" equivalent is their **demo trading** feature, which
-requires generating a *separate* set of demo API keys from OKX's demo
-trading section (not your regular keys with a flag). For **account /
-trading** calls, `brokers.py` calls `exchange.set_sandbox_mode(True)`
-when your stored `trading_mode` is `paper` — so the keys you save under
-OKX Paper must be the **demo** ones, and live keys must be saved under
-OKX Live. Saving the wrong type for the mode makes OKX reject them with
-code `50101` ("APIKey does not match current environment"); the app now
-surfaces that as a clear message telling you which key type to use.
-
-**Market data** (candles/charts and bot analysis) always uses the real
-live public OKX endpoint regardless of paper/live — it never enables
-sandbox mode, because OKX's demo endpoint returns *simulated* prices and
-public OHLCV is identical across environments. (Previously, saving keys
-while in paper mode silently switched charts to demo prices.)
+The included `Procfile` runs the FastAPI application with Uvicorn. A Railway deployment should define the production environment variables, configure a persistent volume when using SQLite, and expose the public application URL through `PUBLIC_BASE_URL`. PostgreSQL is recommended for production workloads.
