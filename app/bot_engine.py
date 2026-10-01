@@ -1303,7 +1303,13 @@ def _setup_quality_score(analysis: Analysis) -> float:
     elif trend == "down":
         score -= 0.20
 
-    rsi = (analysis.indicators or {}).get("rsi")
+    indicators = analysis.indicators or {}
+    macd = indicators.get("macd")
+    macd_signal = indicators.get("macd_signal")
+    if macd is not None and macd_signal is not None:
+        score += 0.05 if macd > macd_signal else -0.05
+
+    rsi = indicators.get("rsi")
     if rsi is not None:
         if rsi <= 35:
             score += 0.08

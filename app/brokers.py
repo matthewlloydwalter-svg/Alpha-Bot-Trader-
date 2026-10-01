@@ -42,6 +42,11 @@ def alpaca_account_info(client: TradingClient) -> dict:
         
     try:
         a = client.get_account()
+        try:
+            positions = client.get_all_positions()
+            unrealized_pl = sum(float(getattr(position, "unrealized_pl", 0) or 0) for position in positions)
+        except Exception:
+            unrealized_pl = None
         non_marginable_buying_power = getattr(a, "non_marginable_buying_power", None)
         multiplier = getattr(a, "multiplier", None)
         return {
@@ -49,6 +54,7 @@ def alpaca_account_info(client: TradingClient) -> dict:
             "portfolio_value": float(a.portfolio_value),
             "buying_power": float(a.buying_power),
             "equity": float(a.equity),
+            "unrealized_pl": unrealized_pl,
             "trading_blocked": a.trading_blocked,
             "non_marginable_buying_power": float(non_marginable_buying_power) if non_marginable_buying_power is not None else None,
             # Keep numeric form; callers coerce with float()/int() as needed.

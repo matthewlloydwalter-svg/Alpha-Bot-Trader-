@@ -1176,11 +1176,12 @@ async function loadPortfolioPerformance() {
 async function loadPortfolioForMode(mode) {
   renderPortfolioModeIndicator();
   const msg = document.getElementById("pf-main-chart-msg");
-  let perf, bots;
+  let perf, bots, brokerAccount;
   try {
-    [perf, bots] = await Promise.all([
+    [perf, bots, brokerAccount] = await Promise.all([
       api(`/api/portfolio/performance?mode=${encodeURIComponent(mode)}&broker=${encodeURIComponent(USER && USER.active_broker ? USER.active_broker : "alpaca")}`),
       api("/bots"),
+      api("/broker/account").catch(() => null),
     ]);
   } catch (e) {
     if (_forcingLogout) return;
@@ -1193,6 +1194,8 @@ async function loadPortfolioForMode(mode) {
       pnlEl.textContent = "—";
       pnlEl.className = "pf-total-pnl";
     }
+    const pnlSource = document.getElementById("pf-pnl-source");
+    if (pnlSource) pnlSource.textContent = "Provider open P&L unavailable";
     const dEl = document.getElementById("pf-total-delta");
     if (dEl) { dEl.textContent = ""; dEl.className = "pf-delta"; }
     if (PF_MAIN_CHART) { try { PF_MAIN_CHART.remove(); } catch (_) {} PF_MAIN_CHART = null; }
@@ -1214,7 +1217,7 @@ async function loadPortfolioForMode(mode) {
     if (abl) abl.innerHTML = `<div style="color:var(--t2);padding:8px">Portfolio data unavailable.</div>`;
     return;
   }
-  PF_DATA = { perf: perf || {}, bots: Array.isArray(bots) ? bots : (bots && bots.bots) || [], mode };
+  PF_DATA = { perf: perf || {}, bots: Array.isArray(bots) ? bots : (bots && bots.bots) || [], mode, brokerAccount };
 
   // Total AlphaBotix Valuation = realized P/L + open-position mark-to-market
   // (live_value). Do NOT use funds_allocated alone — that is $0 when flat.
@@ -1224,13 +1227,19 @@ async function loadPortfolioForMode(mode) {
   const tEl = document.getElementById("pf-total-value");
   if (tEl) tEl.textContent = money(total);
 
-  // Overall P/L (realized + unrealized) — sticky header figure.
-  const totalPnl = total;
+  // Keep broker-reported open P&L separate from the app's historical bot ledger.
+  const providerPnl = brokerAccount && Number.isFinite(Number(brokerAccount.unrealized_pl))
+    ? Number(brokerAccount.unrealized_pl)
+    : null;
   const pnlEl = document.getElementById("pf-total-pnl");
   if (pnlEl) {
-    pnlEl.textContent = fmtSignedMoney(totalPnl);
-    pnlEl.className = "pf-total-pnl " + (totalPnl >= 0 ? "pup" : "pdn");
+    pnlEl.textContent = providerPnl === null ? "—" : fmtSignedMoney(providerPnl);
+    pnlEl.className = "pf-total-pnl" + (providerPnl === null ? "" : (providerPnl >= 0 ? " pup" : " pdn"));
   }
+  const pnlLabel = document.getElementById("pf-pnl-label");
+  if (pnlLabel) pnlLabel.textContent = `${String(brokerAccount && brokerAccount.broker || (USER && USER.active_broker) || "Broker").toUpperCase()} Open P&L`;
+  const pnlSource = document.getElementById("pf-pnl-source");
+  if (pnlSource) pnlSource.textContent = providerPnl === null ? "Provider open P&L unavailable" : "Live value from broker positions";
 
   const sel = document.getElementById("pf-timeframe");
   if (sel) sel.value = PF_STATE.timeframe;
@@ -1772,6 +1781,8 @@ async function loadBots() {
 function renderBots() {
   const el = document.getElementById("bots-list-container");
   if (!el) return;
+  const activeElement = document.activeElement;
+  if (activeElement && activeElement.tagName === "INPUT" && el.contains(activeElement)) return;
 
   // ── Mode + broker view filter (UI ONLY) ───────────────────────────────
   // Show only bots for the active Paper/Live mode AND active Alpaca/OKX
