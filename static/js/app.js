@@ -1228,7 +1228,7 @@ async function loadPortfolioForMode(mode) {
   if (tEl) tEl.textContent = money(total);
 
   // Keep broker-reported open P&L separate from the app's historical bot ledger.
-  const providerPnl = brokerAccount && Number.isFinite(Number(brokerAccount.unrealized_pl))
+  const providerPnl = brokerAccount && brokerAccount.unrealized_pl != null && Number.isFinite(Number(brokerAccount.unrealized_pl))
     ? Number(brokerAccount.unrealized_pl)
     : null;
   const pnlEl = document.getElementById("pf-total-pnl");
