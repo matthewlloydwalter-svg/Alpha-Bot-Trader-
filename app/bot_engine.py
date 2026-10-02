@@ -59,6 +59,7 @@ def _allow_paper_simulation() -> bool:
 
 # ── Tunable strategy parameters ──────────────────────────────────────
 ENTRY_MIN_STRENGTH = float(os.getenv("BOT_ENTRY_MIN_STRENGTH", "0.38"))
+MAX_ENTRY_RSI = float(os.getenv("BOT_MAX_ENTRY_RSI", "75"))
 DEPLOY_FRACTION = float(os.getenv("BOT_DEPLOY_FRACTION", "0.90"))   # slightly more conservative sizing
 EXIT_MODE = os.getenv("BOT_EXIT_MODE", "fixed_pct").strip().lower()  # fixed_pct or atr
 TRAIL_ATR_MULT = float(os.getenv("BOT_TRAIL_ATR_MULT", "1.6"))     # slightly wider stop to avoid noise
@@ -1333,6 +1334,12 @@ def _passes_quality_setup_filter(analysis: Analysis) -> bool:
     return _setup_quality_score(analysis) >= MIN_SETUP_QUALITY_SCORE
 
 
+def _passes_entry_rsi_filter(analysis: Analysis) -> bool:
+    """Avoid opening new positions when momentum is materially overbought."""
+    rsi = (analysis.indicators or {}).get("rsi")
+    return rsi is None or rsi < MAX_ENTRY_RSI
+
+
 def _volatility_adjusted_notional(bot: Bot, price: float, base_notional: float, atr: float | None) -> float:
     """Reduce position size when volatility is high so the bot doesn't overexpose itself.
 
@@ -1398,7 +1405,8 @@ def _pick_best_setup(db: Session, owner: User, bot: Bot) -> Analysis | None:
             continue
         sig = analysis.signal
         logger.info("[AUTO-SCAN] %s -> %s strength=%.2f", sym, sig.action, sig.strength)
-        if sig.action == "BUY" and sig.strength >= ENTRY_MIN_STRENGTH:
+        if (sig.action == "BUY" and sig.strength >= ENTRY_MIN_STRENGTH
+            and _passes_entry_rsi_filter(analysis)):
             quality_score = _setup_quality_score(analysis)
             blocked, reason = _market_collision_blocked(db, owner, bot, sym, quality_score)
             if blocked:
@@ -1590,6 +1598,13 @@ def run_bot_cycle(db: Session, bot: Bot, analysis: Analysis) -> dict:
     if sig.action != "BUY" or sig.strength < ENTRY_MIN_STRENGTH:
         db.commit()
         result["reason"] = f"No confirmed dip/reversal (signal {sig.action} {sig.strength:.2f})."
+        return result
+
+    if not _passes_entry_rsi_filter(analysis):
+        rsi = (analysis.indicators or {}).get("rsi")
+        bot.last_pattern_summary = f"Entry skipped — RSI {float(rsi):.1f} is over the {MAX_ENTRY_RSI:g} entry limit."
+        db.commit()
+        result.update({"action": "WAIT", "reason": bot.last_pattern_summary})
         return result
 
     # Manual gates layered on top of the structural signal.

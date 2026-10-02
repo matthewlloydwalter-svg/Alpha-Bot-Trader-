@@ -43,6 +43,10 @@ def alpaca_account_info(client: TradingClient) -> dict:
     try:
         a = client.get_account()
         try:
+            daily_change = float(a.equity) - float(a.last_equity)
+        except (AttributeError, TypeError, ValueError):
+            daily_change = None
+        try:
             positions = client.get_all_positions()
             unrealized_pl = sum(float(getattr(position, "unrealized_pl", 0) or 0) for position in positions)
         except Exception:
@@ -54,6 +58,7 @@ def alpaca_account_info(client: TradingClient) -> dict:
             "portfolio_value": float(a.portfolio_value),
             "buying_power": float(a.buying_power),
             "equity": float(a.equity),
+            "daily_change": daily_change,
             "unrealized_pl": unrealized_pl,
             "trading_blocked": a.trading_blocked,
             "non_marginable_buying_power": float(non_marginable_buying_power) if non_marginable_buying_power is not None else None,

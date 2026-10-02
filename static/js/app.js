@@ -1195,7 +1195,9 @@ async function loadPortfolioForMode(mode) {
       pnlEl.className = "pf-total-pnl";
     }
     const pnlSource = document.getElementById("pf-pnl-source");
-    if (pnlSource) pnlSource.textContent = "Provider open P&L unavailable";
+    if (pnlSource) pnlSource.textContent = "Provider daily change unavailable";
+    const openPnl = document.getElementById("pf-open-pnl");
+    if (openPnl) openPnl.textContent = "Open P&L: unavailable";
     const dEl = document.getElementById("pf-total-delta");
     if (dEl) { dEl.textContent = ""; dEl.className = "pf-delta"; }
     if (PF_MAIN_CHART) { try { PF_MAIN_CHART.remove(); } catch (_) {} PF_MAIN_CHART = null; }
@@ -1227,19 +1229,24 @@ async function loadPortfolioForMode(mode) {
   const tEl = document.getElementById("pf-total-value");
   if (tEl) tEl.textContent = money(total);
 
-  // Keep broker-reported open P&L separate from the app's historical bot ledger.
+  // Show the provider's daily account change separately from open-position P&L.
+  const dailyChange = brokerAccount && brokerAccount.daily_change != null && Number.isFinite(Number(brokerAccount.daily_change))
+    ? Number(brokerAccount.daily_change)
+    : null;
   const providerPnl = brokerAccount && brokerAccount.unrealized_pl != null && Number.isFinite(Number(brokerAccount.unrealized_pl))
     ? Number(brokerAccount.unrealized_pl)
     : null;
   const pnlEl = document.getElementById("pf-total-pnl");
   if (pnlEl) {
-    pnlEl.textContent = providerPnl === null ? "—" : fmtSignedMoney(providerPnl);
-    pnlEl.className = "pf-total-pnl" + (providerPnl === null ? "" : (providerPnl >= 0 ? " pup" : " pdn"));
+    pnlEl.textContent = dailyChange === null ? "—" : fmtSignedMoney(dailyChange);
+    pnlEl.className = "pf-total-pnl" + (dailyChange === null ? "" : (dailyChange >= 0 ? " pup" : " pdn"));
   }
   const pnlLabel = document.getElementById("pf-pnl-label");
-  if (pnlLabel) pnlLabel.textContent = `${String(brokerAccount && brokerAccount.broker || (USER && USER.active_broker) || "Broker").toUpperCase()} Open P&L`;
+  if (pnlLabel) pnlLabel.textContent = `${String(brokerAccount && brokerAccount.broker || (USER && USER.active_broker) || "Broker").toUpperCase()} Daily Change`;
   const pnlSource = document.getElementById("pf-pnl-source");
-  if (pnlSource) pnlSource.textContent = providerPnl === null ? "Provider open P&L unavailable" : "Live value from broker positions";
+  if (pnlSource) pnlSource.textContent = dailyChange === null ? "Provider daily change unavailable" : "Current equity minus last equity";
+  const openPnl = document.getElementById("pf-open-pnl");
+  if (openPnl) openPnl.textContent = providerPnl === null ? "Open P&L: unavailable" : `Open P&L: ${fmtSignedMoney(providerPnl)}`;
 
   const sel = document.getElementById("pf-timeframe");
   if (sel) sel.value = PF_STATE.timeframe;
