@@ -1649,6 +1649,14 @@ def get_risk_defaults(u: User = Depends(get_current_user_from_cookie)):
 @app.get("/bots")
 def get_bots(u: User = Depends(get_current_user_from_cookie), db: Session = Depends(get_db)):
     bots = db.query(Bot).filter(Bot.owner_id == u.id).all()
+    active_broker = (u.active_broker or "alpaca").lower()
+    active_mode = (u.trading_mode or "paper").lower()
+    try:
+        account_value = _broker_available_funds(u, broker=active_broker, mode=active_mode)
+        if account_value is not None:
+            _reconcile_bot_allocations(db, u.id, active_broker, active_mode, account_value)
+    except HTTPException as e:
+        logger.warning("Skipping bot allocation reconciliation for user %s: %s", u.id, e.detail)
     # Platform-recommended TP/SL defaults (shown on the form; percent units).
     _rec_sl, _rec_tp = _recommended_risk_defaults()
     rows = []
@@ -2285,31 +2293,37 @@ def _broker_available_funds(
     mode: Optional[str] = None,
 ) -> Optional[float]:
     """
-    Verified, allocatable cash for a broker + paper/live mode.
+    Verified account value for a broker + paper/live mode.
 
     Defaults to the user's active broker / trading mode when omitted.
-    Returns ``None`` when cash cannot be verified (no/invalid keys, etc.) —
-    callers treat ``None`` as "skip the allocation guardrail".
+    Returns ``None`` only when no broker credentials are configured. A configured
+    account that cannot be verified raises an error so allocations fail closed.
     """
     broker = (broker or user.active_broker or "alpaca").lower()
     paper = ((mode or user.trading_mode or "paper").lower() == "paper")
+    if not has_credentials(user, broker, paper):
+        return None
+
     creds = resolve_credentials(user, broker, paper)
     try:
         info = get_account_info(broker=broker, paper=paper, **creds)
-    except Exception:
-        return None
+    except Exception as e:
+        logger.warning("Could not verify %s account funds for user %s: %s", broker, user.id, e)
+        raise HTTPException(status_code=503, detail="Could not verify your broker account balance. Allocation changes are blocked until the account is reachable.")
     if not isinstance(info, dict) or info.get("error"):
-        return None
+        raise HTTPException(status_code=503, detail="Could not verify your broker account balance. Allocation changes are blocked until the account is reachable.")
 
     if broker == "alpaca":
-        # "What is actually present" = real cash, not margin buying power.
-        raw = info.get("cash")
-        if raw is None:
-            raw = info.get("buying_power")
+        # Equity includes broker-held positions as well as cash, matching total
+        # account assets rather than only the uninvested cash balance.
+        raw = info.get("equity")
         try:
-            return float(raw) if raw is not None else None
+            value = float(raw)
+            if math.isfinite(value) and value >= 0:
+                return value
         except (TypeError, ValueError):
-            return None
+            pass
+        raise HTTPException(status_code=503, detail="Alpaca did not return a valid account equity value. Allocation changes are blocked.")
 
     # OKX: sum the USD-equivalent stablecoin balances (the tradable quote).
     balances = info.get("balances", {}) or {}
@@ -2323,7 +2337,40 @@ def _broker_available_funds(
             found = True
         except (TypeError, ValueError):
             continue
-    return total if found else None
+    if found:
+        return total
+    raise HTTPException(status_code=503, detail="The broker did not return a usable balance. Allocation changes are blocked.")
+
+
+def _reconcile_bot_allocations(
+    db: Session, owner_id: int, broker: str, mode: str, account_value: float
+) -> None:
+    """Reduce persisted bot budgets if their total exceeds verified account value."""
+    scoped_bots = [
+        bot for bot in db.query(Bot).filter(Bot.owner_id == owner_id).all()
+        if (bot.mode or mode).lower() == mode
+        and (bot.broker or "alpaca").lower() == broker
+    ]
+    total_allocated = round(sum(float(bot.funds_allocated or 0) for bot in scoped_bots), 2)
+    account_cap = math.floor(max(0.0, float(account_value)) * 100 + 1e-8) / 100
+    excess = round(total_allocated - account_cap, 2)
+    if excess <= 0:
+        return
+
+    # Preserve earlier allocations and trim the newest ones first.
+    for bot in sorted(scoped_bots, key=lambda item: item.id or 0, reverse=True):
+        if excess <= 0:
+            break
+        current = round(float(bot.funds_allocated or 0), 2)
+        reduction = min(current, excess)
+        bot.funds_allocated = round(current - reduction, 2)
+        excess = round(excess - reduction, 2)
+
+    db.commit()
+    logger.warning(
+        "[FUNDS] Reduced bot allocations for user %s (%s/%s) to match account equity %.2f",
+        owner_id, broker, mode, account_cap,
+    )
 
 
 def _validate_cash_account_strategy_allocation(
@@ -2405,10 +2452,10 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
     auto_select = bool(is_auto and not ticker_raw)
 
     try:
-        funds = float(data.get("funds_allocated", 0.0) or 0.0)
+        funds = round(float(data.get("funds_allocated", 0.0) or 0.0), 2)
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="Allocate a valid funds amount greater than zero.")
-    if funds <= 0:
+    if not math.isfinite(funds) or funds <= 0:
         raise HTTPException(status_code=400, detail="Allocate a funds amount greater than zero.")
     if not auto_select and not ticker_raw:
         raise HTTPException(status_code=400, detail="Manual bots require a ticker symbol.")
@@ -2423,6 +2470,7 @@ async def create_bot(request: Request, u: User = Depends(get_current_user_from_c
     mode_now = (u.trading_mode or "paper").lower()
     available = _broker_available_funds(u, broker=broker_selected, mode=mode_now)
     if available is not None:
+        _reconcile_bot_allocations(db, u.id, broker_selected, mode_now, available)
         already_allocated = sum(
             float(b.funds_allocated or 0.0)
             for b in db.query(Bot).filter(Bot.owner_id == u.id).all()
@@ -2646,6 +2694,7 @@ async def update_bot_funds(bot_id: int, request: Request, u: User = Depends(get_
     bot_mode = (bot.mode or u.trading_mode or "paper").lower()
     available = _broker_available_funds(u, broker=bot_broker, mode=bot_mode)
     if available is not None:
+        _reconcile_bot_allocations(db, u.id, bot_broker, bot_mode, available)
         others_allocated = sum(
             float(b.funds_allocated or 0.0)
             for b in db.query(Bot).filter(Bot.owner_id == u.id, Bot.id != bot_id).all()
